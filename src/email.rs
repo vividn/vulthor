@@ -21,6 +21,12 @@ pub struct Attachment {
 }
 
 #[derive(Debug, Clone)]
+pub enum EmailLoadState {
+    HeadersOnly,
+    FullyLoaded,
+}
+
+#[derive(Debug, Clone)]
 pub struct Email {
     pub headers: EmailHeaders,
     pub body_text: String,
@@ -29,6 +35,7 @@ pub struct Email {
     pub attachments: Vec<Attachment>,
     pub file_path: PathBuf,
     pub is_unread: bool,
+    pub load_state: EmailLoadState,
 }
 
 impl Email {
@@ -47,6 +54,7 @@ impl Email {
             attachments: Vec::new(),
             file_path,
             is_unread: false,
+            load_state: EmailLoadState::HeadersOnly,
         }
     }
 
@@ -65,14 +73,34 @@ impl Email {
         }
     }
 
-    /// Parse email from file
+    /// Parse only headers from file (fast for folder loading)
+    pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let content = fs::read(&self.file_path)?;
+        let parsed = parse_mail(&content)?;
+        
+        self.parse_headers(&parsed)?;
+        self.load_state = EmailLoadState::HeadersOnly;
+        
+        Ok(())
+    }
+
+    /// Parse email from file (full parsing for reading)
     pub fn parse_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
         let parsed = parse_mail(&content)?;
         
         self.parse_headers(&parsed)?;
         self.parse_body(&parsed)?;
+        self.load_state = EmailLoadState::FullyLoaded;
         
+        Ok(())
+    }
+
+    /// Ensure email is fully loaded
+    pub fn ensure_fully_loaded(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if matches!(self.load_state, EmailLoadState::HeadersOnly) {
+            self.parse_from_file()?;
+        }
         Ok(())
     }
 
@@ -325,8 +353,24 @@ impl EmailStore {
         }
     }
 
-    /// Get currently selected email
-    pub fn get_selected_email(&self) -> Option<&Email> {
+    /// Get currently selected email (ensures it's fully loaded)
+    pub fn get_selected_email(&mut self) -> Option<&Email> {
+        if let Some(index) = self.selected_email {
+            let current = self.get_current_folder_mut();
+            if let Some(email) = current.emails.get_mut(index) {
+                // Ensure email is fully loaded when accessed for reading
+                if let Err(_) = email.ensure_fully_loaded() {
+                    // If loading fails, return None
+                    return None;
+                }
+                return current.emails.get(index);
+            }
+        }
+        None
+    }
+
+    /// Get currently selected email (read-only, may be headers-only)
+    pub fn get_selected_email_headers(&self) -> Option<&Email> {
         let current = self.get_current_folder();
         self.selected_email
             .and_then(|index| current.emails.get(index))

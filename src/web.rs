@@ -36,7 +36,7 @@ impl WebServer {
 }
 
 async fn serve_email(State(app_state): State<SharedAppState>) -> Response {
-    let app = match app_state.lock() {
+    let mut app = match app_state.lock() {
         Ok(app) => app,
         Err(_) => {
             return (

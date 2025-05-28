@@ -267,19 +267,25 @@ fn handle_back_navigation(app: &mut App) {
 }
 
 fn handle_attachment_open(app: &mut App, custom_command: bool) {
-    if let Some(email) = app.email_store.get_selected_email() {
+    let filename = if let Some(email) = app.email_store.get_selected_email() {
         if app.selection.attachment_index < email.attachments.len() {
-            let attachment = &email.attachments[app.selection.attachment_index];
-            
-            if custom_command {
-                app.set_status(format!("Custom command for {}: Not implemented yet", attachment.filename));
-            } else {
-                app.set_status(format!("Opening {}: Not implemented yet", attachment.filename));
-            }
-            
-            // TODO: Implement actual file opening with xdg-open or custom command
-            // For now, just show a status message
+            Some(email.attachments[app.selection.attachment_index].filename.clone())
+        } else {
+            None
         }
+    } else {
+        None
+    };
+    
+    if let Some(filename) = filename {
+        if custom_command {
+            app.set_status(format!("Custom command for {}: Not implemented yet", filename));
+        } else {
+            app.set_status(format!("Opening {}: Not implemented yet", filename));
+        }
+        
+        // TODO: Implement actual file opening with xdg-open or custom command
+        // For now, just show a status message
     }
 }
 

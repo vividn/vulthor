@@ -34,7 +34,7 @@ impl UI {
         }
     }
 
-    pub fn draw(&mut self, f: &mut Frame, app: &App) {
+    pub fn draw(&mut self, f: &mut Frame, app: &mut App) {
         let size = f.area();
 
         match app.state {
@@ -51,7 +51,7 @@ impl UI {
         }
     }
 
-    fn draw_main_layout(&mut self, f: &mut Frame, app: &App, area: Rect) {
+    fn draw_main_layout(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
         let mut constraints = Vec::new();
         let mut areas_to_render = Vec::new();
 
@@ -173,7 +173,7 @@ impl UI {
         f.render_stateful_widget(list, area, &mut self.email_list_state);
     }
 
-    fn draw_content_pane(&mut self, f: &mut Frame, app: &App, area: Rect, is_active: bool) {
+    fn draw_content_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
         let border_style = if is_active {
             Style::default().fg(Color::Green)
         } else {
@@ -266,7 +266,7 @@ impl UI {
         }
     }
 
-    fn draw_attachment_popup(&mut self, f: &mut Frame, app: &App, area: Rect) {
+    fn draw_attachment_popup(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
         if let Some(email) = app.email_store.get_selected_email() {
             if !email.attachments.is_empty() {
                 // Calculate popup size

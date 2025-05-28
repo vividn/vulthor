@@ -116,8 +116,8 @@ async fn run_app(
     loop {
         // Draw UI
         {
-            let app = app_state.lock().unwrap();
-            terminal.draw(|f| ui.draw(f, &app))?;
+            let mut app = app_state.lock().unwrap();
+            terminal.draw(|f| ui.draw(f, &mut app))?;
             
             // Check if we should quit
             if app.should_quit || matches!(app.state, AppState::Quit) {

@@ -26,11 +26,6 @@ impl MaildirScanner {
         let mut root_folder = Folder::new("Mail".to_string(), self.root_path.clone());
         self.scan_folder_structure_only(&mut root_folder, &self.root_path)?;
         
-        // Immediately load INBOX if it exists
-        if let Some(inbox_index) = root_folder.subfolders.iter().position(|f| f.name == "INBOX") {
-            self.load_folder_emails(&mut root_folder.subfolders[inbox_index])?;
-        }
-        
         Ok(root_folder)
     }
 
@@ -117,18 +112,15 @@ impl MaildirScanner {
                     let mut email = Email::new(path.to_path_buf());
                     email.is_unread = is_unread;
                     
-                    // Parse the email content
-                    match email.parse_from_file() {
+                    // Parse only headers for fast loading
+                    match email.parse_headers_only() {
                         Ok(()) => {
-                            // Email parsed successfully
+                            // Headers parsed successfully
                             folder.add_email(email);
                         }
                         Err(e) => {
                             // If parsing fails, create a placeholder with error info
                             email.headers.subject = format!("Parse Error: {}", e);
-                            email.body_text = format!("Failed to parse email from {}: {}", 
-                                path.display(), e);
-                            email.body_markdown = email.body_text.clone();
                             folder.add_email(email);
                         }
                     }
@@ -178,12 +170,8 @@ impl MaildirScanner {
             stats.total_size += subfolder_stats.total_size;
         }
 
-        // Calculate size (this is expensive, so we might want to cache it)
-        for email in &folder.emails {
-            if let Ok(metadata) = fs::metadata(&email.file_path) {
-                stats.total_size += metadata.len();
-            }
-        }
+        // Note: File size calculation deferred for performance
+        // Size will be calculated on-demand when actually needed
 
         stats
     }
@@ -243,10 +231,13 @@ mod tests {
         fs::write(root.join("INBOX/cur/test_email"), "Test email content").unwrap();
         
         let scanner = MaildirScanner::new(root.to_path_buf());
-        let result = scanner.scan().unwrap();
+        let mut result = scanner.scan().unwrap();
         
         assert_eq!(result.subfolders.len(), 1);
         assert_eq!(result.subfolders[0].name, "INBOX");
+        
+        // Load emails for INBOX to test the lazy loading
+        scanner.load_folder_emails(&mut result.subfolders[0]).unwrap();
         assert_eq!(result.subfolders[0].emails.len(), 1);
     }
 }

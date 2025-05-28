@@ -191,7 +191,7 @@ impl App {
     }
 
     /// Get the currently selected email for web serving
-    pub fn get_current_email_for_web(&self) -> Option<&crate::email::Email> {
+    pub fn get_current_email_for_web(&mut self) -> Option<&crate::email::Email> {
         self.email_store.get_selected_email()
     }
 
