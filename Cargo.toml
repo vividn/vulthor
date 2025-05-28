@@ -14,3 +14,4 @@ mailparse = "0.15"
 html2md = "0.2"
 walkdir = "2.0"
 clap = { version = "4.0", features = ["derive"] }
+dirs = "5.0"
