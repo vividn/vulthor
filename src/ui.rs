@@ -180,7 +180,10 @@ impl UI {
             Style::default()
         };
 
-        if let Some(email) = app.email_store.get_selected_email() {
+        // Get email info first for headers (no markdown conversion needed)
+        let email_info = app.email_store.get_selected_email_headers();
+        
+        if let Some(email) = email_info {
             // Split content pane into header and body
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -200,7 +203,7 @@ impl UI {
 
             f.render_widget(header_paragraph, chunks[0]);
 
-            // Draw body
+            // Draw body - only convert to markdown when content pane is visible
             let mut body_title = "Content".to_string();
             if email.has_attachments() {
                 body_title = format!("Content ({} attachments)", email.attachment_count());
@@ -211,11 +214,9 @@ impl UI {
                 .style(border_style)
                 .title(body_title);
 
-            let body_text = if !email.body_markdown.is_empty() {
-                &email.body_markdown
-            } else {
-                &email.body_text
-            };
+            // Get markdown content lazily only when content pane is being drawn
+            let body_text = app.email_store.get_selected_email_markdown()
+                .unwrap_or_else(|| "Error loading email content".to_string());
 
             let body_paragraph = Paragraph::new(body_text.as_str())
                 .block(body_block)

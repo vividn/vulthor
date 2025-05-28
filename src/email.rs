@@ -32,6 +32,7 @@ pub struct Email {
     pub body_text: String,
     pub body_html: Option<String>,
     pub body_markdown: String,
+    pub markdown_converted: bool,
     pub attachments: Vec<Attachment>,
     pub file_path: PathBuf,
     pub is_unread: bool,
@@ -51,6 +52,7 @@ impl Email {
             body_text: String::new(),
             body_html: None,
             body_markdown: String::new(),
+            markdown_converted: false,
             attachments: Vec::new(),
             file_path,
             is_unread: false,
@@ -118,16 +120,27 @@ impl Email {
     /// Parse email body and attachments
     fn parse_body(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
         self.extract_body_and_attachments(parsed)?;
-        
-        // Convert HTML to markdown if we have HTML content
-        if let Some(html) = &self.body_html {
-            self.body_markdown = parse_html(html);
-        } else if !self.body_text.is_empty() {
-            // If we only have text, use it as markdown
-            self.body_markdown = self.body_text.clone();
+        Ok(())
+    }
+
+    /// Get markdown content, converting lazily only when needed
+    pub fn get_markdown_content(&mut self) -> &str {
+        if !self.markdown_converted {
+            // Convert HTML to markdown if we have HTML content
+            if let Some(html) = &self.body_html {
+                self.body_markdown = parse_html(html);
+            } else if !self.body_text.is_empty() {
+                // If we only have text, use it as markdown
+                self.body_markdown = self.body_text.clone();
+            }
+            self.markdown_converted = true;
         }
         
-        Ok(())
+        if !self.body_markdown.is_empty() {
+            &self.body_markdown
+        } else {
+            &self.body_text
+        }
     }
 
     /// Recursively extract body content and attachments
@@ -381,6 +394,19 @@ impl EmailStore {
         let selected = self.selected_email;
         let current = self.get_current_folder_mut();
         selected.and_then(move |index| current.emails.get_mut(index))
+    }
+
+    /// Get markdown content for the currently selected email (lazy conversion)
+    pub fn get_selected_email_markdown(&mut self) -> Option<String> {
+        if let Some(email) = self.get_selected_email_mut() {
+            // Ensure email is fully loaded
+            if let Err(_) = email.ensure_fully_loaded() {
+                return None;
+            }
+            Some(email.get_markdown_content().to_string())
+        } else {
+            None
+        }
     }
 
     /// Get folder path as breadcrumb string
