@@ -44,8 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Initialize maildir scanner and scan emails
-    println!("Scanning MailDir at: {}", config.maildir_path.display());
+    // Initialize maildir scanner and scan folder structure
+    println!("Scanning MailDir structure at: {}", config.maildir_path.display());
     let scanner = MaildirScanner::new(config.maildir_path.clone());
     let root_folder = match scanner.scan() {
         Ok(folder) => folder,
@@ -57,9 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create email store and app
-    let mut email_store = EmailStore::new(config.maildir_path);
+    let mut email_store = EmailStore::new(config.maildir_path.clone());
     email_store.root_folder = root_folder;
-    let app = App::new(email_store);
+    let app = App::new(email_store, scanner);
     let shared_app_state: SharedAppState = Arc::new(Mutex::new(app));
 
     // Start web server in background
@@ -161,9 +161,9 @@ mod tests {
         let scanner = MaildirScanner::new(config.maildir_path.clone());
         let root_folder = scanner.scan().unwrap();
         
-        let mut email_store = EmailStore::new(config.maildir_path);
+        let mut email_store = EmailStore::new(config.maildir_path.clone());
         email_store.root_folder = root_folder;
-        let app = App::new(email_store);
+        let app = App::new(email_store, scanner);
 
         assert!(!app.should_quit);
         assert!(matches!(app.state, AppState::FolderView));

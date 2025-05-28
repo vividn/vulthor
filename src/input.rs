@@ -217,16 +217,22 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
 fn handle_selection(app: &mut App) {
     match app.active_pane {
         ActivePane::Folders => {
-            // Navigate into selected folder
+            // Navigate into selected folder with lazy loading
             let current_folder = app.email_store.get_current_folder();
             let folder_index = get_real_folder_index(current_folder, app.selection.folder_index);
             
             if let Some(real_index) = folder_index {
-                app.email_store.enter_folder(real_index);
-                app.selection.folder_index = 0;
-                app.selection.email_index = 0;
-                app.selection.scroll_offset = 0;
-                app.set_state(AppState::EmailList);
+                match app.enter_folder_with_loading(real_index) {
+                    Ok(()) => {
+                        app.selection.folder_index = 0;
+                        app.selection.email_index = 0;
+                        app.selection.scroll_offset = 0;
+                        app.set_state(AppState::EmailList);
+                    }
+                    Err(e) => {
+                        app.set_status(format!("Error loading folder: {}", e));
+                    }
+                }
             }
         }
         ActivePane::List => {
@@ -326,7 +332,8 @@ mod tests {
     #[test]
     fn test_handle_quit_key() {
         let email_store = EmailStore::new(PathBuf::from("/tmp"));
-        let mut app = App::new(email_store);
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(email_store, scanner);
         
         let key_event = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         let should_quit = handle_key_event(&mut app, key_event);
@@ -338,7 +345,8 @@ mod tests {
     #[test]
     fn test_handle_help_key() {
         let email_store = EmailStore::new(PathBuf::from("/tmp"));
-        let mut app = App::new(email_store);
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(email_store, scanner);
         
         let key_event = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         let should_quit = handle_key_event(&mut app, key_event);
@@ -350,7 +358,8 @@ mod tests {
     #[test]
     fn test_pane_visibility_toggle() {
         let email_store = EmailStore::new(PathBuf::from("/tmp"));
-        let mut app = App::new(email_store);
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(email_store, scanner);
         
         let initial_folders_visible = app.pane_visibility.folders_visible;
         

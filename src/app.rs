@@ -1,4 +1,5 @@
 use crate::email::EmailStore;
+use crate::maildir::MaildirScanner;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +85,7 @@ pub struct App {
     pub pane_visibility: PaneVisibility,
     pub selection: SelectionState,
     pub email_store: EmailStore,
+    pub scanner: MaildirScanner,
     pub should_quit: bool,
     pub status_message: Option<String>,
     pub search_query: String,
@@ -91,13 +93,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(email_store: EmailStore) -> Self {
+    pub fn new(email_store: EmailStore, scanner: MaildirScanner) -> Self {
         Self {
             state: AppState::FolderView,
             active_pane: ActivePane::Folders,
             pane_visibility: PaneVisibility::default(),
             selection: SelectionState::default(),
             email_store,
+            scanner,
             should_quit: false,
             status_message: None,
             search_query: String::new(),
@@ -190,6 +193,13 @@ impl App {
     /// Get the currently selected email for web serving
     pub fn get_current_email_for_web(&self) -> Option<&crate::email::Email> {
         self.email_store.get_selected_email()
+    }
+
+    /// Enter a folder and trigger lazy loading if needed
+    pub fn enter_folder_with_loading(&mut self, folder_index: usize) -> Result<(), Box<dyn std::error::Error>> {
+        self.email_store.enter_folder(folder_index);
+        self.email_store.ensure_current_folder_loaded(&self.scanner)?;
+        Ok(())
     }
 }
 

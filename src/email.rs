@@ -199,6 +199,7 @@ pub struct Folder {
     pub subfolders: Vec<Folder>,
     pub unread_count: usize,
     pub total_count: usize,
+    pub is_loaded: bool, // Track if emails have been loaded for this folder
 }
 
 impl Folder {
@@ -210,6 +211,7 @@ impl Folder {
             subfolders: Vec::new(),
             unread_count: 0,
             total_count: 0,
+            is_loaded: false,
         }
     }
 
@@ -289,13 +291,22 @@ impl EmailStore {
         folder
     }
 
-    /// Navigate to a subfolder by index
+    /// Navigate to a subfolder by index and load emails if needed
     pub fn enter_folder(&mut self, folder_index: usize) {
         let current = self.get_current_folder();
         if folder_index < current.subfolders.len() {
             self.current_folder.push(folder_index);
             self.selected_email = None; // Reset email selection
         }
+    }
+
+    /// Load emails for current folder if not already loaded
+    pub fn ensure_current_folder_loaded(&mut self, scanner: &crate::maildir::MaildirScanner) -> Result<(), Box<dyn std::error::Error>> {
+        let folder = self.get_current_folder_mut();
+        if !folder.is_loaded {
+            scanner.load_folder_emails(folder)?;
+        }
+        Ok(())
     }
 
     /// Navigate back to parent folder

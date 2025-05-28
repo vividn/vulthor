@@ -13,7 +13,7 @@ impl MaildirScanner {
         Self { root_path }
     }
 
-    /// Scan the MailDir structure and build folder hierarchy
+    /// Scan the MailDir structure and build folder hierarchy (fast startup - structure only)
     pub fn scan(&self) -> Result<Folder, Box<dyn std::error::Error>> {
         if !self.root_path.exists() {
             return Err(format!("MailDir path does not exist: {}", self.root_path.display()).into());
@@ -24,27 +24,19 @@ impl MaildirScanner {
         }
 
         let mut root_folder = Folder::new("Mail".to_string(), self.root_path.clone());
-        self.scan_folder(&mut root_folder, &self.root_path)?;
+        self.scan_folder_structure_only(&mut root_folder, &self.root_path)?;
+        
+        // Immediately load INBOX if it exists
+        if let Some(inbox_index) = root_folder.subfolders.iter().position(|f| f.name == "INBOX") {
+            self.load_folder_emails(&mut root_folder.subfolders[inbox_index])?;
+        }
         
         Ok(root_folder)
     }
 
-    /// Recursively scan a folder and its subfolders
-    fn scan_folder(&self, folder: &mut Folder, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        // Check if this is a maildir folder (contains cur/, new/, tmp/)
-        let cur_path = path.join("cur");
-        let new_path = path.join("new");
-        let tmp_path = path.join("tmp");
-
-        let is_maildir = cur_path.exists() && new_path.exists() && tmp_path.exists();
-
-        if is_maildir {
-            // This is a maildir folder, scan for emails
-            self.scan_emails_in_folder(folder, &cur_path)?;
-            self.scan_emails_in_folder(folder, &new_path)?;
-        }
-
-        // Look for subfolders
+    /// Scan folder structure only (no email loading) for fast startup
+    fn scan_folder_structure_only(&self, folder: &mut Folder, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        // Look for subfolders only
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries {
                 if let Ok(entry) = entry {
@@ -65,9 +57,9 @@ impl MaildirScanner {
                             continue;
                         }
 
-                        // Create subfolder and recursively scan it
+                        // Create subfolder and recursively scan its structure only
                         let mut subfolder = Folder::new(dir_name.to_string(), entry_path.clone());
-                        self.scan_folder(&mut subfolder, &entry_path)?;
+                        self.scan_folder_structure_only(&mut subfolder, &entry_path)?;
                         folder.add_subfolder(subfolder);
                     }
                 }
@@ -76,6 +68,33 @@ impl MaildirScanner {
 
         Ok(())
     }
+
+    /// Load emails for a specific folder (lazy loading)
+    pub fn load_folder_emails(&self, folder: &mut Folder) -> Result<(), Box<dyn std::error::Error>> {
+        // Only load if not already loaded
+        if folder.is_loaded {
+            return Ok(());
+        }
+
+        let path = &folder.path;
+        
+        // Check if this is a maildir folder (contains cur/, new/, tmp/)
+        let cur_path = path.join("cur");
+        let new_path = path.join("new");
+        let tmp_path = path.join("tmp");
+
+        let is_maildir = cur_path.exists() && new_path.exists() && tmp_path.exists();
+
+        if is_maildir {
+            // This is a maildir folder, scan for emails
+            self.scan_emails_in_folder(folder, &cur_path)?;
+            self.scan_emails_in_folder(folder, &new_path)?;
+        }
+
+        folder.is_loaded = true;
+        Ok(())
+    }
+
 
     /// Scan emails in a specific directory (cur or new)
     fn scan_emails_in_folder(&self, folder: &mut Folder, dir_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
