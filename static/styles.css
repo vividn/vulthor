@@ -1,0 +1,400 @@
+/* Vulthor Email Client Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f5f5f5;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background-color: white;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    min-height: 100vh;
+}
+
+/* Email Header Styles */
+.email-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 2rem;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.email-subject {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+}
+
+.email-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+    font-size: 0.95rem;
+}
+
+.email-meta > div {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.5rem;
+    border-radius: 4px;
+    backdrop-filter: blur(10px);
+}
+
+.email-meta strong {
+    color: #f0f0f0;
+}
+
+/* Welcome Header Styles */
+.welcome-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 3rem 2rem;
+    text-align: center;
+}
+
+.welcome-header h1 {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+}
+
+.welcome-header h2 {
+    font-size: 1.5rem;
+    font-weight: 300;
+    opacity: 0.9;
+}
+
+/* Content Styles */
+.email-content, .welcome-content {
+    padding: 2rem;
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.email-content h1, .email-content h2, .email-content h3 {
+    margin: 1.5rem 0 1rem 0;
+    color: #2c3e50;
+}
+
+.email-content h1 {
+    font-size: 1.8rem;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 0.5rem;
+}
+
+.email-content h2 {
+    font-size: 1.4rem;
+    color: #34495e;
+}
+
+.email-content h3 {
+    font-size: 1.2rem;
+    color: #7f8c8d;
+}
+
+.email-content p {
+    margin-bottom: 1rem;
+    text-align: justify;
+}
+
+.email-content ul, .email-content ol {
+    margin: 1rem 0;
+    padding-left: 2rem;
+}
+
+.email-content li {
+    margin-bottom: 0.5rem;
+}
+
+.email-content blockquote {
+    border-left: 4px solid #3498db;
+    padding-left: 1rem;
+    margin: 1rem 0;
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 4px;
+}
+
+/* Welcome Content Styles */
+.welcome-message {
+    text-align: center;
+    margin-bottom: 3rem;
+}
+
+.welcome-message h3 {
+    color: #2c3e50;
+    margin-bottom: 1rem;
+    font-size: 1.5rem;
+}
+
+.welcome-message p {
+    margin-bottom: 1rem;
+    color: #666;
+}
+
+.welcome-message ol {
+    text-align: left;
+    display: inline-block;
+    color: #555;
+}
+
+.welcome-message li {
+    margin-bottom: 0.5rem;
+}
+
+/* Keybindings Styles */
+.keybindings {
+    background-color: #f8f9fa;
+    padding: 2rem;
+    border-radius: 8px;
+    margin-top: 2rem;
+}
+
+.keybindings h3 {
+    color: #2c3e50;
+    margin-bottom: 1.5rem;
+    text-align: center;
+    font-size: 1.3rem;
+}
+
+.keybinding-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.keybinding {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: white;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease;
+}
+
+.keybinding:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+kbd {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    font-weight: bold;
+    min-width: 3rem;
+    text-align: center;
+    display: inline-block;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Attachments Styles */
+.attachments-section {
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin: 2rem 0;
+    border: 1px solid #e9ecef;
+}
+
+.attachments-section h3 {
+    color: #2c3e50;
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.attachments-section h3::before {
+    content: "📎";
+    font-size: 1.1rem;
+}
+
+.attachments-list {
+    list-style: none;
+    padding: 0;
+}
+
+.attachment-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: white;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    border: 1px solid #dee2e6;
+    transition: background-color 0.2s ease;
+}
+
+.attachment-item:hover {
+    background-color: #f0f0f0;
+}
+
+.attachment-icon {
+    font-size: 1.2rem;
+    color: #6c757d;
+}
+
+.attachment-name {
+    font-weight: 600;
+    color: #2c3e50;
+    flex: 1;
+}
+
+.attachment-type {
+    color: #6c757d;
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.attachment-size {
+    color: #495057;
+    font-size: 0.9rem;
+    background-color: #e9ecef;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    min-width: 4rem;
+    text-align: center;
+}
+
+/* Footer Styles */
+.app-footer {
+    background-color: #2c3e50;
+    color: white;
+    text-align: center;
+    padding: 1.5rem;
+    margin-top: auto;
+}
+
+.app-footer p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.app-footer strong {
+    color: #3498db;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        margin: 0;
+        box-shadow: none;
+    }
+    
+    .email-header, .welcome-header {
+        padding: 1.5rem 1rem;
+    }
+    
+    .email-content, .welcome-content {
+        padding: 1.5rem 1rem;
+    }
+    
+    .email-meta {
+        grid-template-columns: 1fr;
+    }
+    
+    .keybinding-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .attachment-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .attachment-size {
+        align-self: flex-end;
+    }
+}
+
+/* Code blocks */
+pre, code {
+    background-color: #f1f1f1;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+}
+
+pre {
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 1rem 0;
+    border-left: 4px solid #3498db;
+}
+
+code {
+    padding: 0.2rem 0.4rem;
+}
+
+/* Links */
+a {
+    color: #3498db;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover {
+    color: #2980b9;
+    text-decoration: underline;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+}
+
+table th,
+table td {
+    padding: 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid #dee2e6;
+}
+
+table th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+table tr:hover {
+    background-color: #f8f9fa;
+}
+
+/* Scrollbar styling for webkit browsers */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
