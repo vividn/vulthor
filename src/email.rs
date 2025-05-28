@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::fs;
+use mailparse::{parse_mail, MailHeaderMap, ParsedMail, parse_content_disposition, DispositionType};
+use html2md::parse_html;
 
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
@@ -60,6 +63,131 @@ impl Email {
         } else {
             format!("{}...", &body[..preview_len])
         }
+    }
+
+    /// Parse email from file
+    pub fn parse_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let content = fs::read(&self.file_path)?;
+        let parsed = parse_mail(&content)?;
+        
+        self.parse_headers(&parsed)?;
+        self.parse_body(&parsed)?;
+        
+        Ok(())
+    }
+
+    /// Parse email headers
+    fn parse_headers(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
+        self.headers.from = parsed.headers.get_first_value("From").unwrap_or_default();
+        self.headers.to = parsed.headers.get_first_value("To").unwrap_or_default();
+        self.headers.subject = parsed.headers.get_first_value("Subject").unwrap_or_default();
+        self.headers.date = parsed.headers.get_first_value("Date").unwrap_or_default();
+        self.headers.message_id = parsed.headers.get_first_value("Message-ID").unwrap_or_default();
+        
+        Ok(())
+    }
+
+    /// Parse email body and attachments
+    fn parse_body(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
+        self.extract_body_and_attachments(parsed)?;
+        
+        // Convert HTML to markdown if we have HTML content
+        if let Some(html) = &self.body_html {
+            self.body_markdown = parse_html(html);
+        } else if !self.body_text.is_empty() {
+            // If we only have text, use it as markdown
+            self.body_markdown = self.body_text.clone();
+        }
+        
+        Ok(())
+    }
+
+    /// Recursively extract body content and attachments
+    fn extract_body_and_attachments(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
+        let content_type = parsed.ctype.mimetype.as_str();
+        
+        // Check if this is an attachment by looking at Content-Disposition header
+        let is_attachment = if let Some(disposition_header) = parsed.headers.get_first_value("Content-Disposition") {
+            let disposition = parse_content_disposition(&disposition_header);
+            matches!(disposition.disposition, DispositionType::Attachment)
+        } else {
+            false
+        };
+        
+        if is_attachment {
+            // This is an attachment
+            let filename = parsed.ctype.params.get("name")
+                .or_else(|| parsed.ctype.params.get("filename"))
+                .map(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            
+            let attachment = Attachment {
+                filename,
+                content_type: content_type.to_string(),
+                size: parsed.get_body_raw()?.len(),
+            };
+            
+            self.attachments.push(attachment);
+        } else {
+            // This is body content
+            match content_type {
+                "text/plain" => {
+                    if self.body_text.is_empty() {
+                        self.body_text = parsed.get_body()?;
+                    }
+                }
+                "text/html" => {
+                    if self.body_html.is_none() {
+                        self.body_html = Some(parsed.get_body()?);
+                    }
+                }
+                "multipart/alternative" | "multipart/mixed" | "multipart/related" => {
+                    // Process subparts recursively
+                    for subpart in &parsed.subparts {
+                        self.extract_body_and_attachments(subpart)?;
+                    }
+                }
+                _ => {
+                    // Unknown content type, try to extract as text if not an attachment
+                    if !is_attachment {
+                        if let Ok(body) = parsed.get_body() {
+                            if self.body_text.is_empty() {
+                                self.body_text = body;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Process subparts even for non-multipart types (just in case)
+        for subpart in &parsed.subparts {
+            self.extract_body_and_attachments(subpart)?;
+        }
+        
+        Ok(())
+    }
+
+    /// Get formatted header display
+    pub fn get_header_display(&self) -> String {
+        format!(
+            "From: {}\nTo: {}\nSubject: {}\nDate: {}",
+            self.headers.from,
+            self.headers.to,
+            self.headers.subject,
+            self.headers.date
+        )
+    }
+
+    /// Check if email has attachments
+    pub fn has_attachments(&self) -> bool {
+        !self.attachments.is_empty()
+    }
+
+    /// Get attachment count
+    pub fn attachment_count(&self) -> usize {
+        self.attachments.len()
     }
 }
 
