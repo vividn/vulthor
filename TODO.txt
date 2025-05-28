@@ -1,0 +1,109 @@
+VULTHOR IMPLEMENTATION TODO
+=============================
+
+## Phase 1: Project Setup & Dependencies
+[ ] Add required dependencies to Cargo.toml:
+    - ratatui (TUI framework)
+    - crossterm (terminal handling)
+    - tokio (async runtime for web server)
+    - axum (web server)
+    - serde + toml (config parsing)
+    - mailparse (email parsing)
+    - html2md (HTML to markdown conversion)
+    - walkdir (directory traversal)
+    - clap (CLI argument parsing)
+
+## Phase 2: Core Data Structures
+[ ] Create config.rs module:
+    - Config struct with maildir_path field
+    - Load from ~/.config/vulthor/config.toml or ./vulthor.toml
+    - CLI args struct with port option (-p)
+
+[ ] Create email.rs module:
+    - Email struct (headers, body, attachments)
+    - Folder struct (name, path, emails)
+    - EmailStore struct to manage all folders/emails
+
+[ ] Create app.rs module:
+    - AppState enum (folder view, email list, email content)
+    - App struct with current selection state
+    - Pane visibility state (folders, content collapsible)
+
+## Phase 3: MailDir Parsing
+[ ] Implement MailDir folder discovery:
+    - Scan maildir structure recursively
+    - Build folder hierarchy tree
+    - Handle cur/, new/, tmp/ subdirectories properly
+
+[ ] Implement email parsing:
+    - Parse email files using mailparse
+    - Extract headers (From, To, Subject, Date)
+    - Handle multipart messages
+    - Extract attachments list
+    - Convert HTML parts to markdown using html2md
+
+## Phase 4: TUI Implementation
+[ ] Create ui.rs module:
+    - 3-pane layout function
+    - Folder pane rendering (tree view)
+    - Email list pane rendering
+    - Email content pane rendering (markdown)
+    - Collapsible pane logic for M-e and M-c
+
+[ ] Create input handling:
+    - j/k for scrolling in active pane
+    - M-h/M-l for pane navigation
+    - M-e toggle folder pane visibility
+    - M-c toggle content pane visibility
+    - M-a for attachment popup
+
+[ ] Create attachment popup:
+    - List all attachments for current email
+    - Navigation with j/k, selection with Enter
+    - Enter: open with xdg-open
+    - Shift-Enter: prompt for custom command
+
+## Phase 5: Web Server Implementation
+[ ] Create web.rs module:
+    - Axum web server setup
+    - Route for serving current email as HTML
+    - Welcome page when no email selected
+    - Static styling for email display
+
+[ ] Email to HTML conversion:
+    - Convert markdown back to HTML for web display
+    - Preserve email headers in web view
+    - Handle attachments in web view
+
+## Phase 6: Main Application Loop
+[ ] Implement main.rs:
+    - Parse CLI arguments
+    - Load configuration
+    - Initialize MailDir scanning
+    - Start web server in background
+    - Initialize TUI
+    - Main event loop with proper cleanup
+
+## Phase 7: Error Handling & Polish
+[ ] Add comprehensive error handling:
+    - Config file missing/invalid
+    - MailDir access issues
+    - Email parsing failures
+    - Web server startup failures
+
+[ ] Add logging/debugging support
+[ ] Add graceful shutdown handling
+[ ] Update CLAUDE.md with final architecture
+
+## Phase 8: Testing & Documentation
+[ ] Write unit tests for core modules
+[ ] Write integration tests
+[ ] Update README.md with usage examples
+[ ] Add example config file
+
+IMPLEMENTATION NOTES:
+- Use ratatui's block and layout widgets for 3-pane design
+- Store current email selection globally for web server access
+- Use Arc<Mutex<>> for shared state between TUI and web server
+- Handle terminal resize events properly
+- Use crossterm for cross-platform key event handling
