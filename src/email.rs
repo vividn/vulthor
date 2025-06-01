@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
-use mailparse::{parse_mail, MailHeaderMap, ParsedMail, parse_content_disposition, DispositionType};
+use mail_parser::{MessageParser, Message, MimeHeaders};
 
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
@@ -30,8 +30,6 @@ pub struct Email {
     pub headers: EmailHeaders,
     pub body_text: String,
     pub body_html: Option<String>,
-    pub body_markdown: String,
-    pub markdown_converted: bool,
     pub attachments: Vec<Attachment>,
     pub file_path: PathBuf,
     pub is_unread: bool,
@@ -50,8 +48,6 @@ impl Email {
             },
             body_text: String::new(),
             body_html: None,
-            body_markdown: String::new(),
-            markdown_converted: false,
             attachments: Vec::new(),
             file_path,
             is_unread: false,
@@ -61,11 +57,7 @@ impl Email {
 
     pub fn get_preview(&self) -> String {
         let preview_len = 100;
-        let body = if !self.body_markdown.is_empty() {
-            &self.body_markdown
-        } else {
-            &self.body_text
-        };
+        let body = &self.body_text;
         
         if body.len() <= preview_len {
             body.to_string()
@@ -77,9 +69,9 @@ impl Email {
     /// Parse only headers from file (fast for folder loading)
     pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
-        let parsed = parse_mail(&content)?;
+        let message = MessageParser::default().parse(&content).ok_or("Failed to parse email headers")?;
         
-        self.parse_headers(&parsed)?;
+        self.parse_headers(&message)?;
         self.load_state = EmailLoadState::HeadersOnly;
         
         Ok(())
@@ -88,10 +80,10 @@ impl Email {
     /// Parse email from file (full parsing for reading)
     pub fn parse_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
-        let parsed = parse_mail(&content)?;
+        let message = MessageParser::default().parse(&content).ok_or("Failed to parse email")?;
         
-        self.parse_headers(&parsed)?;
-        self.parse_body(&parsed)?;
+        self.parse_headers(&message)?;
+        self.parse_body(&message)?;
         self.load_state = EmailLoadState::FullyLoaded;
         
         Ok(())
@@ -105,102 +97,86 @@ impl Email {
         Ok(())
     }
 
-    /// Parse email headers
-    fn parse_headers(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
-        self.headers.from = parsed.headers.get_first_value("From").unwrap_or_default();
-        self.headers.to = parsed.headers.get_first_value("To").unwrap_or_default();
-        self.headers.subject = parsed.headers.get_first_value("Subject").unwrap_or_default();
-        self.headers.date = parsed.headers.get_first_value("Date").unwrap_or_default();
-        self.headers.message_id = parsed.headers.get_first_value("Message-ID").unwrap_or_default();
+    /// Parse email headers elegantly using mail-parser
+    fn parse_headers(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+        // Extract from address with elegant formatting
+        self.headers.from = message.from()
+            .and_then(|addr| addr.first())
+            .map(|addr| {
+                match (addr.name(), addr.address()) {
+                    (Some(name), Some(email)) => format!("{} <{}>", name, email),
+                    (None, Some(email)) => email.to_string(),
+                    (Some(name), None) => name.to_string(),
+                    _ => "Unknown".to_string(),
+                }
+            })
+            .unwrap_or_default();
+        
+        // Extract to address with same elegant formatting
+        self.headers.to = message.to()
+            .and_then(|addr| addr.first())
+            .map(|addr| {
+                match (addr.name(), addr.address()) {
+                    (Some(name), Some(email)) => format!("{} <{}>", name, email),
+                    (None, Some(email)) => email.to_string(),
+                    (Some(name), None) => name.to_string(),
+                    _ => "Unknown".to_string(),
+                }
+            })
+            .unwrap_or_default();
+        
+        // Subject, date, and message-id are straightforward
+        self.headers.subject = message.subject().unwrap_or("(no subject)").to_string();
+        self.headers.date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
+        self.headers.message_id = message.message_id().unwrap_or_default().to_string();
         
         Ok(())
     }
 
-    /// Parse email body and attachments
-    fn parse_body(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
-        self.extract_body_and_attachments(parsed)?;
+    /// Parse email body elegantly using mail-parser's built-in text conversion
+    fn parse_body(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+        // mail-parser automatically converts HTML to plain text when needed
+        // Try to get plain text first (index 0 = first text part)
+        if let Some(text_body) = message.body_text(0) {
+            self.body_text = text_body.to_string();
+        }
+        
+        // Store HTML if available (for web serving)
+        if let Some(html_body) = message.body_html(0) {
+            self.body_html = Some(html_body.to_string());
+        }
+        
+        // Extract attachments
+        self.extract_attachments(message)?;
+        
         Ok(())
     }
 
-    /// Get text content for terminal display, converting HTML to plain text if needed
-    pub fn get_markdown_content(&mut self) -> &str {
-        if !self.markdown_converted {
-            // Convert HTML to plain text if we have HTML content
-            if let Some(html) = &self.body_html {
-                self.body_markdown = html_to_text(html);
-            } else if !self.body_text.is_empty() {
-                // If we only have text, use it directly
-                self.body_markdown = self.body_text.clone();
-            }
-            self.markdown_converted = true;
-        }
-        
-        if !self.body_markdown.is_empty() {
-            &self.body_markdown
-        } else {
-            &self.body_text
-        }
-    }
 
-    /// Recursively extract body content and attachments
-    fn extract_body_and_attachments(&mut self, parsed: &ParsedMail) -> Result<(), Box<dyn std::error::Error>> {
-        let content_type = parsed.ctype.mimetype.as_str();
-        
-        // Check if this is an attachment by looking at Content-Disposition header
-        let is_attachment = if let Some(disposition_header) = parsed.headers.get_first_value("Content-Disposition") {
-            let disposition = parse_content_disposition(&disposition_header);
-            matches!(disposition.disposition, DispositionType::Attachment)
-        } else {
-            false
-        };
-        
-        if is_attachment {
-            // This is an attachment
-            let filename = parsed.ctype.params.get("name")
-                .or_else(|| parsed.ctype.params.get("filename"))
-                .map(|s| s.as_str())
-                .unwrap_or("unknown")
+    /// Extract attachments elegantly using mail-parser
+    fn extract_attachments(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+        // Iterate through all attachments using mail-parser's clean API
+        let mut index = 0;
+        while let Some(attachment_part) = message.attachment(index) {
+            let filename = attachment_part.attachment_name()
+                .unwrap_or("unnamed_attachment")
                 .to_string();
+            
+            let content_type = attachment_part.content_type()
+                .map(|ct| format!("{}/{}", ct.c_type, ct.subtype().unwrap_or("*")))
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            
+            let size = attachment_part.len();
             
             let attachment = Attachment {
                 filename,
-                content_type: content_type.to_string(),
-                size: parsed.get_body_raw()?.len(),
+                content_type,
+                size,
             };
             
             self.attachments.push(attachment);
-        } else {
-            // This is body content
-            match content_type {
-                "text/plain" => {
-                    if self.body_text.is_empty() {
-                        self.body_text = parsed.get_body()?;
-                    }
-                }
-                "text/html" => {
-                    if self.body_html.is_none() {
-                        self.body_html = Some(parsed.get_body()?);
-                    }
-                }
-                "multipart/alternative" | "multipart/mixed" | "multipart/related" => {
-                    // Process subparts recursively
-                    for subpart in &parsed.subparts {
-                        self.extract_body_and_attachments(subpart)?;
-                    }
-                }
-                _ => {
-                    // Unknown content type, try to extract as text if not an attachment
-                    if !is_attachment {
-                        if let Ok(body) = parsed.get_body() {
-                            if self.body_text.is_empty() {
-                                self.body_text = body;
-                            }
-                        }
-                    }
-                }
-            }
+            index += 1;
         }
-        
         
         Ok(())
     }
@@ -227,68 +203,6 @@ impl Email {
     }
 }
 
-/// Simple HTML to text conversion for terminal display
-fn html_to_text(html: &str) -> String {
-    let mut result = String::new();
-    let mut inside_tag = false;
-    let mut i = 0;
-    let chars: Vec<char> = html.chars().collect();
-    
-    while i < chars.len() {
-        let ch = chars[i];
-        match ch {
-            '<' => {
-                inside_tag = true;
-                // Add line breaks for block elements
-                if i + 3 < chars.len() {
-                    let tag_start: String = chars[i..std::cmp::min(i + 4, chars.len())].iter().collect();
-                    if tag_start.starts_with("<br") || tag_start.starts_with("<p>") || tag_start.starts_with("<div") {
-                        result.push('\n');
-                    }
-                }
-            }
-            '>' => {
-                inside_tag = false;
-            }
-            _ if !inside_tag => {
-                // Decode basic HTML entities
-                if ch == '&' && i + 3 < chars.len() {
-                    let remaining: String = chars[i..].iter().collect();
-                    if remaining.starts_with("&amp;") {
-                        result.push('&');
-                        i += 4;
-                    } else if remaining.starts_with("&lt;") {
-                        result.push('<');
-                        i += 3;
-                    } else if remaining.starts_with("&gt;") {
-                        result.push('>');
-                        i += 3;
-                    } else if remaining.starts_with("&quot;") {
-                        result.push('"');
-                        i += 5;
-                    } else if remaining.starts_with("&nbsp;") {
-                        result.push(' ');
-                        i += 5;
-                    } else {
-                        result.push(ch);
-                    }
-                } else {
-                    result.push(ch);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    
-    // Clean up excessive whitespace and empty lines
-    result
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 #[derive(Debug, Clone)]
 pub struct Folder {
@@ -461,7 +375,7 @@ impl EmailStore {
             if let Err(_) = email.ensure_fully_loaded() {
                 return None;
             }
-            Some(email.get_markdown_content().to_string())
+            Some(email.body_text.clone())
         } else {
             None
         }

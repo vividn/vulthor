@@ -65,11 +65,11 @@ async fn serve_styles() -> Response {
 }
 
 fn generate_email_html(email: &crate::email::Email) -> String {
-    let body_content = if !email.body_html.is_some() {
-        // Convert markdown to HTML
-        markdown_to_html(&email.body_markdown)
+    let body_content = if let Some(html) = &email.body_html {
+        html.clone()
     } else {
-        email.body_html.as_ref().unwrap().clone()
+        // Convert plain text to HTML
+        markdown_to_html(&email.body_text)
     };
 
     let attachments_html = if email.has_attachments() {
