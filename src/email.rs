@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use mailparse::{parse_mail, MailHeaderMap, ParsedMail, parse_content_disposition, DispositionType};
-use html2md::parse_html;
 
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
@@ -123,14 +122,14 @@ impl Email {
         Ok(())
     }
 
-    /// Get markdown content, converting lazily only when needed
+    /// Get text content for terminal display, converting HTML to plain text if needed
     pub fn get_markdown_content(&mut self) -> &str {
         if !self.markdown_converted {
-            // Convert HTML to markdown if we have HTML content
+            // Convert HTML to plain text if we have HTML content
             if let Some(html) = &self.body_html {
-                self.body_markdown = parse_html(html);
+                self.body_markdown = html_to_text(html);
             } else if !self.body_text.is_empty() {
-                // If we only have text, use it as markdown
+                // If we only have text, use it directly
                 self.body_markdown = self.body_text.clone();
             }
             self.markdown_converted = true;
@@ -202,10 +201,6 @@ impl Email {
             }
         }
         
-        // Process subparts even for non-multipart types (just in case)
-        for subpart in &parsed.subparts {
-            self.extract_body_and_attachments(subpart)?;
-        }
         
         Ok(())
     }
@@ -230,6 +225,69 @@ impl Email {
     pub fn attachment_count(&self) -> usize {
         self.attachments.len()
     }
+}
+
+/// Simple HTML to text conversion for terminal display
+fn html_to_text(html: &str) -> String {
+    let mut result = String::new();
+    let mut inside_tag = false;
+    let mut i = 0;
+    let chars: Vec<char> = html.chars().collect();
+    
+    while i < chars.len() {
+        let ch = chars[i];
+        match ch {
+            '<' => {
+                inside_tag = true;
+                // Add line breaks for block elements
+                if i + 3 < chars.len() {
+                    let tag_start: String = chars[i..std::cmp::min(i + 4, chars.len())].iter().collect();
+                    if tag_start.starts_with("<br") || tag_start.starts_with("<p>") || tag_start.starts_with("<div") {
+                        result.push('\n');
+                    }
+                }
+            }
+            '>' => {
+                inside_tag = false;
+            }
+            _ if !inside_tag => {
+                // Decode basic HTML entities
+                if ch == '&' && i + 3 < chars.len() {
+                    let remaining: String = chars[i..].iter().collect();
+                    if remaining.starts_with("&amp;") {
+                        result.push('&');
+                        i += 4;
+                    } else if remaining.starts_with("&lt;") {
+                        result.push('<');
+                        i += 3;
+                    } else if remaining.starts_with("&gt;") {
+                        result.push('>');
+                        i += 3;
+                    } else if remaining.starts_with("&quot;") {
+                        result.push('"');
+                        i += 5;
+                    } else if remaining.starts_with("&nbsp;") {
+                        result.push(' ');
+                        i += 5;
+                    } else {
+                        result.push(ch);
+                    }
+                } else {
+                    result.push(ch);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    
+    // Clean up excessive whitespace and empty lines
+    result
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone)]
