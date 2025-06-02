@@ -7,8 +7,10 @@
       "Bash(cargo test:*)",
       "Bash(cargo:*)",
       "Bash(rg:*)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "Bash(grep:*)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": false
 }
