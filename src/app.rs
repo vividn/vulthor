@@ -106,7 +106,7 @@ pub struct App {
     pub search_query: String,
     pub search_mode: bool,
     pub message_pane_visible_rows: usize, // Track visible rows in message pane for loading
-    pub initial_loading_done: bool, // Track if initial email loading has been performed
+    pub initial_loading_done: bool,       // Track if initial email loading has been performed
 }
 
 impl App {

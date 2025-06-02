@@ -92,7 +92,7 @@ impl MaildirScanner {
         if folder.is_loaded {
             return Ok(());
         }
-        
+
         // If we have a limit and folder already has emails, only proceed if not fully loaded
         if limit.is_some() && !folder.emails.is_empty() {
             return Ok(());

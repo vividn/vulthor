@@ -2,11 +2,35 @@ use crate::app::SharedAppState;
 use axum::{
     extract::State,
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Json, Response, Sse},
     routing::get,
     Router,
 };
+use futures::stream::{self, Stream};
+use serde::Serialize;
+use std::convert::Infallible;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::time::sleep;
+
+#[derive(Serialize)]
+struct EmailData {
+    has_email: bool,
+    subject: String,
+    from: String,
+    to: String,
+    date: String,
+    body_html: String,
+    attachments: Vec<AttachmentData>,
+    email_id: String,
+}
+
+#[derive(Serialize)]
+struct AttachmentData {
+    filename: String,
+    content_type: String,
+    size: String,
+}
 
 pub struct WebServer {
     port: u16,
@@ -23,6 +47,8 @@ impl WebServer {
             .route("/", get(serve_email))
             .route("/health", get(health_check))
             .route("/styles.css", get(serve_styles))
+            .route("/events", get(email_events))
+            .route("/api/current-email", get(get_current_email_json))
             .with_state(self.app_state.clone());
 
         let addr = format!("127.0.0.1:{}", self.port);
@@ -62,6 +88,112 @@ async fn health_check() -> &'static str {
 async fn serve_styles() -> Response {
     let css = include_str!("../static/styles.css");
     ([("content-type", "text/css")], css).into_response()
+}
+
+async fn email_events(
+    State(app_state): State<SharedAppState>,
+) -> Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>> {
+    let stream = stream::unfold(None, move |last_email_id| {
+        let app_state = app_state.clone();
+        async move {
+            loop {
+                sleep(Duration::from_millis(200)).await; // Faster polling for better responsiveness
+
+                let current_email_id = {
+                    let app = app_state.lock().ok()?;
+                    // Create a unique identifier for the current email selection
+                    // Use folder index + email index as a simple ID
+                    format!(
+                        "{}:{}",
+                        app.selection.folder_index, app.selection.email_index
+                    )
+                };
+
+                if last_email_id.as_ref() != Some(&current_email_id) {
+                    let event = axum::response::sse::Event::default()
+                        .event("email-changed")
+                        .data(&current_email_id);
+                    return Some((Ok(event), Some(current_email_id)));
+                }
+            }
+        }
+    });
+
+    Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive-text"),
+    )
+}
+
+async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Response {
+    let mut app = match app_state.lock() {
+        Ok(app) => app,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(EmailData {
+                    has_email: false,
+                    subject: String::new(),
+                    from: String::new(),
+                    to: String::new(),
+                    date: String::new(),
+                    body_html: "Error: Could not access application state".to_string(),
+                    attachments: vec![],
+                    email_id: "error".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let email_id = format!(
+        "{}:{}",
+        app.selection.folder_index, app.selection.email_index
+    );
+
+    if let Some(email) = app.get_current_email_for_web() {
+        let body_content = if let Some(html) = &email.body_html {
+            html.clone()
+        } else {
+            // Convert plain text to HTML
+            markdown_to_html(&email.body_text)
+        };
+
+        let attachments: Vec<AttachmentData> = email
+            .attachments
+            .iter()
+            .map(|attachment| AttachmentData {
+                filename: attachment.filename.clone(),
+                content_type: attachment.content_type.clone(),
+                size: format_file_size(attachment.size),
+            })
+            .collect();
+
+        Json(EmailData {
+            has_email: true,
+            subject: email.headers.subject.clone(),
+            from: email.headers.from.clone(),
+            to: email.headers.to.clone(),
+            date: email.headers.date.clone(),
+            body_html: body_content,
+            attachments,
+            email_id,
+        })
+        .into_response()
+    } else {
+        Json(EmailData {
+            has_email: false,
+            subject: String::new(),
+            from: String::new(),
+            to: String::new(),
+            date: String::new(),
+            body_html: String::new(),
+            attachments: vec![],
+            email_id,
+        })
+        .into_response()
+    }
 }
 
 fn generate_email_html(email: &crate::email::Email) -> String {
@@ -110,6 +242,123 @@ fn generate_email_html(email: &crate::email::Email) -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - {}</title>
     <link rel="stylesheet" href="/styles.css">
+    <script>
+        let currentEmailId = null;
+        let isLoading = false;
+        
+        const eventSource = new EventSource('/events');
+        eventSource.addEventListener('email-changed', function(event) {{
+            const newEmailId = event.data;
+            if (newEmailId !== currentEmailId && !isLoading) {{
+                loadEmailContent();
+            }}
+        }});
+        eventSource.onerror = function(event) {{
+            console.log('SSE connection error:', event);
+        }};
+        
+        async function loadEmailContent() {{
+            if (isLoading) return;
+            isLoading = true;
+            
+            try {{
+                const response = await fetch('/api/current-email');
+                const emailData = await response.json();
+                
+                if (emailData.has_email) {{
+                    updateEmailDisplay(emailData);
+                    currentEmailId = emailData.email_id;
+                }} else {{
+                    showWelcomeMessage();
+                    currentEmailId = emailData.email_id;
+                }}
+            }} catch (error) {{
+                console.error('Error loading email:', error);
+            }} finally {{
+                isLoading = false;
+            }}
+        }}
+        
+        function updateEmailDisplay(emailData) {{
+            document.title = 'Vulthor - ' + emailData.subject;
+            document.querySelector('.email-subject').textContent = emailData.subject;
+            document.querySelector('.email-from').innerHTML = '<strong>From:</strong> ' + emailData.from;
+            document.querySelector('.email-to').innerHTML = '<strong>To:</strong> ' + emailData.to;
+            document.querySelector('.email-date').innerHTML = '<strong>Date:</strong> ' + emailData.date;
+            document.querySelector('.email-content').innerHTML = emailData.body_html;
+            
+            // Update attachments
+            const attachmentsSection = document.querySelector('.attachments-section');
+            if (emailData.attachments.length > 0) {{
+                let attachmentsHtml = '<div class="attachments-section"><h3>Attachments</h3><ul class="attachments-list">';
+                emailData.attachments.forEach(attachment => {{
+                    attachmentsHtml += `<li class="attachment-item">
+                        <span class="attachment-icon">📎</span>
+                        <span class="attachment-name">${{attachment.filename}}</span>
+                        <span class="attachment-type">(${{attachment.content_type}})</span>
+                        <span class="attachment-size">${{attachment.size}}</span>
+                    </li>`;
+                }});
+                attachmentsHtml += '</ul></div>';
+                
+                if (attachmentsSection) {{
+                    attachmentsSection.outerHTML = attachmentsHtml;
+                }} else {{
+                    document.querySelector('.email-content').insertAdjacentHTML('afterend', attachmentsHtml);
+                }}
+            }} else if (attachmentsSection) {{
+                attachmentsSection.remove();
+            }}
+            
+            // Show email layout
+            document.querySelector('.container').className = 'container email-view';
+        }}
+        
+        function showWelcomeMessage() {{
+            document.title = 'Vulthor - Email Client';
+            document.querySelector('.container').className = 'container welcome-view';
+            document.querySelector('.container').innerHTML = `
+                <header class="welcome-header">
+                    <h1>📧 Vulthor</h1>
+                    <h2>TUI Email Client</h2>
+                </header>
+                
+                <main class="welcome-content">
+                    <div class="welcome-message">
+                        <h3>Welcome to Vulthor</h3>
+                        <p>No email is currently selected in the terminal interface.</p>
+                        <p>To view an email here:</p>
+                        <ol>
+                            <li>Navigate to an email in the terminal</li>
+                            <li>Select it with <kbd>Enter</kbd></li>
+                            <li>The email will appear on this page</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="keybindings">
+                        <h3>Key Bindings</h3>
+                        <div class="keybinding-grid">
+                            <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
+                            <div class="keybinding"><kbd>Alt+h</kbd> / <kbd>Alt+l</kbd><span>Switch panes</span></div>
+                            <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
+                            <div class="keybinding"><kbd>Alt+e</kbd><span>Toggle folders</span></div>
+                            <div class="keybinding"><kbd>Alt+c</kbd><span>Toggle content</span></div>
+                            <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
+                            <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
+                            <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
+                        </div>
+                    </div>
+                </main>
+                
+                <footer class="app-footer">
+                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+                </footer>
+            `;
+        }}
+        
+        // Load initial content when page loads
+        window.addEventListener('load', loadEmailContent);
+    </script>
 </head>
 <body>
     <div class="container">
@@ -158,6 +407,126 @@ fn generate_welcome_html() -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - Email Client</title>
     <link rel="stylesheet" href="/styles.css">
+    <script>
+        let currentEmailId = null;
+        let isLoading = false;
+        
+        const eventSource = new EventSource('/events');
+        eventSource.addEventListener('email-changed', function(event) {
+            const newEmailId = event.data;
+            if (newEmailId !== currentEmailId && !isLoading) {
+                loadEmailContent();
+            }
+        });
+        eventSource.onerror = function(event) {
+            console.log('SSE connection error:', event);
+        };
+        
+        async function loadEmailContent() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            try {
+                const response = await fetch('/api/current-email');
+                const emailData = await response.json();
+                
+                if (emailData.has_email) {
+                    updateEmailDisplay(emailData);
+                    currentEmailId = emailData.email_id;
+                } else {
+                    showWelcomeMessage();
+                    currentEmailId = emailData.email_id;
+                }
+            } catch (error) {
+                console.error('Error loading email:', error);
+            } finally {
+                isLoading = false;
+            }
+        }
+        
+        function updateEmailDisplay(emailData) {
+            document.title = 'Vulthor - ' + emailData.subject;
+            // Create email view if not exists
+            document.querySelector('.container').className = 'container email-view';
+            document.querySelector('.container').innerHTML = `
+                <header class="email-header">
+                    <h1 class="email-subject">${emailData.subject}</h1>
+                    <div class="email-meta">
+                        <div class="email-from"><strong>From:</strong> ${emailData.from}</div>
+                        <div class="email-to"><strong>To:</strong> ${emailData.to}</div>
+                        <div class="email-date"><strong>Date:</strong> ${emailData.date}</div>
+                    </div>
+                </header>
+                
+                <main class="email-content">${emailData.body_html}</main>
+                
+                ${emailData.attachments.length > 0 ? `
+                    <div class="attachments-section">
+                        <h3>Attachments</h3>
+                        <ul class="attachments-list">
+                            ${emailData.attachments.map(attachment => `
+                                <li class="attachment-item">
+                                    <span class="attachment-icon">📎</span>
+                                    <span class="attachment-name">${attachment.filename}</span>
+                                    <span class="attachment-type">(${attachment.content_type})</span>
+                                    <span class="attachment-size">${attachment.size}</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                ` : ''}
+                
+                <footer class="app-footer">
+                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+                </footer>
+            `;
+        }
+        
+        function showWelcomeMessage() {
+            document.title = 'Vulthor - Email Client';
+            document.querySelector('.container').className = 'container welcome-view';
+            document.querySelector('.container').innerHTML = `
+                <header class="welcome-header">
+                    <h1>📧 Vulthor</h1>
+                    <h2>TUI Email Client</h2>
+                </header>
+                
+                <main class="welcome-content">
+                    <div class="welcome-message">
+                        <h3>Welcome to Vulthor</h3>
+                        <p>No email is currently selected in the terminal interface.</p>
+                        <p>To view an email here:</p>
+                        <ol>
+                            <li>Navigate to an email in the terminal</li>
+                            <li>Select it with <kbd>Enter</kbd></li>
+                            <li>The email will appear on this page</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="keybindings">
+                        <h3>Key Bindings</h3>
+                        <div class="keybinding-grid">
+                            <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
+                            <div class="keybinding"><kbd>Alt+h</kbd> / <kbd>Alt+l</kbd><span>Switch panes</span></div>
+                            <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
+                            <div class="keybinding"><kbd>Alt+e</kbd><span>Toggle folders</span></div>
+                            <div class="keybinding"><kbd>Alt+c</kbd><span>Toggle content</span></div>
+                            <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
+                            <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
+                            <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
+                        </div>
+                    </div>
+                </main>
+                
+                <footer class="app-footer">
+                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+                </footer>
+            `;
+        }
+        
+        // Load initial content when page loads
+        window.addEventListener('load', loadEmailContent);
+    </script>
 </head>
 <body>
     <div class="container">
