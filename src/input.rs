@@ -320,13 +320,57 @@ fn count_visible_folders_recursive(folder: &crate::email::Folder) -> usize {
 
 fn get_real_folder_index(folder: &crate::email::Folder, display_index: usize) -> Option<usize> {
     // Convert display index to actual subfolder index
-    // This is a simplified version - in a real implementation you'd need to 
-    // track the mapping between display order and actual folder indices
-    if display_index < folder.subfolders.len() {
-        Some(display_index)
-    } else {
-        None
+    // The display index is from a flattened recursive list, but we need the index
+    // within the current folder's direct subfolders only
+    
+    // Build the flat display list to match what the UI shows
+    let flat_folders = build_flat_folder_list(folder, 0);
+    
+    if display_index < flat_folders.len() {
+        let (target_folder, _depth) = &flat_folders[display_index];
+        
+        // Find which direct subfolder this target belongs to or is
+        for (i, subfolder) in folder.subfolders.iter().enumerate() {
+            if std::ptr::eq(subfolder, *target_folder) {
+                return Some(i);
+            }
+            // Check if target is a descendant of this subfolder
+            if is_folder_descendant(subfolder, *target_folder) {
+                return Some(i);
+            }
+        }
     }
+    None
+}
+
+fn build_flat_folder_list(folder: &crate::email::Folder, depth: usize) -> Vec<(&crate::email::Folder, usize)> {
+    let mut result = Vec::new();
+    
+    // Add current folder if not root
+    if depth > 0 {
+        result.push((folder, depth));
+    }
+    
+    // Add subfolders in sorted order (matching UI display)
+    for subfolder in folder.get_sorted_subfolders() {
+        result.extend(build_flat_folder_list(subfolder, depth + 1));
+    }
+    
+    result
+}
+
+fn is_folder_descendant(ancestor: &crate::email::Folder, target: &crate::email::Folder) -> bool {
+    if std::ptr::eq(ancestor, target) {
+        return true;
+    }
+    
+    for subfolder in &ancestor.subfolders {
+        if is_folder_descendant(subfolder, target) {
+            return true;
+        }
+    }
+    
+    false
 }
 
 #[cfg(test)]

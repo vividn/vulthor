@@ -409,8 +409,8 @@ impl UI {
             items.push(ListItem::new(content));
         }
 
-        // Add subfolders
-        for subfolder in &folder.subfolders {
+        // Add subfolders in sorted order
+        for subfolder in folder.get_sorted_subfolders() {
             items.extend(Self::build_folder_list_static(subfolder, depth + 1));
         }
 

@@ -240,6 +240,19 @@ impl Folder {
         self.subfolders.push(folder);
     }
 
+    pub fn get_sorted_subfolders(&self) -> Vec<&Folder> {
+        let mut sorted: Vec<&Folder> = self.subfolders.iter().collect();
+        sorted.sort_by(|a, b| {
+            // Keep INBOX at the top
+            match (&a.name[..], &b.name[..]) {
+                ("INBOX", _) => std::cmp::Ordering::Less,
+                (_, "INBOX") => std::cmp::Ordering::Greater,
+                (a_name, b_name) => a_name.cmp(b_name),
+            }
+        });
+        sorted
+    }
+
     pub fn get_display_name(&self) -> String {
         if self.unread_count > 0 {
             format!("{} ({})", self.name, self.unread_count)
