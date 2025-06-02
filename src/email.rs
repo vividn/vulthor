@@ -352,7 +352,8 @@ impl EmailStore {
         let current = self.get_current_folder_mut();
         if folder_index < current.subfolders.len() {
             let folder = &mut current.subfolders[folder_index];
-            if !folder.is_loaded {
+            // Only load if the folder has no emails or is not loaded
+            if !folder.is_loaded && folder.emails.is_empty() {
                 scanner.load_folder_emails(folder)?;
             }
         }
@@ -375,7 +376,8 @@ impl EmailStore {
             }
         }
 
-        if !folder.is_loaded {
+        // Only load if the folder has no emails or is not loaded
+        if !folder.is_loaded && folder.emails.is_empty() {
             let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
             scanner.load_folder_emails_with_limit(folder, Some(load_count))?;
         }
@@ -402,7 +404,8 @@ impl EmailStore {
         limit: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let folder = self.get_current_folder_mut();
-        if !folder.is_loaded {
+        // Only load if the folder has no emails or is not loaded
+        if !folder.is_loaded && folder.emails.is_empty() {
             scanner.load_folder_emails_with_limit(folder, Some(limit))?;
         }
         Ok(())
