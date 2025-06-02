@@ -119,13 +119,28 @@ impl UI {
         f.render_stateful_widget(list, area, &mut self.folder_list_state);
     }
 
-    fn draw_email_list_pane(&mut self, f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-        let current_folder = app.email_store.get_current_folder();
-        let email_items = Self::build_email_list_static(&current_folder.emails);
-
+    fn draw_email_list_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
         // Calculate visible rows for dynamic loading (area height minus borders)
-        let _visible_rows = (area.height.saturating_sub(2)) as usize; // -2 for top and bottom borders
-                                                                      // TODO: Use this for dynamic loading requests from UI
+        let visible_rows = (area.height.saturating_sub(2)) as usize; // -2 for top and bottom borders
+
+        // Update app's visible rows for use in navigation
+        app.message_pane_visible_rows = visible_rows;
+
+        // In folder/message view mode, show messages from the selected folder
+        // In message/content view mode, show messages from the current folder
+        let folder_to_display = match app.pane_visibility.view_mode {
+            ViewMode::FolderMessage => {
+                // Show messages from the selected folder in the folder pane
+                app.get_selected_folder()
+                    .unwrap_or_else(|| app.email_store.get_current_folder())
+            }
+            ViewMode::MessageContent => {
+                // Show messages from the current folder we've navigated into
+                app.email_store.get_current_folder()
+            }
+        };
+
+        let email_items = Self::build_email_list_static(&folder_to_display.emails);
 
         let style = if is_active {
             Style::default().fg(Color::Cyan)
@@ -139,15 +154,36 @@ impl UI {
             Style::default()
         };
 
-        let folder_path = app.email_store.get_folder_path();
-        let current_folder = app.email_store.get_current_folder();
-        let title = if current_folder.is_loaded {
-            format!("Emails - {} ({})", folder_path, current_folder.emails.len())
+        let folder_path = match app.pane_visibility.view_mode {
+            ViewMode::FolderMessage => {
+                // Show path of the selected folder
+                let root_folder = &app.email_store.root_folder;
+                if let Some(path_indices) = crate::input::get_folder_path_from_display_index(
+                    root_folder,
+                    app.selection.folder_index,
+                ) {
+                    app.email_store.get_folder_path_for_indices(&path_indices)
+                } else {
+                    app.email_store.get_folder_path()
+                }
+            }
+            ViewMode::MessageContent => {
+                // Show path of the current folder
+                app.email_store.get_folder_path()
+            }
+        };
+
+        let title = if folder_to_display.is_loaded {
+            format!(
+                "Emails - {} ({})",
+                folder_path,
+                folder_to_display.emails.len()
+            )
         } else {
             format!(
                 "Emails - {} ({}/...)",
                 folder_path,
-                current_folder.emails.len()
+                folder_to_display.emails.len()
             )
         };
 

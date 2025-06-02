@@ -169,6 +169,7 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
             let root_folder = &app.email_store.root_folder;
             let total_folders = count_visible_folders(root_folder);
 
+            let old_folder_index = app.selection.folder_index;
             match direction {
                 NavigationDirection::Down => {
                     if app.selection.folder_index + 1 < total_folders {
@@ -180,6 +181,11 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
                         app.selection.folder_index -= 1;
                     }
                 }
+            }
+
+            // If folder selection changed, automatically load messages from the new folder
+            if app.selection.folder_index != old_folder_index {
+                app.load_selected_folder_messages();
             }
         }
         ActivePane::List => {
@@ -343,7 +349,7 @@ fn count_visible_folders_recursive(folder: &crate::email::Folder) -> usize {
     count
 }
 
-fn get_folder_path_from_display_index(
+pub fn get_folder_path_from_display_index(
     folder: &crate::email::Folder,
     display_index: usize,
 ) -> Option<Vec<usize>> {

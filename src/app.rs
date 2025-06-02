@@ -105,6 +105,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub search_query: String,
     pub search_mode: bool,
+    pub message_pane_visible_rows: usize, // Track visible rows in message pane for loading
 }
 
 impl App {
@@ -120,6 +121,7 @@ impl App {
             status_message: None,
             search_query: String::new(),
             search_mode: false,
+            message_pane_visible_rows: 20, // Default estimate
         };
 
         // Auto-select INBOX folder on startup
@@ -272,8 +274,31 @@ impl App {
         // Find INBOX folder in the folder structure and set the selection index
         if let Some(inbox_index) = self.find_inbox_folder() {
             self.selection.folder_index = inbox_index;
-            // Don't auto-enter the folder, just select it in the folder list
-            // The user can press Enter to actually enter the folder
+            // Load messages for the selected folder automatically
+            self.load_selected_folder_messages();
+        }
+    }
+
+    /// Load messages for the currently selected folder (for folder browsing)
+    pub fn load_selected_folder_messages(&mut self) {
+        let root_folder = &self.email_store.root_folder;
+        let folder_path = crate::input::get_folder_path_from_display_index(
+            root_folder,
+            self.selection.folder_index,
+        );
+
+        if let Some(path) = folder_path {
+            let visible_rows = self.message_pane_visible_rows;
+
+            if let Err(e) =
+                self.email_store
+                    .ensure_folder_at_path_loaded(&path, &self.scanner, visible_rows)
+            {
+                self.set_status(format!("Error loading folder messages: {}", e));
+            }
+
+            // Reset email selection since we're browsing folders
+            self.selection.email_index = 0;
         }
     }
 
@@ -305,6 +330,22 @@ impl App {
     pub fn switch_to_message_content_view(&mut self) {
         self.pane_visibility.set_message_content_mode();
         self.active_pane = ActivePane::List;
+    }
+
+    /// Get the currently selected folder in folder view mode
+    pub fn get_selected_folder(&self) -> Option<&crate::email::Folder> {
+        // Get the folder path for the currently selected folder
+        let root_folder = &self.email_store.root_folder;
+        let folder_path = crate::input::get_folder_path_from_display_index(
+            root_folder,
+            self.selection.folder_index,
+        );
+
+        if let Some(path) = folder_path {
+            self.email_store.get_folder_at_path(&path)
+        } else {
+            None
+        }
     }
 }
 

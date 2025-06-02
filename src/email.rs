@@ -359,6 +359,42 @@ impl EmailStore {
         Ok(())
     }
 
+    /// Load emails for a folder at a specific path with visible row limit
+    pub fn ensure_folder_at_path_loaded(
+        &mut self,
+        path: &[usize],
+        scanner: &crate::maildir::MaildirScanner,
+        visible_rows: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut folder = &mut self.root_folder;
+        for &index in path {
+            if index < folder.subfolders.len() {
+                folder = &mut folder.subfolders[index];
+            } else {
+                return Err("Invalid folder path".into());
+            }
+        }
+
+        if !folder.is_loaded {
+            let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
+            scanner.load_folder_emails_with_limit(folder, Some(load_count))?;
+        }
+        Ok(())
+    }
+
+    /// Get folder at a specific path (read-only)
+    pub fn get_folder_at_path(&self, path: &[usize]) -> Option<&Folder> {
+        let mut folder = &self.root_folder;
+        for &index in path {
+            if index < folder.subfolders.len() {
+                folder = &folder.subfolders[index];
+            } else {
+                return None;
+            }
+        }
+        Some(folder)
+    }
+
     /// Load limited number of emails for current folder (for fast startup)
     pub fn ensure_current_folder_loaded_with_limit(
         &mut self,
@@ -452,6 +488,21 @@ impl EmailStore {
         let mut folder = &self.root_folder;
 
         for &index in &self.current_folder {
+            if index < folder.subfolders.len() {
+                folder = &folder.subfolders[index];
+                path.push(folder.name.clone());
+            }
+        }
+
+        path.join(" > ")
+    }
+
+    /// Get folder path for a specific folder path
+    pub fn get_folder_path_for_indices(&self, indices: &[usize]) -> String {
+        let mut path = vec!["Mail".to_string()];
+        let mut folder = &self.root_folder;
+
+        for &index in indices {
             if index < folder.subfolders.len() {
                 folder = &folder.subfolders[index];
                 path.push(folder.name.clone());
