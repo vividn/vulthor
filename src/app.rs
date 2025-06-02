@@ -73,6 +73,7 @@ pub struct SelectionState {
     pub email_index: usize,      // Selected email index in current folder
     pub scroll_offset: usize,    // Scroll position for current pane
     pub attachment_index: usize, // Selected attachment when in attachment view
+    pub remembered_email_index: Option<usize>, // Remembered email selection when switching views
 }
 
 #[derive(Debug)]
@@ -166,7 +167,36 @@ impl App {
             }
         };
 
-        self.active_pane = available_panes[new_index].clone();
+        let old_pane = self.active_pane.clone();
+        let new_pane = available_panes[new_index].clone();
+
+        // Handle selection memory when switching between Folders and List panes
+        match (&old_pane, &new_pane) {
+            (ActivePane::List, ActivePane::Folders) => {
+                // Moving from List to Folders - remember current email selection
+                if self.email_store.selected_email.is_some() {
+                    self.selection.remembered_email_index = Some(self.selection.email_index);
+                }
+                // Deselect the email to show welcome screen
+                self.email_store.selected_email = None;
+            }
+            (ActivePane::Folders, ActivePane::List) => {
+                // Moving from Folders to List - restore remembered selection
+                if let Some(remembered_index) = self.selection.remembered_email_index {
+                    self.selection.email_index = remembered_index;
+                    self.email_store.select_email(remembered_index);
+                    
+                    // Reload the email content
+                    if let Some(_email) = self.email_store.get_selected_email() {
+                        // Email content will be loaded automatically by get_selected_email
+                        self.set_state(AppState::EmailContent);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.active_pane = new_pane;
     }
 
     /// Set status message
@@ -197,8 +227,13 @@ impl App {
     }
 
     /// Get the currently selected email for web serving
+    /// Returns None when in folder/message view to show welcome screen
     pub fn get_current_email_for_web(&mut self) -> Option<&crate::email::Email> {
-        self.email_store.get_selected_email()
+        // Only show email content when in message/content view mode
+        match self.pane_visibility.view_mode {
+            ViewMode::MessageContent => self.email_store.get_selected_email(),
+            ViewMode::FolderMessage => None, // Show welcome screen in folder view
+        }
     }
 
 
@@ -238,8 +273,9 @@ impl App {
                 self.set_status(format!("Error loading folder messages: {}", e));
             }
 
-            // Reset email selection since we're browsing folders
+            // Reset email selection and remembered index since we're browsing folders
             self.selection.email_index = 0;
+            self.selection.remembered_email_index = None;
         }
     }
 
@@ -263,6 +299,14 @@ impl App {
 
     /// Switch to folder/message view (h key)
     pub fn switch_to_folder_message_view(&mut self) {
+        // Remember current email selection before switching
+        if self.email_store.selected_email.is_some() {
+            self.selection.remembered_email_index = Some(self.selection.email_index);
+        }
+        
+        // Deselect the email to show welcome screen
+        self.email_store.selected_email = None;
+        
         self.pane_visibility.set_folder_message_mode();
         self.active_pane = ActivePane::Folders;
     }
@@ -271,6 +315,19 @@ impl App {
     pub fn switch_to_message_content_view(&mut self) {
         self.pane_visibility.set_message_content_mode();
         self.active_pane = ActivePane::List;
+        
+        // Restore remembered email selection if available
+        if let Some(remembered_index) = self.selection.remembered_email_index {
+            self.selection.email_index = remembered_index;
+            self.email_store.select_email(remembered_index);
+            
+            // Reload the email content but stay in List pane
+            if let Some(_email) = self.email_store.get_selected_email() {
+                // Email content will be loaded automatically by get_selected_email
+                // Set the state but don't let it change the active pane
+                self.state = AppState::EmailContent;
+            }
+        }
     }
 
     /// Get the currently selected folder in folder view mode
