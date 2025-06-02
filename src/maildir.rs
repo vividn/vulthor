@@ -52,13 +52,8 @@ impl MaildirScanner {
                             .and_then(|name| name.to_str())
                             .unwrap_or("Unknown");
 
-                        // Skip the maildir special directories
-                        if dir_name == "cur" || dir_name == "new" || dir_name == "tmp" {
-                            continue;
-                        }
-
-                        // Skip hidden directories
-                        if dir_name.starts_with('.') {
+                        // Skip the maildir special directories and hidden directories
+                        if matches!(dir_name, "cur" | "new" | "tmp") || dir_name.starts_with('.') {
                             continue;
                         }
 
@@ -128,14 +123,6 @@ impl MaildirScanner {
         Ok(())
     }
 
-    /// Scan emails in a specific directory (cur or new)
-    fn scan_emails_in_folder(
-        &self,
-        folder: &mut Folder,
-        dir_path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.scan_emails_in_folder_with_limit(folder, dir_path, None)
-    }
 
     /// Scan emails in a specific directory with optional limit (cur or new)
     fn scan_emails_in_folder_with_limit(
@@ -166,8 +153,7 @@ impl MaildirScanner {
                     let is_unread = dir_path
                         .file_name()
                         .and_then(|name| name.to_str())
-                        .map(|name| name == "new")
-                        .unwrap_or(false);
+                        .map_or(false, |name| name == "new");
 
                     let mut email = Email::new(path.to_path_buf());
                     email.is_unread = is_unread;
@@ -195,71 +181,17 @@ impl MaildirScanner {
 
     /// Check if a file looks like an email file
     fn is_email_file(&self, path: &Path) -> bool {
-        // Skip temporary files and other non-email files
-        if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
-            // Skip files that start with a dot (hidden files)
-            if filename.starts_with('.') {
-                return false;
-            }
-
-            // Skip common non-email files
-            if filename.ends_with(".lock") || filename.ends_with(".tmp") {
-                return false;
-            }
-
-            // If it's a regular file and not excluded, assume it's an email
-            path.is_file()
-        } else {
-            false
-        }
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|filename| {
+                !filename.starts_with('.')
+                    && !filename.ends_with(".lock")
+                    && !filename.ends_with(".tmp")
+                    && path.is_file()
+            })
+            .unwrap_or(false)
     }
 
-    /// Get folder statistics
-    pub fn get_folder_stats(&self, folder: &Folder) -> FolderStats {
-        let mut stats = FolderStats {
-            total_emails: folder.emails.len(),
-            unread_emails: folder.emails.iter().filter(|e| e.is_unread).count(),
-            total_folders: 1, // Count this folder
-            total_size: 0,
-        };
-
-        // Add stats from subfolders recursively
-        for subfolder in &folder.subfolders {
-            let subfolder_stats = self.get_folder_stats(subfolder);
-            stats.total_emails += subfolder_stats.total_emails;
-            stats.unread_emails += subfolder_stats.unread_emails;
-            stats.total_folders += subfolder_stats.total_folders;
-            stats.total_size += subfolder_stats.total_size;
-        }
-
-        // Note: File size calculation deferred for performance
-        // Size will be calculated on-demand when actually needed
-
-        stats
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FolderStats {
-    pub total_emails: usize,
-    pub unread_emails: usize,
-    pub total_folders: usize,
-    pub total_size: u64, // Size in bytes
-}
-
-impl FolderStats {
-    pub fn format_size(&self) -> String {
-        let size = self.total_size as f64;
-        if size < 1024.0 {
-            format!("{} B", size)
-        } else if size < 1024.0 * 1024.0 {
-            format!("{:.1} KB", size / 1024.0)
-        } else if size < 1024.0 * 1024.0 * 1024.0 {
-            format!("{:.1} MB", size / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1} GB", size / (1024.0 * 1024.0 * 1024.0))
-        }
-    }
 }
 
 #[cfg(test)]

@@ -14,7 +14,6 @@ use ratatui::{
 pub struct UI {
     folder_list_state: ListState,
     email_list_state: ListState,
-    content_scroll: usize,
     attachment_list_state: ListState,
 }
 
@@ -29,7 +28,6 @@ impl UI {
         Self {
             folder_list_state: ListState::default(),
             email_list_state: ListState::default(),
-            content_scroll: 0,
             attachment_list_state: ListState::default(),
         }
     }

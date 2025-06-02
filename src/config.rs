@@ -66,18 +66,6 @@ impl Config {
         Ok(config)
     }
 
-    /// Save current config to specified path  
-    pub fn save(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-        let contents = toml::to_string_pretty(self)?;
-
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        std::fs::write(path, contents)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -151,8 +139,9 @@ mod tests {
             maildir_path: PathBuf::from("/custom/mail/path"),
         };
         
-        // Save test config
-        test_config.save(&config_path).unwrap();
+        // Write test config
+        let contents = toml::to_string(&test_config).unwrap();
+        fs::write(&config_path, contents).unwrap();
         
         // Load it back
         let loaded_config = Config::load(Some(config_path)).unwrap();
@@ -214,40 +203,6 @@ mod tests {
         assert_eq!(config.maildir_path, PathBuf::from("/project/local/mail"));
     }
 
-    #[test]
-    fn test_config_save_and_load_roundtrip() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("test_config.toml");
-        
-        let original_config = Config {
-            maildir_path: PathBuf::from("/original/path/to/mail"),
-        };
-        
-        // Save config
-        let save_result = original_config.save(&config_path);
-        assert!(save_result.is_ok());
-        assert!(config_path.exists());
-        
-        // Load config back
-        let loaded_config = Config::load(Some(config_path)).unwrap();
-        assert_eq!(loaded_config.maildir_path, original_config.maildir_path);
-    }
-
-    #[test]
-    fn test_config_save_creates_parent_directories() {
-        let temp_dir = TempDir::new().unwrap();
-        let nested_path = temp_dir.path().join("nested").join("deep").join("config.toml");
-        
-        let config = Config {
-            maildir_path: PathBuf::from("/test/path"),
-        };
-        
-        // Save should create parent directories
-        let result = config.save(&nested_path);
-        assert!(result.is_ok());
-        assert!(nested_path.exists());
-        assert!(nested_path.parent().unwrap().exists());
-    }
 
     #[test]
     fn test_config_load_from_file_invalid_toml() {
@@ -283,7 +238,8 @@ mod tests {
         let config_path = temp_dir.path().join("config.toml");
         
         // Save and load relative path
-        config.save(&config_path).unwrap();
+        let contents = toml::to_string(&config).unwrap();
+        fs::write(&config_path, contents).unwrap();
         let loaded_config = Config::load(Some(config_path)).unwrap();
         
         assert_eq!(loaded_config.maildir_path, PathBuf::from("./relative/mail/path"));
@@ -299,31 +255,14 @@ mod tests {
         let config_path = temp_dir.path().join("unicode_config.toml");
         
         // Save and load unicode path
-        let save_result = config.save(&config_path);
+        let contents = toml::to_string(&config).unwrap();
+        let save_result = fs::write(&config_path, contents);
         assert!(save_result.is_ok());
         
         let loaded_config = Config::load(Some(config_path)).unwrap();
         assert_eq!(loaded_config.maildir_path, PathBuf::from("/home/用户/邮件"));
     }
 
-    #[test]
-    fn test_config_save_pretty_formatting() {
-        let config = Config {
-            maildir_path: PathBuf::from("/test/pretty/formatting"),
-        };
-        
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("pretty.toml");
-        
-        config.save(&config_path).unwrap();
-        
-        let saved_content = fs::read_to_string(&config_path).unwrap();
-        // Verify the content is nicely formatted
-        assert!(saved_content.contains("maildir_path"));
-        assert!(saved_content.contains("/test/pretty/formatting"));
-        // toml::to_string_pretty should produce readable output
-        assert!(!saved_content.trim().is_empty());
-    }
 
     #[test]
     fn test_config_error_handling_file_permission() {
@@ -334,7 +273,8 @@ mod tests {
         
         // Try to save to a path that should fail (like root directory on Unix)
         let invalid_path = PathBuf::from("/root/cannot_write_here.toml");
-        let result = config.save(&invalid_path);
+        let contents = toml::to_string(&config).unwrap();
+        let result = fs::write(&invalid_path, contents);
         
         // Should fail gracefully (unless running as root)
         if !std::env::var("USER").unwrap_or_default().eq("root") {

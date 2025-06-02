@@ -1,5 +1,4 @@
 use mail_parser::{Message, MessageParser, MimeHeaders};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -55,16 +54,6 @@ impl Email {
         }
     }
 
-    pub fn get_preview(&self) -> String {
-        let preview_len = 100;
-        let body = &self.body_text;
-
-        if body.len() <= preview_len {
-            body.to_string()
-        } else {
-            format!("{}...", &body[..preview_len])
-        }
-    }
 
     /// Parse only headers from file (fast for folder loading)
     pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,10 +84,10 @@ impl Email {
 
     /// Ensure email is fully loaded
     pub fn ensure_fully_loaded(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if matches!(self.load_state, EmailLoadState::HeadersOnly) {
-            self.parse_from_file()?;
+        match self.load_state {
+            EmailLoadState::HeadersOnly => self.parse_from_file(),
+            EmailLoadState::FullyLoaded => Ok(()),
         }
-        Ok(())
     }
 
     /// Parse email headers elegantly using mail-parser
@@ -161,8 +150,8 @@ impl Email {
         while let Some(attachment_part) = message.attachment(index) {
             let filename = attachment_part
                 .attachment_name()
-                .unwrap_or("unnamed_attachment")
-                .to_string();
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "unnamed_attachment".to_string());
 
             let content_type = attachment_part
                 .content_type()
@@ -241,39 +230,21 @@ impl Folder {
 
     pub fn get_sorted_subfolders(&self) -> Vec<&Folder> {
         let mut sorted: Vec<&Folder> = self.subfolders.iter().collect();
-        sorted.sort_by(|a, b| {
-            // Keep INBOX at the top
-            match (&a.name[..], &b.name[..]) {
-                ("INBOX", _) => std::cmp::Ordering::Less,
-                (_, "INBOX") => std::cmp::Ordering::Greater,
-                (a_name, b_name) => a_name.cmp(b_name),
-            }
+        sorted.sort_by(|a, b| match (&a.name[..], &b.name[..]) {
+            ("INBOX", _) => std::cmp::Ordering::Less,
+            (_, "INBOX") => std::cmp::Ordering::Greater,
+            (a_name, b_name) => a_name.cmp(b_name),
         });
         sorted
     }
 
     pub fn get_display_name(&self) -> String {
-        if self.unread_count > 0 {
-            format!("{} ({})", self.name, self.unread_count)
-        } else {
-            self.name.clone()
+        match self.unread_count {
+            0 => self.name.clone(),
+            count => format!("{} ({})", self.name, count),
         }
     }
 
-    /// Get all emails recursively from this folder and its subfolders
-    pub fn get_all_emails(&self) -> Vec<&Email> {
-        let mut emails = Vec::new();
-
-        // Add emails from this folder
-        emails.extend(self.emails.iter());
-
-        // Add emails from subfolders recursively
-        for subfolder in &self.subfolders {
-            emails.extend(subfolder.get_all_emails());
-        }
-
-        emails
-    }
 }
 
 #[derive(Debug)]
@@ -281,7 +252,6 @@ pub struct EmailStore {
     pub root_folder: Folder,
     pub current_folder: Vec<usize>, // Path to current folder (indices in subfolder arrays)
     pub selected_email: Option<usize>, // Index of selected email in current folder
-    email_cache: HashMap<PathBuf, Email>, // Cache for parsed emails
 }
 
 impl EmailStore {
@@ -290,7 +260,6 @@ impl EmailStore {
             root_folder: Folder::new("Mail".to_string(), maildir_path),
             current_folder: Vec::new(),
             selected_email: None,
-            email_cache: HashMap::new(),
         }
     }
 
@@ -316,14 +285,6 @@ impl EmailStore {
         folder
     }
 
-    /// Navigate to a subfolder by index and load emails if needed
-    pub fn enter_folder(&mut self, folder_index: usize) {
-        let current = self.get_current_folder();
-        if folder_index < current.subfolders.len() {
-            self.current_folder.push(folder_index);
-            self.selected_email = None; // Reset email selection
-        }
-    }
 
     /// Navigate to a folder by following a path of indices
     pub fn enter_folder_by_path(&mut self, path: &[usize]) {
@@ -331,34 +292,7 @@ impl EmailStore {
         self.selected_email = None; // Reset email selection
     }
 
-    /// Load emails for current folder if not already loaded
-    pub fn ensure_current_folder_loaded(
-        &mut self,
-        scanner: &crate::maildir::MaildirScanner,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let folder = self.get_current_folder_mut();
-        if !folder.is_loaded {
-            scanner.load_folder_emails(folder)?;
-        }
-        Ok(())
-    }
 
-    /// Load emails for a specific folder by index if not already loaded
-    pub fn ensure_specific_folder_loaded(
-        &mut self,
-        folder_index: usize,
-        scanner: &crate::maildir::MaildirScanner,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let current = self.get_current_folder_mut();
-        if folder_index < current.subfolders.len() {
-            let folder = &mut current.subfolders[folder_index];
-            // Only load if the folder has no emails or is not loaded
-            if !folder.is_loaded && folder.emails.is_empty() {
-                scanner.load_folder_emails(folder)?;
-            }
-        }
-        Ok(())
-    }
 
     /// Load emails for a folder at a specific path with visible row limit
     pub fn ensure_folder_at_path_loaded(
@@ -428,8 +362,7 @@ impl EmailStore {
 
     /// Navigate back to parent folder
     pub fn exit_folder(&mut self) {
-        if !self.current_folder.is_empty() {
-            self.current_folder.pop();
+        if self.current_folder.pop().is_some() {
             self.selected_email = None; // Reset email selection
         }
     }
@@ -448,10 +381,7 @@ impl EmailStore {
             let current = self.get_current_folder_mut();
             if let Some(email) = current.emails.get_mut(index) {
                 // Ensure email is fully loaded when accessed for reading
-                if let Err(_) = email.ensure_fully_loaded() {
-                    // If loading fails, return None
-                    return None;
-                }
+                email.ensure_fully_loaded().ok()?;
                 return current.emails.get(index);
             }
         }
@@ -476,9 +406,7 @@ impl EmailStore {
     pub fn get_selected_email_markdown(&mut self) -> Option<String> {
         if let Some(email) = self.get_selected_email_mut() {
             // Ensure email is fully loaded
-            if let Err(_) = email.ensure_fully_loaded() {
-                return None;
-            }
+            email.ensure_fully_loaded().ok()?;
             Some(email.body_text.clone())
         } else {
             None
@@ -688,28 +616,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_email_get_preview() {
-        let test_maildir = TestMailDir::new();
-        let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().is_file())
-            .collect();
-        
-        let email_path = email_files[0].path();
-        let mut email = Email::new(email_path);
-        email.parse_from_file().unwrap();
-        
-        let preview = email.get_preview();
-        assert!(!preview.is_empty());
-        assert!(preview.len() <= 103); // 100 chars + "..."
-        
-        if email.body_text.len() > 100 {
-            assert!(preview.ends_with("..."));
-        }
-    }
 
     #[test]
     fn test_email_get_header_display() {
@@ -827,7 +733,7 @@ mod tests {
         
         // Test entering a folder
         assert!(store.current_folder.is_empty());
-        store.enter_folder(0); // Enter first subfolder
+        store.enter_folder_by_path(&[0]); // Enter first subfolder
         assert_eq!(store.current_folder.len(), 1);
         assert_eq!(store.current_folder[0], 0);
         
@@ -851,7 +757,7 @@ mod tests {
         
         // Test with navigation - enter first folder
         if !store.root_folder.subfolders.is_empty() {
-            store.enter_folder(0);
+            store.enter_folder_by_path(&[0]);
             let path_with_folder = store.get_folder_path();
             assert!(path_with_folder.starts_with("Mail > "));
         }
@@ -867,7 +773,7 @@ mod tests {
         store.root_folder = scanner.scan().unwrap();
         
         // Navigate to INBOX and load emails
-        store.enter_folder(0); // Enter first folder (should be INBOX)
+        store.enter_folder_by_path(&[0]); // Enter first folder (should be INBOX)
         scanner.load_folder_emails(store.get_current_folder_mut()).unwrap();
         
         // Initially no email selected

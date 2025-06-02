@@ -43,13 +43,6 @@ impl Default for PaneVisibility {
 }
 
 impl PaneVisibility {
-    pub fn toggle_folders(&mut self) {
-        self.folders_visible = !self.folders_visible;
-    }
-
-    pub fn toggle_content(&mut self) {
-        self.content_visible = !self.content_visible;
-    }
 
     /// Get available panes based on view mode
     pub fn get_available_panes(&self) -> Vec<ActivePane> {
@@ -74,23 +67,12 @@ impl PaneVisibility {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SelectionState {
     pub folder_index: usize,     // Selected folder index in current view
     pub email_index: usize,      // Selected email index in current folder
     pub scroll_offset: usize,    // Scroll position for current pane
     pub attachment_index: usize, // Selected attachment when in attachment view
-}
-
-impl Default for SelectionState {
-    fn default() -> Self {
-        Self {
-            folder_index: 0,
-            email_index: 0,
-            scroll_offset: 0,
-            attachment_index: 0,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -103,8 +85,6 @@ pub struct App {
     pub scanner: MaildirScanner,
     pub should_quit: bool,
     pub status_message: Option<String>,
-    pub search_query: String,
-    pub search_mode: bool,
     pub message_pane_visible_rows: usize, // Track visible rows in message pane for loading
     pub initial_loading_done: bool,       // Track if initial email loading has been performed
 }
@@ -120,8 +100,6 @@ impl App {
             scanner,
             should_quit: false,
             status_message: None,
-            search_query: String::new(),
-            search_mode: false,
             message_pane_visible_rows: 20, // Default estimate
             initial_loading_done: false,
         };
@@ -223,63 +201,7 @@ impl App {
         self.email_store.get_selected_email()
     }
 
-    /// Enter a folder and trigger lazy loading if needed
-    pub fn enter_folder_with_loading(
-        &mut self,
-        folder_index: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.email_store.enter_folder(folder_index);
-        self.email_store
-            .ensure_current_folder_loaded(&self.scanner)?;
-        Ok(())
-    }
 
-    /// Enter a folder and load only a limited number of messages (for fast startup)
-    pub fn enter_folder_with_limited_loading(
-        &mut self,
-        folder_index: usize,
-        limit: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.email_store.enter_folder(folder_index);
-        self.email_store
-            .ensure_current_folder_loaded_with_limit(&self.scanner, limit)?;
-        Ok(())
-    }
-
-    /// Enter a folder and load messages based on visible rows (for UI-aware loading)
-    pub fn enter_folder_with_visible_loading(
-        &mut self,
-        folder_index: usize,
-        visible_rows: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.email_store.enter_folder(folder_index);
-        // Load a bit more than visible (visible + buffer for smooth scrolling)
-        let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
-        self.email_store
-            .ensure_current_folder_loaded_with_limit(&self.scanner, load_count)?;
-        Ok(())
-    }
-
-    /// Enter a folder by following a path of indices and trigger lazy loading if needed
-    pub fn enter_folder_by_path(
-        &mut self,
-        path: &[usize],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.email_store.enter_folder_by_path(path);
-        self.email_store
-            .ensure_current_folder_loaded(&self.scanner)?;
-        Ok(())
-    }
-
-    /// Auto-select INBOX folder on startup
-    fn auto_select_inbox(&mut self) {
-        // Find INBOX folder in the folder structure and set the selection index
-        if let Some(inbox_index) = self.find_inbox_folder() {
-            self.selection.folder_index = inbox_index;
-            // Load messages for the selected folder automatically
-            self.load_selected_folder_messages();
-        }
-    }
 
     /// Auto-select INBOX folder on startup without loading messages (deferred until UI is ready)
     fn auto_select_inbox_without_loading(&mut self) {

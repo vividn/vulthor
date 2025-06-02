@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
 
+
 #[derive(Serialize)]
 struct EmailData {
     has_email: bool,
@@ -485,43 +486,40 @@ fn generate_welcome_html() -> String {
         function showWelcomeMessage() {
             document.title = 'Vulthor - Email Client';
             document.querySelector('.container').className = 'container welcome-view';
-            document.querySelector('.container').innerHTML = `
-                <header class="welcome-header">
-                    <h1>📧 Vulthor</h1>
-                    <h2>TUI Email Client</h2>
-                </header>
+            document.querySelector('.container').innerHTML = `<header class="welcome-header">
+                <h1>📧 Vulthor</h1>
+                <h2>TUI Email Client</h2>
+            </header>
+            
+            <main class="welcome-content">
+                <div class="welcome-message">
+                    <h3>Welcome to Vulthor</h3>
+                    <p>No email is currently selected in the terminal interface.</p>
+                    <p>To view an email here:</p>
+                    <ol>
+                        <li>Navigate to an email in the terminal</li>
+                        <li>Select it with <kbd>Enter</kbd></li>
+                        <li>The email will appear on this page</li>
+                    </ol>
+                </div>
                 
-                <main class="welcome-content">
-                    <div class="welcome-message">
-                        <h3>Welcome to Vulthor</h3>
-                        <p>No email is currently selected in the terminal interface.</p>
-                        <p>To view an email here:</p>
-                        <ol>
-                            <li>Navigate to an email in the terminal</li>
-                            <li>Select it with <kbd>Enter</kbd></li>
-                            <li>The email will appear on this page</li>
-                        </ol>
+                <div class="keybindings">
+                    <h3>Key Bindings</h3>
+                    <div class="keybinding-grid">
+                        <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
+                        <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
+                        <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
+                        <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
+                        <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
+                        <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
+                        <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
                     </div>
-                    
-                    <div class="keybindings">
-                        <h3>Key Bindings</h3>
-                        <div class="keybinding-grid">
-                            <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
-                            <div class="keybinding"><kbd>Alt+h</kbd> / <kbd>Alt+l</kbd><span>Switch panes</span></div>
-                            <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
-                            <div class="keybinding"><kbd>Alt+e</kbd><span>Toggle folders</span></div>
-                            <div class="keybinding"><kbd>Alt+c</kbd><span>Toggle content</span></div>
-                            <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
-                            <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
-                            <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
-                        </div>
-                    </div>
-                </main>
-                
-                <footer class="app-footer">
-                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-                </footer>
-            `;
+                </div>
+            </main>
+            
+            <footer class="app-footer">
+                <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+            </footer>`;
         }
         
         // Load initial content when page loads
@@ -555,20 +553,16 @@ fn generate_welcome_html() -> String {
                         <span>Navigate up/down</span>
                     </div>
                     <div class="keybinding">
-                        <kbd>Alt+h</kbd> / <kbd>Alt+l</kbd>
+                        <kbd>h</kbd> / <kbd>l</kbd>
+                        <span>Switch views</span>
+                    </div>
+                    <div class="keybinding">
+                        <kbd>Tab</kbd>
                         <span>Switch panes</span>
                     </div>
                     <div class="keybinding">
                         <kbd>Enter</kbd>
                         <span>Select item</span>
-                    </div>
-                    <div class="keybinding">
-                        <kbd>Alt+e</kbd>
-                        <span>Toggle folders</span>
-                    </div>
-                    <div class="keybinding">
-                        <kbd>Alt+c</kbd>
-                        <span>Toggle content</span>
                     </div>
                     <div class="keybinding">
                         <kbd>Alt+a</kbd>
@@ -591,8 +585,7 @@ fn generate_welcome_html() -> String {
         </footer>
     </div>
 </body>
-</html>"#
-        .to_string()
+</html>"#.to_string()
 }
 
 fn markdown_to_html(markdown: &str) -> String {
@@ -683,6 +676,7 @@ fn format_file_size(bytes: usize) -> String {
         format!("{:.1} {}", size, UNITS[unit_index])
     }
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -80,7 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create UI
     let mut ui = UI::new();
 
     println!(
@@ -89,10 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("Press 'q' to quit, '?' for help");
 
-    // Main application loop
     let result = run_app(&mut terminal, &mut ui, shared_app_state.clone()).await;
 
-    // Cleanup
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -101,10 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     terminal.show_cursor()?;
 
-    // Abort web server
     web_handle.abort();
 
-    // Handle any errors from the main loop
     if let Err(e) = result {
         eprintln!("Application error: {}", e);
         return Err(e);
@@ -120,23 +115,19 @@ async fn run_app(
     app_state: SharedAppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        // Draw UI
         {
             let mut app = app_state.lock().unwrap();
             terminal.draw(|f| ui.draw(f, &mut app))?;
 
-            // Check if we should quit
             if app.should_quit || matches!(app.state, AppState::Quit) {
                 break;
             }
         }
 
-        // Handle input with timeout to allow for periodic updates
         if event::poll(Duration::from_millis(100))? {
             let event = event::read()?;
             let mut app = app_state.lock().unwrap();
 
-            // Clear status message on any input (except for status-setting actions)
             if !matches!(event, Event::Resize(_, _)) {
                 app.clear_status();
             }
@@ -177,11 +168,9 @@ mod tests {
 
     #[test]
     fn test_config_loading() {
-        // Test default config
         let config = Config::default();
         assert!(config.maildir_path.to_string_lossy().contains("Mail"));
 
-        // Test config loading with non-existent path
         let result = Config::load(Some(PathBuf::from("/non/existent/path")));
         assert!(result.is_err());
     }

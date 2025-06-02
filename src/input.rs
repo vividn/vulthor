@@ -454,24 +454,11 @@ fn build_flat_folder_list(
     result
 }
 
-fn is_folder_descendant(ancestor: &crate::email::Folder, target: &crate::email::Folder) -> bool {
-    if std::ptr::eq(ancestor, target) {
-        return true;
-    }
-
-    for subfolder in &ancestor.subfolders {
-        if is_folder_descendant(subfolder, target) {
-            return true;
-        }
-    }
-
-    false
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::email::{Email, EmailStore, Folder};
+    use crate::email::EmailStore;
     use std::path::PathBuf;
 
     #[test]
