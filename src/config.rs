@@ -8,7 +8,7 @@ pub struct CliArgs {
     /// Port to serve HTML email content on
     #[arg(short = 'p', long = "port", default_value = "8080")]
     pub port: u16,
-    
+
     /// Override config file path
     #[arg(short = 'c', long = "config")]
     pub config_path: Option<PathBuf>,
@@ -69,12 +69,12 @@ impl Config {
     /// Save current config to specified path  
     pub fn save(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let contents = toml::to_string_pretty(self)?;
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        
+
         std::fs::write(path, contents)?;
         Ok(())
     }

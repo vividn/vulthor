@@ -1,9 +1,9 @@
+mod app;
 mod config;
 mod email;
-mod app;
+mod input;
 mod maildir;
 mod ui;
-mod input;
 mod web;
 
 use app::{App, AppState, SharedAppState};
@@ -17,10 +17,7 @@ use crossterm::{
 use email::EmailStore;
 use input::handle_input;
 use maildir::MaildirScanner;
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     io,
     sync::{Arc, Mutex},
@@ -33,7 +30,7 @@ use web::WebServer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = CliArgs::parse();
-    
+
     // Load configuration
     let config = match Config::load(args.config_path) {
         Ok(config) => config,
@@ -45,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Initialize maildir scanner and scan folder structure
-    println!("Scanning MailDir structure at: {}", config.maildir_path.display());
+    println!(
+        "Scanning MailDir structure at: {}",
+        config.maildir_path.display()
+    );
     let scanner = MaildirScanner::new(config.maildir_path.clone());
     let root_folder = match scanner.scan() {
         Ok(folder) => folder,
@@ -80,7 +80,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create UI
     let mut ui = UI::new();
 
-    println!("Vulthor started! Web interface available at http://127.0.0.1:{}", args.port);
+    println!(
+        "Vulthor started! Web interface available at http://127.0.0.1:{}",
+        args.port
+    );
     println!("Press 'q' to quit, '?' for help");
 
     // Main application loop
@@ -118,7 +121,7 @@ async fn run_app(
         {
             let mut app = app_state.lock().unwrap();
             terminal.draw(|f| ui.draw(f, &mut app))?;
-            
+
             // Check if we should quit
             if app.should_quit || matches!(app.state, AppState::Quit) {
                 break;
@@ -129,12 +132,12 @@ async fn run_app(
         if event::poll(Duration::from_millis(100))? {
             let event = event::read()?;
             let mut app = app_state.lock().unwrap();
-            
+
             // Clear status message on any input (except for status-setting actions)
             if !matches!(event, Event::Resize(_, _)) {
                 app.clear_status();
             }
-            
+
             let should_quit = handle_input(&mut app, event);
             if should_quit {
                 break;
@@ -160,7 +163,7 @@ mod tests {
 
         let scanner = MaildirScanner::new(config.maildir_path.clone());
         let root_folder = scanner.scan().unwrap();
-        
+
         let mut email_store = EmailStore::new(config.maildir_path.clone());
         email_store.root_folder = root_folder;
         let app = App::new(email_store, scanner);

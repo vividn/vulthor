@@ -1,7 +1,7 @@
+use mail_parser::{Message, MessageParser, MimeHeaders};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
-use mail_parser::{MessageParser, Message, MimeHeaders};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
@@ -58,7 +58,7 @@ impl Email {
     pub fn get_preview(&self) -> String {
         let preview_len = 100;
         let body = &self.body_text;
-        
+
         if body.len() <= preview_len {
             body.to_string()
         } else {
@@ -69,23 +69,27 @@ impl Email {
     /// Parse only headers from file (fast for folder loading)
     pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
-        let message = MessageParser::default().parse(&content).ok_or("Failed to parse email headers")?;
-        
+        let message = MessageParser::default()
+            .parse(&content)
+            .ok_or("Failed to parse email headers")?;
+
         self.parse_headers(&message)?;
         self.load_state = EmailLoadState::HeadersOnly;
-        
+
         Ok(())
     }
 
     /// Parse email from file (full parsing for reading)
     pub fn parse_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
-        let message = MessageParser::default().parse(&content).ok_or("Failed to parse email")?;
-        
+        let message = MessageParser::default()
+            .parse(&content)
+            .ok_or("Failed to parse email")?;
+
         self.parse_headers(&message)?;
         self.parse_body(&message)?;
         self.load_state = EmailLoadState::FullyLoaded;
-        
+
         Ok(())
     }
 
@@ -100,36 +104,34 @@ impl Email {
     /// Parse email headers elegantly using mail-parser
     fn parse_headers(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
         // Extract from address with elegant formatting
-        self.headers.from = message.from()
+        self.headers.from = message
+            .from()
             .and_then(|addr| addr.first())
-            .map(|addr| {
-                match (addr.name(), addr.address()) {
-                    (Some(name), Some(email)) => format!("{} <{}>", name, email),
-                    (None, Some(email)) => email.to_string(),
-                    (Some(name), None) => name.to_string(),
-                    _ => "Unknown".to_string(),
-                }
+            .map(|addr| match (addr.name(), addr.address()) {
+                (Some(name), Some(email)) => format!("{} <{}>", name, email),
+                (None, Some(email)) => email.to_string(),
+                (Some(name), None) => name.to_string(),
+                _ => "Unknown".to_string(),
             })
             .unwrap_or_default();
-        
+
         // Extract to address with same elegant formatting
-        self.headers.to = message.to()
+        self.headers.to = message
+            .to()
             .and_then(|addr| addr.first())
-            .map(|addr| {
-                match (addr.name(), addr.address()) {
-                    (Some(name), Some(email)) => format!("{} <{}>", name, email),
-                    (None, Some(email)) => email.to_string(),
-                    (Some(name), None) => name.to_string(),
-                    _ => "Unknown".to_string(),
-                }
+            .map(|addr| match (addr.name(), addr.address()) {
+                (Some(name), Some(email)) => format!("{} <{}>", name, email),
+                (None, Some(email)) => email.to_string(),
+                (Some(name), None) => name.to_string(),
+                _ => "Unknown".to_string(),
             })
             .unwrap_or_default();
-        
+
         // Subject, date, and message-id are straightforward
         self.headers.subject = message.subject().unwrap_or("(no subject)").to_string();
         self.headers.date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
         self.headers.message_id = message.message_id().unwrap_or_default().to_string();
-        
+
         Ok(())
     }
 
@@ -140,44 +142,45 @@ impl Email {
         if let Some(text_body) = message.body_text(0) {
             self.body_text = text_body.to_string();
         }
-        
+
         // Store HTML if available (for web serving)
         if let Some(html_body) = message.body_html(0) {
             self.body_html = Some(html_body.to_string());
         }
-        
+
         // Extract attachments
         self.extract_attachments(message)?;
-        
+
         Ok(())
     }
-
 
     /// Extract attachments elegantly using mail-parser
     fn extract_attachments(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
         // Iterate through all attachments using mail-parser's clean API
         let mut index = 0;
         while let Some(attachment_part) = message.attachment(index) {
-            let filename = attachment_part.attachment_name()
+            let filename = attachment_part
+                .attachment_name()
                 .unwrap_or("unnamed_attachment")
                 .to_string();
-            
-            let content_type = attachment_part.content_type()
+
+            let content_type = attachment_part
+                .content_type()
                 .map(|ct| format!("{}/{}", ct.c_type, ct.subtype().unwrap_or("*")))
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            
+
             let size = attachment_part.len();
-            
+
             let attachment = Attachment {
                 filename,
                 content_type,
                 size,
             };
-            
+
             self.attachments.push(attachment);
             index += 1;
         }
-        
+
         Ok(())
     }
 
@@ -185,10 +188,7 @@ impl Email {
     pub fn get_header_display(&self) -> String {
         format!(
             "From: {}\nTo: {}\nSubject: {}\nDate: {}",
-            self.headers.from,
-            self.headers.to,
-            self.headers.subject,
-            self.headers.date
+            self.headers.from, self.headers.to, self.headers.subject, self.headers.date
         )
     }
 
@@ -202,7 +202,6 @@ impl Email {
         self.attachments.len()
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Folder {
@@ -264,15 +263,15 @@ impl Folder {
     /// Get all emails recursively from this folder and its subfolders
     pub fn get_all_emails(&self) -> Vec<&Email> {
         let mut emails = Vec::new();
-        
+
         // Add emails from this folder
         emails.extend(self.emails.iter());
-        
+
         // Add emails from subfolders recursively
         for subfolder in &self.subfolders {
             emails.extend(subfolder.get_all_emails());
         }
-        
+
         emails
     }
 }
@@ -333,9 +332,56 @@ impl EmailStore {
     }
 
     /// Load emails for current folder if not already loaded
-    pub fn ensure_current_folder_loaded(&mut self, scanner: &crate::maildir::MaildirScanner) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn ensure_current_folder_loaded(
+        &mut self,
+        scanner: &crate::maildir::MaildirScanner,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let folder = self.get_current_folder_mut();
         if !folder.is_loaded {
+            scanner.load_folder_emails(folder)?;
+        }
+        Ok(())
+    }
+
+    /// Load emails for a specific folder by index if not already loaded
+    pub fn ensure_specific_folder_loaded(
+        &mut self,
+        folder_index: usize,
+        scanner: &crate::maildir::MaildirScanner,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let current = self.get_current_folder_mut();
+        if folder_index < current.subfolders.len() {
+            let folder = &mut current.subfolders[folder_index];
+            if !folder.is_loaded {
+                scanner.load_folder_emails(folder)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Load limited number of emails for current folder (for fast startup)
+    pub fn ensure_current_folder_loaded_with_limit(
+        &mut self,
+        scanner: &crate::maildir::MaildirScanner,
+        limit: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let folder = self.get_current_folder_mut();
+        if !folder.is_loaded {
+            scanner.load_folder_emails_with_limit(folder, Some(limit))?;
+        }
+        Ok(())
+    }
+
+    /// Load more messages if current folder is not fully loaded
+    pub fn load_more_messages_if_needed(
+        &mut self,
+        scanner: &crate::maildir::MaildirScanner,
+        index: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let folder = self.get_current_folder_mut();
+        // If user is near the end of loaded messages and folder is not fully loaded, load more
+        if !folder.is_loaded && index + 5 >= folder.emails.len() {
+            // Load the full folder
             scanner.load_folder_emails(folder)?;
         }
         Ok(())
@@ -404,14 +450,14 @@ impl EmailStore {
     pub fn get_folder_path(&self) -> String {
         let mut path = vec!["Mail".to_string()];
         let mut folder = &self.root_folder;
-        
+
         for &index in &self.current_folder {
             if index < folder.subfolders.len() {
                 folder = &folder.subfolders[index];
                 path.push(folder.name.clone());
             }
         }
-        
+
         path.join(" > ")
     }
 }

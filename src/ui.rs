@@ -1,4 +1,4 @@
-use crate::app::{App, AppState, ActivePane};
+use crate::app::{ActivePane, App, AppState, ViewMode};
 use crate::email::{Email, Folder};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -52,46 +52,29 @@ impl UI {
     }
 
     fn draw_main_layout(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
-        let mut constraints = Vec::new();
-        let mut areas_to_render = Vec::new();
-
-        // Determine which panes to show based on visibility
-        if app.pane_visibility.folders_visible {
-            constraints.push(Constraint::Percentage(25));
-            areas_to_render.push("folders");
-        }
-
-        constraints.push(Constraint::Percentage(40)); // Email list always visible
-        areas_to_render.push("list");
-
-        if app.pane_visibility.content_visible {
-            constraints.push(Constraint::Percentage(35));
-            areas_to_render.push("content");
-        }
-
+        // 2-panel layout based on view mode
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(constraints)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
 
-        let mut chunk_idx = 0;
+        match app.pane_visibility.view_mode {
+            ViewMode::FolderMessage => {
+                // Left panel: folders, Right panel: messages
+                let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
+                let is_list_active = matches!(app.active_pane, ActivePane::List);
 
-        // Draw folder pane if visible
-        if app.pane_visibility.folders_visible {
-            let is_active = matches!(app.active_pane, ActivePane::Folders);
-            self.draw_folder_pane(f, app, chunks[chunk_idx], is_active);
-            chunk_idx += 1;
-        }
+                self.draw_folder_pane(f, app, chunks[0], is_folders_active);
+                self.draw_email_list_pane(f, app, chunks[1], is_list_active);
+            }
+            ViewMode::MessageContent => {
+                // Left panel: messages, Right panel: content
+                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                let is_content_active = matches!(app.active_pane, ActivePane::Content);
 
-        // Draw email list pane (always visible)
-        let is_active = matches!(app.active_pane, ActivePane::List);
-        self.draw_email_list_pane(f, app, chunks[chunk_idx], is_active);
-        chunk_idx += 1;
-
-        // Draw content pane if visible
-        if app.pane_visibility.content_visible {
-            let is_active = matches!(app.active_pane, ActivePane::Content);
-            self.draw_content_pane(f, app, chunks[chunk_idx], is_active);
+                self.draw_email_list_pane(f, app, chunks[0], is_list_active);
+                self.draw_content_pane(f, app, chunks[1], is_content_active);
+            }
         }
 
         // Draw status bar
@@ -99,8 +82,9 @@ impl UI {
     }
 
     fn draw_folder_pane(&mut self, f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-        let current_folder = app.email_store.get_current_folder();
-        let folder_items = Self::build_folder_list_static(current_folder, 0);
+        // Always show the root folder structure, not the current folder's subfolders
+        let root_folder = &app.email_store.root_folder;
+        let folder_items = Self::build_folder_list_static(root_folder, 0);
 
         let style = if is_active {
             Style::default().fg(Color::Yellow)
@@ -129,7 +113,8 @@ impl UI {
             );
 
         // Update selection state
-        self.folder_list_state.select(Some(app.selection.folder_index));
+        self.folder_list_state
+            .select(Some(app.selection.folder_index));
 
         f.render_stateful_widget(list, area, &mut self.folder_list_state);
     }
@@ -137,6 +122,10 @@ impl UI {
     fn draw_email_list_pane(&mut self, f: &mut Frame, app: &App, area: Rect, is_active: bool) {
         let current_folder = app.email_store.get_current_folder();
         let email_items = Self::build_email_list_static(&current_folder.emails);
+
+        // Calculate visible rows for dynamic loading (area height minus borders)
+        let _visible_rows = (area.height.saturating_sub(2)) as usize; // -2 for top and bottom borders
+                                                                      // TODO: Use this for dynamic loading requests from UI
 
         let style = if is_active {
             Style::default().fg(Color::Cyan)
@@ -151,7 +140,16 @@ impl UI {
         };
 
         let folder_path = app.email_store.get_folder_path();
-        let title = format!("Emails - {}", folder_path);
+        let current_folder = app.email_store.get_current_folder();
+        let title = if current_folder.is_loaded {
+            format!("Emails - {} ({})", folder_path, current_folder.emails.len())
+        } else {
+            format!(
+                "Emails - {} ({}/...)",
+                folder_path,
+                current_folder.emails.len()
+            )
+        };
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -168,7 +166,8 @@ impl UI {
             );
 
         // Update selection state
-        self.email_list_state.select(Some(app.selection.email_index));
+        self.email_list_state
+            .select(Some(app.selection.email_index));
 
         f.render_stateful_widget(list, area, &mut self.email_list_state);
     }
@@ -182,7 +181,7 @@ impl UI {
 
         // Get email info first for headers (no markdown conversion needed)
         let email_info = app.email_store.get_selected_email_headers();
-        
+
         if let Some(email) = email_info {
             // Split content pane into header and body
             let chunks = Layout::default()
@@ -215,7 +214,9 @@ impl UI {
                 .title(body_title);
 
             // Get markdown content lazily only when content pane is being drawn
-            let body_text = app.email_store.get_selected_email_markdown()
+            let body_text = app
+                .email_store
+                .get_selected_email_markdown()
                 .unwrap_or_else(|| "Error loading email content".to_string());
 
             let body_paragraph = Paragraph::new(body_text.as_str())
@@ -307,13 +308,11 @@ impl UI {
                     .style(Style::default().fg(Color::Magenta))
                     .title("Attachments - Enter: Open, Shift+Enter: Custom Command, Esc: Close");
 
-                let list = List::new(attachment_items)
-                    .block(block)
-                    .highlight_style(
-                        Style::default()
-                            .bg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD),
-                    );
+                let list = List::new(attachment_items).block(block).highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                );
 
                 // Update selection state
                 self.attachment_list_state
@@ -337,25 +336,23 @@ impl UI {
         // Add key bindings help
         let help_text = match app.state {
             AppState::AttachmentView => "Enter: Open | Shift+Enter: Custom | Esc: Close",
-            _ => "j/k: Navigate | M-h/M-l: Switch Pane | M-e: Toggle Folders | M-c: Toggle Content | M-a: Attachments | q: Quit",
+            _ => match app.pane_visibility.view_mode {
+                ViewMode::FolderMessage => "j/k: Navigate | Tab: Switch Pane | l: Content View | M-a: Attachments | q: Quit",
+                ViewMode::MessageContent => "j/k: Navigate | Tab: Switch Pane | h: Folder View | M-a: Attachments | q: Quit",
+            },
         };
 
-        status_text.push(Span::styled(
-            help_text,
-            Style::default().fg(Color::Gray),
-        ));
+        status_text.push(Span::styled(help_text, Style::default().fg(Color::Gray)));
 
         // Add status message if present
         if let Some(ref message) = app.status_message {
             status_text.push(Span::raw(" | "));
-            status_text.push(Span::styled(
-                message,
-                Style::default().fg(Color::Yellow),
-            ));
+            status_text.push(Span::styled(message, Style::default().fg(Color::Yellow)));
         }
 
         let status_line = Line::from(status_text);
-        let status_paragraph = Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray));
+        let status_paragraph =
+            Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray));
 
         f.render_widget(status_paragraph, status_area);
     }
@@ -366,13 +363,13 @@ impl UI {
             Line::from(""),
             Line::from("Navigation:"),
             Line::from("  j/k        - Move up/down in current pane"),
-            Line::from("  M-h/M-l    - Switch between panes"),
+            Line::from("  Tab        - Switch between panes"),
             Line::from("  Enter      - Select folder or email"),
             Line::from("  Backspace  - Go back to parent folder"),
             Line::from(""),
-            Line::from("Pane Control:"),
-            Line::from("  M-e        - Toggle folder pane visibility"),
-            Line::from("  M-c        - Toggle content pane visibility"),
+            Line::from("View Control:"),
+            Line::from("  h          - Switch to folder/message view"),
+            Line::from("  l          - Switch to message/content view"),
             Line::from(""),
             Line::from("Email Actions:"),
             Line::from("  M-a        - View attachments"),

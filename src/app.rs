@@ -5,31 +5,39 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppState {
     FolderView,     // Navigating folders
-    EmailList,      // Viewing emails in current folder  
+    EmailList,      // Viewing emails in current folder
     EmailContent,   // Reading an email
     AttachmentView, // Viewing attachments popup
-    Help,          // Help screen
-    Quit,          // Application should quit
+    Help,           // Help screen
+    Quit,           // Application should quit
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewMode {
+    FolderMessage,  // Show folders and messages (2-panel view)
+    MessageContent, // Show messages and content (2-panel view)
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActivePane {
-    Folders,   // Left pane
-    List,      // Center pane  
-    Content,   // Right pane
+    Folders, // Left pane
+    List,    // Center pane
+    Content, // Right pane
 }
 
 #[derive(Debug)]
 pub struct PaneVisibility {
     pub folders_visible: bool,
     pub content_visible: bool,
+    pub view_mode: ViewMode,
 }
 
 impl Default for PaneVisibility {
     fn default() -> Self {
         Self {
             folders_visible: true,
-            content_visible: true,
+            content_visible: false,
+            view_mode: ViewMode::FolderMessage,
         }
     }
 }
@@ -43,19 +51,26 @@ impl PaneVisibility {
         self.content_visible = !self.content_visible;
     }
 
-    /// Get available panes based on visibility
+    /// Get available panes based on view mode
     pub fn get_available_panes(&self) -> Vec<ActivePane> {
-        let mut panes = vec![ActivePane::List]; // List pane is always visible
-        
-        if self.folders_visible {
-            panes.insert(0, ActivePane::Folders);
+        match self.view_mode {
+            ViewMode::FolderMessage => vec![ActivePane::Folders, ActivePane::List],
+            ViewMode::MessageContent => vec![ActivePane::List, ActivePane::Content],
         }
-        
-        if self.content_visible {
-            panes.push(ActivePane::Content);
-        }
-        
-        panes
+    }
+
+    /// Switch to folder/message view mode
+    pub fn set_folder_message_mode(&mut self) {
+        self.view_mode = ViewMode::FolderMessage;
+        self.folders_visible = true;
+        self.content_visible = false;
+    }
+
+    /// Switch to message/content view mode
+    pub fn set_message_content_mode(&mut self) {
+        self.view_mode = ViewMode::MessageContent;
+        self.folders_visible = false;
+        self.content_visible = true;
     }
 }
 
@@ -94,7 +109,7 @@ pub struct App {
 
 impl App {
     pub fn new(email_store: EmailStore, scanner: MaildirScanner) -> Self {
-        Self {
+        let mut app = Self {
             state: AppState::FolderView,
             active_pane: ActivePane::Folders,
             pane_visibility: PaneVisibility::default(),
@@ -105,7 +120,12 @@ impl App {
             status_message: None,
             search_query: String::new(),
             search_mode: false,
-        }
+        };
+
+        // Auto-select INBOX folder on startup
+        app.auto_select_inbox();
+
+        app
     }
 
     /// Handle state transitions
@@ -116,7 +136,11 @@ impl App {
             }
             AppState::EmailList => {
                 // When entering email list, ensure we're in the list pane
-                if self.pane_visibility.get_available_panes().contains(&ActivePane::List) {
+                if self
+                    .pane_visibility
+                    .get_available_panes()
+                    .contains(&ActivePane::List)
+                {
                     self.active_pane = ActivePane::List;
                 }
             }
@@ -196,17 +220,91 @@ impl App {
     }
 
     /// Enter a folder and trigger lazy loading if needed
-    pub fn enter_folder_with_loading(&mut self, folder_index: usize) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn enter_folder_with_loading(
+        &mut self,
+        folder_index: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.email_store.enter_folder(folder_index);
-        self.email_store.ensure_current_folder_loaded(&self.scanner)?;
+        self.email_store
+            .ensure_current_folder_loaded(&self.scanner)?;
+        Ok(())
+    }
+
+    /// Enter a folder and load only a limited number of messages (for fast startup)
+    pub fn enter_folder_with_limited_loading(
+        &mut self,
+        folder_index: usize,
+        limit: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.email_store.enter_folder(folder_index);
+        self.email_store
+            .ensure_current_folder_loaded_with_limit(&self.scanner, limit)?;
+        Ok(())
+    }
+
+    /// Enter a folder and load messages based on visible rows (for UI-aware loading)
+    pub fn enter_folder_with_visible_loading(
+        &mut self,
+        folder_index: usize,
+        visible_rows: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.email_store.enter_folder(folder_index);
+        // Load a bit more than visible (visible + buffer for smooth scrolling)
+        let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
+        self.email_store
+            .ensure_current_folder_loaded_with_limit(&self.scanner, load_count)?;
         Ok(())
     }
 
     /// Enter a folder by following a path of indices and trigger lazy loading if needed
-    pub fn enter_folder_by_path(&mut self, path: &[usize]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn enter_folder_by_path(
+        &mut self,
+        path: &[usize],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.email_store.enter_folder_by_path(path);
-        self.email_store.ensure_current_folder_loaded(&self.scanner)?;
+        self.email_store
+            .ensure_current_folder_loaded(&self.scanner)?;
         Ok(())
+    }
+
+    /// Auto-select INBOX folder on startup
+    fn auto_select_inbox(&mut self) {
+        // Find INBOX folder in the folder structure and set the selection index
+        if let Some(inbox_index) = self.find_inbox_folder() {
+            self.selection.folder_index = inbox_index;
+            // Don't auto-enter the folder, just select it in the folder list
+            // The user can press Enter to actually enter the folder
+        }
+    }
+
+    /// Find the INBOX folder index
+    fn find_inbox_folder(&self) -> Option<usize> {
+        // Look for folders named "INBOX" or "Inbox" in the sorted order (matching UI display)
+        let root_folder = &self.email_store.root_folder;
+        for (index, subfolder) in root_folder.get_sorted_subfolders().iter().enumerate() {
+            let name = subfolder.get_display_name();
+            if name.eq_ignore_ascii_case("inbox") {
+                return Some(index);
+            }
+        }
+        // If no INBOX found, default to first folder if available
+        if !root_folder.subfolders.is_empty() {
+            Some(0)
+        } else {
+            None
+        }
+    }
+
+    /// Switch to folder/message view (h key)
+    pub fn switch_to_folder_message_view(&mut self) {
+        self.pane_visibility.set_folder_message_mode();
+        self.active_pane = ActivePane::Folders;
+    }
+
+    /// Switch to message/content view (l key)
+    pub fn switch_to_message_content_view(&mut self) {
+        self.pane_visibility.set_message_content_mode();
+        self.active_pane = ActivePane::List;
     }
 }
 
