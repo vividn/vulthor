@@ -326,6 +326,12 @@ impl EmailStore {
         }
     }
 
+    /// Navigate to a folder by following a path of indices
+    pub fn enter_folder_by_path(&mut self, path: &[usize]) {
+        self.current_folder.extend_from_slice(path);
+        self.selected_email = None; // Reset email selection
+    }
+
     /// Load emails for current folder if not already loaded
     pub fn ensure_current_folder_loaded(&mut self, scanner: &crate::maildir::MaildirScanner) -> Result<(), Box<dyn std::error::Error>> {
         let folder = self.get_current_folder_mut();

@@ -219,10 +219,10 @@ fn handle_selection(app: &mut App) {
         ActivePane::Folders => {
             // Navigate into selected folder with lazy loading
             let current_folder = app.email_store.get_current_folder();
-            let folder_index = get_real_folder_index(current_folder, app.selection.folder_index);
+            let folder_path = get_folder_path_from_display_index(current_folder, app.selection.folder_index);
             
-            if let Some(real_index) = folder_index {
-                match app.enter_folder_with_loading(real_index) {
+            if let Some(path) = folder_path {
+                match app.enter_folder_by_path(&path) {
                     Ok(()) => {
                         app.selection.folder_index = 0;
                         app.selection.email_index = 0;
@@ -318,28 +318,31 @@ fn count_visible_folders_recursive(folder: &crate::email::Folder) -> usize {
     count
 }
 
-fn get_real_folder_index(folder: &crate::email::Folder, display_index: usize) -> Option<usize> {
-    // Convert display index to actual subfolder index
-    // The display index is from a flattened recursive list, but we need the index
-    // within the current folder's direct subfolders only
-    
-    // Build the flat display list to match what the UI shows
+fn get_folder_path_from_display_index(folder: &crate::email::Folder, display_index: usize) -> Option<Vec<usize>> {
+    // Convert display index to a path of indices leading to the target folder
     let flat_folders = build_flat_folder_list(folder, 0);
     
     if display_index < flat_folders.len() {
         let (target_folder, _depth) = &flat_folders[display_index];
-        
-        // Find which direct subfolder this target belongs to or is
-        for (i, subfolder) in folder.subfolders.iter().enumerate() {
-            if std::ptr::eq(subfolder, *target_folder) {
-                return Some(i);
-            }
-            // Check if target is a descendant of this subfolder
-            if is_folder_descendant(subfolder, *target_folder) {
-                return Some(i);
-            }
+        return find_folder_path(folder, target_folder);
+    }
+    None
+}
+
+fn find_folder_path(current: &crate::email::Folder, target: &crate::email::Folder) -> Option<Vec<usize>> {
+    // Direct match
+    if std::ptr::eq(current, target) {
+        return Some(Vec::new());
+    }
+    
+    // Search in subfolders
+    for (i, subfolder) in current.subfolders.iter().enumerate() {
+        if let Some(mut path) = find_folder_path(subfolder, target) {
+            path.insert(0, i);
+            return Some(path);
         }
     }
+    
     None
 }
 

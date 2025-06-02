@@ -201,6 +201,13 @@ impl App {
         self.email_store.ensure_current_folder_loaded(&self.scanner)?;
         Ok(())
     }
+
+    /// Enter a folder by following a path of indices and trigger lazy loading if needed
+    pub fn enter_folder_by_path(&mut self, path: &[usize]) -> Result<(), Box<dyn std::error::Error>> {
+        self.email_store.enter_folder_by_path(path);
+        self.email_store.ensure_current_folder_loaded(&self.scanner)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
