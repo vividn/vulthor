@@ -48,6 +48,7 @@ impl WebServer {
             .route("/", get(serve_email))
             .route("/health", get(health_check))
             .route("/styles.css", get(serve_styles))
+            .route("/vulthor_logo.png", get(serve_logo))
             .route("/events", get(email_events))
             .route("/api/current-email", get(get_current_email_json))
             .with_state(self.app_state.clone());
@@ -89,6 +90,11 @@ async fn health_check() -> &'static str {
 async fn serve_styles() -> Response {
     let css = include_str!("../static/styles.css");
     ([("content-type", "text/css")], css).into_response()
+}
+
+async fn serve_logo() -> Response {
+    let logo_bytes = include_bytes!("../assets/vulthor_logo.png");
+    ([("content-type", "image/png")], logo_bytes).into_response()
 }
 
 async fn email_events(
@@ -320,7 +326,8 @@ fn generate_email_html(email: &crate::email::Email) -> String {
             document.querySelector('.container').className = 'container welcome-view';
             document.querySelector('.container').innerHTML = `
                 <header class="welcome-header">
-                    <h1>📧 Vulthor</h1>
+                    <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+                    <h1>Vulthor</h1>
                     <h2>TUI Email Client</h2>
                 </header>
                 
@@ -340,10 +347,9 @@ fn generate_email_html(email: &crate::email::Email) -> String {
                         <h3>Key Bindings</h3>
                         <div class="keybinding-grid">
                             <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
-                            <div class="keybinding"><kbd>Alt+h</kbd> / <kbd>Alt+l</kbd><span>Switch panes</span></div>
+                            <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
+                            <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
                             <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
-                            <div class="keybinding"><kbd>Alt+e</kbd><span>Toggle folders</span></div>
-                            <div class="keybinding"><kbd>Alt+c</kbd><span>Toggle content</span></div>
                             <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
                             <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
                             <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
@@ -487,7 +493,8 @@ fn generate_welcome_html() -> String {
             document.title = 'Vulthor - Email Client';
             document.querySelector('.container').className = 'container welcome-view';
             document.querySelector('.container').innerHTML = `<header class="welcome-header">
-                <h1>📧 Vulthor</h1>
+                <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+                <h1>Vulthor</h1>
                 <h2>TUI Email Client</h2>
             </header>
             
@@ -529,7 +536,8 @@ fn generate_welcome_html() -> String {
 <body>
     <div class="container">
         <header class="welcome-header">
-            <h1>📧 Vulthor</h1>
+            <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+            <h1>Vulthor</h1>
             <h2>TUI Email Client</h2>
         </header>
         
