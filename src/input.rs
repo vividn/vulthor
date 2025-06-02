@@ -78,7 +78,12 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             false
         }
         KeyCode::Char('l') if key.modifiers.is_empty() => {
-            app.switch_to_message_content_view();
+            // If we're in folder pane, navigate into selected folder AND switch view
+            if matches!(app.active_pane, ActivePane::Folders) {
+                handle_folder_selection_and_switch_view(app);
+            } else {
+                app.switch_to_message_content_view();
+            }
             false
         }
 
@@ -94,7 +99,12 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
 
         // Selection and navigation
         KeyCode::Enter => {
-            handle_selection(app);
+            // If we're in folder pane, navigate into selected folder AND switch view
+            if matches!(app.active_pane, ActivePane::Folders) {
+                handle_folder_selection_and_switch_view(app);
+            } else {
+                handle_selection(app);
+            }
             false
         }
         KeyCode::Backspace => {
@@ -232,10 +242,44 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
     }
 }
 
+fn handle_folder_selection_and_switch_view(app: &mut App) {
+    // Navigate into selected folder and switch to message/content view
+    let root_folder = &app.email_store.root_folder;
+    let folder_path = get_folder_path_from_display_index(root_folder, app.selection.folder_index);
+
+    if let Some(path) = folder_path {
+        // Reset current folder path to root first
+        app.email_store.current_folder.clear();
+
+        // Navigate through the full path to handle subfolders correctly
+        app.email_store.enter_folder_by_path(&path);
+
+        // Load emails with visible row limit
+        let estimated_visible_rows = 20; // TODO: This should be passed from UI context
+        let load_count = (estimated_visible_rows + 5).max(10);
+
+        match app
+            .email_store
+            .ensure_current_folder_loaded_with_limit(&app.scanner, load_count)
+        {
+            Ok(()) => {
+                app.selection.email_index = 0;
+                app.selection.scroll_offset = 0;
+                app.switch_to_message_content_view();
+                app.set_state(AppState::EmailList);
+            }
+            Err(e) => {
+                app.set_status(format!("Error loading folder: {}", e));
+            }
+        }
+    }
+}
+
 fn handle_selection(app: &mut App) {
     match app.active_pane {
         ActivePane::Folders => {
-            // Navigate into selected folder with lazy loading
+            // This case should now be handled by handle_folder_selection_and_switch_view
+            // But keeping the logic here for backward compatibility
             let root_folder = &app.email_store.root_folder;
             let folder_path =
                 get_folder_path_from_display_index(root_folder, app.selection.folder_index);
@@ -243,10 +287,18 @@ fn handle_selection(app: &mut App) {
             if let Some(path) = folder_path {
                 // Reset current folder path to root first
                 app.email_store.current_folder.clear();
-                // Use visible row-based loading (estimate 20 rows for now)
-                // TODO: This should be passed from UI context
+
+                // Navigate through the full path to handle subfolders correctly
+                app.email_store.enter_folder_by_path(&path);
+
+                // Load emails with visible row limit
                 let estimated_visible_rows = 20;
-                match app.enter_folder_with_visible_loading(path[0], estimated_visible_rows) {
+                let load_count = (estimated_visible_rows + 5).max(10);
+
+                match app
+                    .email_store
+                    .ensure_current_folder_loaded_with_limit(&app.scanner, load_count)
+                {
                     Ok(()) => {
                         app.selection.email_index = 0;
                         app.selection.scroll_offset = 0;

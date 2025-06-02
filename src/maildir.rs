@@ -107,7 +107,7 @@ impl MaildirScanner {
             folder.emails.clear();
             folder.unread_count = 0;
             folder.total_count = 0;
-            
+
             // This is a maildir folder, scan for emails with optional limit
             self.scan_emails_in_folder_with_limit(folder, &cur_path, limit)?;
             if limit.is_none() || folder.emails.len() < limit.unwrap() {
