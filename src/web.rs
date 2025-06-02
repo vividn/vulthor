@@ -107,12 +107,15 @@ async fn email_events(
                 sleep(Duration::from_millis(200)).await; // Faster polling for better responsiveness
 
                 let current_email_id = {
-                    let app = app_state.lock().ok()?;
-                    // Create a unique identifier for the current email selection
-                    // Use folder index + email index as a simple ID
+                    let mut app = app_state.lock().ok()?;
+                    // Create a unique identifier that changes when displayable content changes
+                    let folder_index = app.selection.folder_index;
+                    let email_index = app.selection.email_index;
+                    let has_email = app.get_current_email_for_web().is_some();
+                    
                     format!(
-                        "{}:{}",
-                        app.selection.folder_index, app.selection.email_index
+                        "{}:{}:{}",
+                        folder_index, email_index, has_email
                     )
                 };
 
@@ -154,12 +157,16 @@ async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Resp
         }
     };
 
+    let folder_index = app.selection.folder_index;
+    let email_index = app.selection.email_index;
+    let current_email = app.get_current_email_for_web();
+    let has_email = current_email.is_some();
     let email_id = format!(
-        "{}:{}",
-        app.selection.folder_index, app.selection.email_index
+        "{}:{}:{}",
+        folder_index, email_index, has_email
     );
 
-    if let Some(email) = app.get_current_email_for_web() {
+    if let Some(email) = current_email {
         let body_content = if let Some(html) = &email.body_html {
             html.clone()
         } else {
@@ -453,80 +460,109 @@ fn generate_welcome_html() -> String {
         
         function updateEmailDisplay(emailData) {
             document.title = 'Vulthor - ' + emailData.subject;
-            // Create email view if not exists
+            
+            // Check if we need to create the email layout (transitioning from welcome screen)
+            if (!document.querySelector('.email-header')) {
+                document.querySelector('.container').className = 'container email-view';
+                document.querySelector('.container').innerHTML = `
+                    <header class="email-header">
+                        <h1 class="email-subject"></h1>
+                        <div class="email-meta">
+                            <div class="email-from"></div>
+                            <div class="email-to"></div>
+                            <div class="email-date"></div>
+                        </div>
+                    </header>
+                    
+                    <main class="email-content"></main>
+                    
+                    <footer class="app-footer">
+                        <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+                    </footer>
+                `;
+            }
+            
+            // Update individual elements (preserving JavaScript connections)
+            document.querySelector('.email-subject').textContent = emailData.subject;
+            document.querySelector('.email-from').innerHTML = '<strong>From:</strong> ' + emailData.from;
+            document.querySelector('.email-to').innerHTML = '<strong>To:</strong> ' + emailData.to;
+            document.querySelector('.email-date').innerHTML = '<strong>Date:</strong> ' + emailData.date;
+            document.querySelector('.email-content').innerHTML = emailData.body_html;
+            
+            // Update attachments
+            const attachmentsSection = document.querySelector('.attachments-section');
+            if (emailData.attachments.length > 0) {
+                let attachmentsHtml = '<div class="attachments-section"><h3>Attachments</h3><ul class="attachments-list">';
+                emailData.attachments.forEach(attachment => {
+                    attachmentsHtml += `<li class="attachment-item">
+                        <span class="attachment-icon">📎</span>
+                        <span class="attachment-name">${attachment.filename}</span>
+                        <span class="attachment-type">(${attachment.content_type})</span>
+                        <span class="attachment-size">${attachment.size}</span>
+                    </li>`;
+                });
+                attachmentsHtml += '</ul></div>';
+                
+                if (attachmentsSection) {
+                    attachmentsSection.outerHTML = attachmentsHtml;
+                } else {
+                    document.querySelector('.email-content').insertAdjacentHTML('afterend', attachmentsHtml);
+                }
+            } else if (attachmentsSection) {
+                attachmentsSection.remove();
+            }
+            
+            // Show email layout
             document.querySelector('.container').className = 'container email-view';
-            document.querySelector('.container').innerHTML = `
-                <header class="email-header">
-                    <h1 class="email-subject">${emailData.subject}</h1>
-                    <div class="email-meta">
-                        <div class="email-from"><strong>From:</strong> ${emailData.from}</div>
-                        <div class="email-to"><strong>To:</strong> ${emailData.to}</div>
-                        <div class="email-date"><strong>Date:</strong> ${emailData.date}</div>
-                    </div>
-                </header>
-                
-                <main class="email-content">${emailData.body_html}</main>
-                
-                ${emailData.attachments.length > 0 ? `
-                    <div class="attachments-section">
-                        <h3>Attachments</h3>
-                        <ul class="attachments-list">
-                            ${emailData.attachments.map(attachment => `
-                                <li class="attachment-item">
-                                    <span class="attachment-icon">📎</span>
-                                    <span class="attachment-name">${attachment.filename}</span>
-                                    <span class="attachment-type">(${attachment.content_type})</span>
-                                    <span class="attachment-size">${attachment.size}</span>
-                                </li>
-                            `).join('')}
-                        </ul>
-                    </div>
-                ` : ''}
-                
-                <footer class="app-footer">
-                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-                </footer>
-            `;
         }
         
         function showWelcomeMessage() {
             document.title = 'Vulthor - Email Client';
-            document.querySelector('.container').className = 'container welcome-view';
-            document.querySelector('.container').innerHTML = `<header class="welcome-header">
-                <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
-                <h1>Vulthor</h1>
-                <h2>TUI Email Client</h2>
-            </header>
             
-            <main class="welcome-content">
-                <div class="welcome-message">
-                    <h3>Welcome to Vulthor</h3>
-                    <p>No email is currently selected in the terminal interface.</p>
-                    <p>To view an email here:</p>
-                    <ol>
-                        <li>Navigate to an email in the terminal</li>
-                        <li>Select it with <kbd>Enter</kbd></li>
-                        <li>The email will appear on this page</li>
-                    </ol>
-                </div>
-                
-                <div class="keybindings">
-                    <h3>Key Bindings</h3>
-                    <div class="keybinding-grid">
-                        <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
-                        <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
-                        <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
-                        <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
-                        <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
-                        <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
-                        <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
-                    </div>
-                </div>
-            </main>
-            
-            <footer class="app-footer">
-                <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-            </footer>`;
+            // Check if we need to create the welcome layout (transitioning from email view)
+            if (!document.querySelector('.welcome-header')) {
+                document.querySelector('.container').className = 'container welcome-view';
+                document.querySelector('.container').innerHTML = `
+                    <header class="welcome-header">
+                        <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+                        <h1>Vulthor</h1>
+                        <h2>TUI Email Client</h2>
+                    </header>
+                    
+                    <main class="welcome-content">
+                        <div class="welcome-message">
+                            <h3>Welcome to Vulthor</h3>
+                            <p>No email is currently selected in the terminal interface.</p>
+                            <p>To view an email here:</p>
+                            <ol>
+                                <li>Navigate to an email in the terminal</li>
+                                <li>Select it with <kbd>Enter</kbd></li>
+                                <li>The email will appear on this page</li>
+                            </ol>
+                        </div>
+                        
+                        <div class="keybindings">
+                            <h3>Key Bindings</h3>
+                            <div class="keybinding-grid">
+                                <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
+                                <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
+                                <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
+                                <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
+                                <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
+                                <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
+                                <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
+                            </div>
+                        </div>
+                    </main>
+                    
+                    <footer class="app-footer">
+                        <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
+                    </footer>
+                `;
+            } else {
+                // Welcome layout already exists, just ensure correct styling
+                document.querySelector('.container').className = 'container welcome-view';
+            }
         }
         
         // Load initial content when page loads

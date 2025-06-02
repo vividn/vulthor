@@ -80,13 +80,7 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('l') if key.modifiers.is_empty() => {
             // If we're in folder pane, check if we're already in a folder or need to enter one
             if matches!(app.active_pane, ActivePane::Folders) {
-                // If we're already in a folder (current_folder is not empty), just switch view
-                if !app.email_store.current_folder.is_empty() {
-                    app.switch_to_message_content_view();
-                } else {
-                    // We're in root folder list, navigate into selected folder AND switch view
-                    handle_folder_selection_and_switch_view(app);
-                }
+                handle_folder_selection_and_switch_view(app);
             } else {
                 app.switch_to_message_content_view();
             }
@@ -272,6 +266,13 @@ fn handle_folder_selection_and_switch_view(app: &mut App) {
                 app.selection.email_index = 0;
                 app.selection.scroll_offset = 0;
                 app.selection.remembered_email_index = None; // Clear remembered selection for new folder
+
+                // Select the first email if folder has emails
+                let current_folder = app.email_store.get_current_folder();
+                if !current_folder.emails.is_empty() {
+                    app.email_store.select_email(0);
+                }
+
                 app.switch_to_message_content_view();
                 app.set_state(AppState::EmailList);
             }
@@ -310,6 +311,13 @@ fn handle_selection(app: &mut App) {
                         app.selection.email_index = 0;
                         app.selection.scroll_offset = 0;
                         app.selection.remembered_email_index = None; // Clear remembered selection for new folder
+
+                        // Select the first email if folder has emails
+                        let current_folder = app.email_store.get_current_folder();
+                        if !current_folder.emails.is_empty() {
+                            app.email_store.select_email(0);
+                        }
+
                         app.set_state(AppState::EmailList);
                     }
                     Err(e) => {
@@ -462,7 +470,6 @@ fn build_flat_folder_list(
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,16 +478,16 @@ mod tests {
 
     fn create_test_app_with_emails() -> App {
         let mut email_store = EmailStore::new(PathBuf::from("/tmp"));
-        
+
         // Add a test folder with some emails
         let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
         inbox.add_email(Email::new(PathBuf::from("/tmp/email1")));
         inbox.add_email(Email::new(PathBuf::from("/tmp/email2")));
         inbox.add_email(Email::new(PathBuf::from("/tmp/email3")));
         inbox.is_loaded = true;
-        
+
         email_store.root_folder.add_subfolder(inbox);
-        
+
         let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
         App::new(email_store, scanner)
     }
@@ -532,38 +539,49 @@ mod tests {
         assert!(!app.pane_visibility.content_visible);
     }
 
-
     #[test]
     fn test_message_selection_memory_with_h_l_navigation() {
         let mut app = create_test_app_with_emails();
-        
+
         // Navigate into INBOX folder
         app.email_store.current_folder = vec![0]; // Enter INBOX
         app.switch_to_message_content_view();
         app.active_pane = ActivePane::List;
-        
+
         // Select the third email (index 2)
         app.selection.email_index = 2;
         app.email_store.select_email(2);
-        
+
         // Verify email is selected
         assert_eq!(app.selection.email_index, 2);
         assert_eq!(app.email_store.selected_email, Some(2));
-        
+
         // Switch to folder view using 'h'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
+
         // Should remember the selection but deselect the email
         assert_eq!(app.selection.remembered_email_index, Some(2));
         assert_eq!(app.email_store.selected_email, None);
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::FolderMessage));
-        
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::FolderMessage
+        ));
+
         // Switch back to message view using 'l' from List pane
         app.active_pane = ActivePane::List; // Simulate being in List pane
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
         // Should restore the selection
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::MessageContent));
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::MessageContent
+        ));
         assert_eq!(app.selection.email_index, 2);
         assert_eq!(app.email_store.selected_email, Some(2));
     }
@@ -571,31 +589,46 @@ mod tests {
     #[test]
     fn test_realistic_navigation_scenario() {
         let mut app = create_test_app_with_emails();
-        
+
         // Start in default state (FolderMessage view, Folders pane)
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::FolderMessage));
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::FolderMessage
+        ));
         assert_eq!(app.active_pane, ActivePane::Folders);
-        
+
         // Enter INBOX folder using 'l' from folder pane (should switch to MessageContent view)
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
         // Navigate to the second email using 'j'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+
         // Now we should have the second email selected
         assert_eq!(app.selection.email_index, 1);
         assert_eq!(app.email_store.selected_email, Some(1));
-        
+
         // Go back to folder view using 'h'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
+
         // Should remember selection and deselect
         assert_eq!(app.selection.remembered_email_index, Some(1));
         assert_eq!(app.email_store.selected_email, None);
-        
+
         // Go forward again using 'l'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
         // Should restore the selection
         assert_eq!(app.selection.email_index, 1);
         assert_eq!(app.email_store.selected_email, Some(1));
@@ -604,26 +637,26 @@ mod tests {
     #[test]
     fn test_folder_change_clears_memory() {
         let mut app = create_test_app_with_emails();
-        
+
         // Add another folder
         let mut sent = Folder::new("Sent".to_string(), PathBuf::from("/tmp/Sent"));
         sent.add_email(Email::new(PathBuf::from("/tmp/sent1")));
         sent.is_loaded = true;
         app.email_store.root_folder.add_subfolder(sent);
-        
+
         // Navigate into INBOX and select an email
         app.email_store.current_folder = vec![0]; // Enter INBOX
         app.selection.email_index = 1;
         app.email_store.select_email(1);
         app.selection.remembered_email_index = Some(1);
-        
+
         // Navigate to different folder using j/k
         app.active_pane = ActivePane::Folders;
         app.selection.folder_index = 1; // Move to Sent folder
-        
+
         // Trigger folder loading (simulating what happens in handle_navigation)
         app.load_selected_folder_messages();
-        
+
         // Should clear the remembered selection
         assert_eq!(app.selection.remembered_email_index, None);
         assert_eq!(app.selection.email_index, 0);
@@ -632,75 +665,184 @@ mod tests {
     #[test]
     fn test_h_l_navigation_multiple_times() {
         let mut app = create_test_app_with_emails();
-        
+
         // Enter INBOX folder using 'l' from folder pane
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::MessageContent));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::MessageContent
+        ));
         assert_eq!(app.active_pane, ActivePane::List);
-        
+
         // Navigate to second email
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
         assert_eq!(app.selection.email_index, 1);
-        
+
         // Go back to folder view using 'h'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::FolderMessage));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::FolderMessage
+        ));
         assert_eq!(app.active_pane, ActivePane::Folders);
-        
+
         // Go back to message view using 'l'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::MessageContent));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::MessageContent
+        ));
         assert_eq!(app.active_pane, ActivePane::List);
         assert_eq!(app.selection.email_index, 1); // Should restore selection
-        
+
         // Go back to folder view again using 'h'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::FolderMessage));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::FolderMessage
+        ));
         assert_eq!(app.active_pane, ActivePane::Folders);
-        
+
         // Go back to message view again using 'l'
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        assert!(matches!(app.pane_visibility.view_mode, crate::app::ViewMode::MessageContent));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::MessageContent
+        ));
         assert_eq!(app.active_pane, ActivePane::List);
         assert_eq!(app.selection.email_index, 1); // Should still restore selection
     }
 
     #[test]
+    fn test_l_key_enters_selected_folder_not_inbox() {
+        let mut app = create_test_app_with_emails();
+
+        // Add another folder (Sent) so we have INBOX (index 0) and Sent (index 1)
+        let mut sent = Folder::new("Sent".to_string(), PathBuf::from("/tmp/Sent"));
+        sent.add_email(Email::new(PathBuf::from("/tmp/sent1")));
+        sent.is_loaded = true;
+        app.email_store.root_folder.add_subfolder(sent);
+
+        // Simulate real application startup sequence
+        app.perform_initial_loading_if_needed(); // This is called in real app
+
+        // Start in default state (FolderMessage view, Folders pane)
+        // By default, INBOX should be selected (folder_index = 0)
+        assert_eq!(app.selection.folder_index, 0); // Should be INBOX
+        assert!(
+            app.email_store.current_folder.is_empty(),
+            "current_folder should be empty after initial loading, but is: {:?}",
+            app.email_store.current_folder
+        ); // Should not be inside any folder yet
+
+        // Navigate down to Sent folder (index 1) using 'j' key
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+
+        // Should now have Sent folder selected
+        assert_eq!(app.selection.folder_index, 1); // Should be Sent folder
+        assert!(
+            app.email_store.current_folder.is_empty(),
+            "current_folder should be empty before entering folder, but is: {:?}",
+            app.email_store.current_folder
+        ); // Still not inside any folder
+
+        // Now press 'l' to enter the selected folder (should be Sent, not INBOX)
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
+        // Should have entered Sent folder, not INBOX
+        assert_eq!(app.email_store.current_folder, vec![1]); // Should be in Sent folder (index 1)
+        assert!(matches!(
+            app.pane_visibility.view_mode,
+            crate::app::ViewMode::MessageContent
+        ));
+
+        // Verify we're actually in the Sent folder by checking the folder path
+        let folder_path = app.email_store.get_folder_path();
+        assert!(
+            folder_path.contains("Sent"),
+            "Should be in Sent folder, but path is: {}",
+            folder_path
+        );
+    }
+
+    #[test]
     fn test_h_l_navigation_when_content_pane_active() {
         let mut app = create_test_app_with_emails();
-        
+
         // Enter INBOX folder and select an email
         app.email_store.current_folder = vec![0];
         app.switch_to_message_content_view();
         app.active_pane = ActivePane::List;
         app.selection.email_index = 1;
         app.email_store.select_email(1);
-        
+
         // Simulate selecting an email and switching to content pane (like pressing Enter)
         app.active_pane = ActivePane::Content;
         app.set_state(crate::app::AppState::EmailContent);
-        
+
         // Now press 'h' - should go to folder view
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
+
         // And press 'l' - should go back to message view, not skip to content
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
-        
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
         // Should be in List pane, not Content pane
         assert_eq!(app.active_pane, ActivePane::List);
-        
+
         // Do it again to make sure it doesn't skip
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
         assert_eq!(app.active_pane, ActivePane::Folders);
-        
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
         assert_eq!(app.active_pane, ActivePane::List);
-        
+
         // And one more time
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        );
         assert_eq!(app.active_pane, ActivePane::Folders);
-        
-        handle_key_event(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+
+        handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
         assert_eq!(app.active_pane, ActivePane::List);
     }
 }
