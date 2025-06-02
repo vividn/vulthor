@@ -88,8 +88,13 @@ impl MaildirScanner {
         folder: &mut Folder,
         limit: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Only load if not already loaded or if the folder is empty
-        if folder.is_loaded || !folder.emails.is_empty() {
+        // If already fully loaded, nothing to do
+        if folder.is_loaded {
+            return Ok(());
+        }
+        
+        // If we have a limit and folder already has emails, only proceed if not fully loaded
+        if limit.is_some() && !folder.emails.is_empty() {
             return Ok(());
         }
 

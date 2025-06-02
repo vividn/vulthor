@@ -126,6 +126,9 @@ impl UI {
         // Update app's visible rows for use in navigation
         app.message_pane_visible_rows = visible_rows;
 
+        // Perform initial loading if this is the first render with proper dimensions
+        app.perform_initial_loading_if_needed();
+
         // In folder/message view mode, show messages from the selected folder
         // In message/content view mode, show messages from the current folder
         let folder_to_display = match app.pane_visibility.view_mode {

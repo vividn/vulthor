@@ -106,6 +106,7 @@ pub struct App {
     pub search_query: String,
     pub search_mode: bool,
     pub message_pane_visible_rows: usize, // Track visible rows in message pane for loading
+    pub initial_loading_done: bool, // Track if initial email loading has been performed
 }
 
 impl App {
@@ -122,10 +123,11 @@ impl App {
             search_query: String::new(),
             search_mode: false,
             message_pane_visible_rows: 20, // Default estimate
+            initial_loading_done: false,
         };
 
-        // Auto-select INBOX folder on startup
-        app.auto_select_inbox();
+        // Auto-select INBOX folder on startup but defer email loading
+        app.auto_select_inbox_without_loading();
 
         app
     }
@@ -276,6 +278,23 @@ impl App {
             self.selection.folder_index = inbox_index;
             // Load messages for the selected folder automatically
             self.load_selected_folder_messages();
+        }
+    }
+
+    /// Auto-select INBOX folder on startup without loading messages (deferred until UI is ready)
+    fn auto_select_inbox_without_loading(&mut self) {
+        // Find INBOX folder in the folder structure and set the selection index
+        if let Some(inbox_index) = self.find_inbox_folder() {
+            self.selection.folder_index = inbox_index;
+            // Don't load messages yet - let UI trigger loading with proper dimensions
+        }
+    }
+
+    /// Perform initial email loading with actual UI dimensions (called from UI)
+    pub fn perform_initial_loading_if_needed(&mut self) {
+        if !self.initial_loading_done {
+            self.load_selected_folder_messages();
+            self.initial_loading_done = true;
         }
     }
 
