@@ -1,5 +1,28 @@
 /* Vulthor Email Client Styles */
 
+:root {
+    /* Colors from Vulthor bird logo */
+    --vulthor-dark: #1a2f3a;        /* Dark teal/navy from bird body */
+    --vulthor-primary: #2c4f5d;     /* Main teal color */
+    --vulthor-light: #3d6270;       /* Lighter teal */
+    --vulthor-accent: #ff8c42;      /* Orange from bird's neck */
+    --vulthor-accent-light: #ffaa5a; /* Lighter orange */
+    --vulthor-cyan: #7dd3c0;        /* Light cyan from goggles/lightning */
+    --vulthor-cyan-light: #a5e6d7;  /* Lighter cyan */
+    --vulthor-gray-dark: #4a5568;   /* Dark gray */
+    --vulthor-gray-light: #e2e8f0;  /* Light gray */
+    
+    /* Light mode colors (default) */
+    --bg-primary: #f0f4f8;
+    --bg-secondary: white;
+    --bg-tertiary: rgba(125, 211, 192, 0.1);
+    --text-primary: var(--vulthor-dark);
+    --text-secondary: var(--vulthor-gray-dark);
+    --text-on-dark: white;
+    --border-color: var(--vulthor-gray-light);
+    --shadow-color: rgba(26, 47, 58, 0.15);
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -9,24 +32,69 @@
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     line-height: 1.6;
-    color: #333;
-    background-color: #f5f5f5;
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
+    margin: 0;
+    padding: 0;
+}
+
+/* App Banner - appears on all pages */
+.app-banner {
+    background: linear-gradient(135deg, var(--vulthor-light) 0%, var(--vulthor-primary) 100%);
+    padding: 0.5rem 2rem;
+    box-shadow: 0 2px 8px rgba(26, 47, 58, 0.15);
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.app-banner img {
+    height: auto;
+    width: auto;
+    max-height: 100px;
+    object-fit: contain;
+}
+
+.app-banner .logo-bird {
+    height: 70px;
+    width: auto;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.app-banner .logo-text {
+    height: 50px;
+    width: auto;
+    max-width: none;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.app-banner:hover .logo-bird {
+    transform: translateY(-3px) scale(1.05);
+    transition: transform 0.2s ease;
+}
+
+.app-banner:hover .logo-text {
+    transform: translateX(3px);
+    transition: transform 0.2s ease;
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
-    background-color: white;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-    min-height: 100vh;
+    background-color: var(--bg-secondary);
+    box-shadow: 0 0 10px var(--shadow-color);
+    min-height: calc(100vh - 90px); /* Account for banner height */
 }
 
 /* Email Header Styles */
 .email-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--vulthor-primary) 0%, var(--vulthor-dark) 100%);
     color: white;
     padding: 2rem;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid var(--vulthor-cyan);
 }
 
 .email-subject {
@@ -43,7 +111,7 @@ body {
 }
 
 .email-meta > div {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(125, 211, 192, 0.15);
     padding: 0.5rem;
     border-radius: 4px;
     backdrop-filter: blur(10px);
@@ -55,32 +123,37 @@ body {
 
 /* Welcome Header Styles */
 .welcome-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--vulthor-primary) 0%, var(--vulthor-dark) 100%);
     color: white;
     padding: 3rem 2rem;
     text-align: center;
 }
 
 .welcome-logo {
-    width: 150px;
-    height: 150px;
+    height: 250px;
+    width: auto;
     margin-bottom: 1.5rem;
-    border-radius: 50%;
-    background: white;
-    padding: 10px;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    filter: drop-shadow(0 4px 15px rgba(0, 0, 0, 0.3));
+    object-fit: contain;
+}
+
+/* Hide app banner on welcome page since we have the large logo */
+.welcome-view .app-banner {
+    display: none;
 }
 
 .welcome-header h1 {
-    font-size: 3rem;
+    font-size: 3.5rem;
     margin-bottom: 0.5rem;
     font-weight: 700;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .welcome-header h2 {
     font-size: 1.5rem;
     font-weight: 300;
     opacity: 0.9;
+    color: var(--vulthor-cyan-light);
 }
 
 /* Content Styles */
@@ -92,23 +165,23 @@ body {
 
 .email-content h1, .email-content h2, .email-content h3 {
     margin: 1.5rem 0 1rem 0;
-    color: #2c3e50;
+    color: var(--vulthor-primary);
 }
 
 .email-content h1 {
     font-size: 1.8rem;
-    border-bottom: 2px solid #3498db;
+    border-bottom: 2px solid var(--vulthor-cyan);
     padding-bottom: 0.5rem;
 }
 
 .email-content h2 {
     font-size: 1.4rem;
-    color: #34495e;
+    color: var(--vulthor-light);
 }
 
 .email-content h3 {
     font-size: 1.2rem;
-    color: #7f8c8d;
+    color: var(--vulthor-gray-dark);
 }
 
 .email-content p {
@@ -126,10 +199,10 @@ body {
 }
 
 .email-content blockquote {
-    border-left: 4px solid #3498db;
+    border-left: 4px solid var(--vulthor-accent);
     padding-left: 1rem;
     margin: 1rem 0;
-    background-color: #f8f9fa;
+    background-color: rgba(125, 211, 192, 0.1);
     padding: 1rem;
     border-radius: 4px;
 }
@@ -141,20 +214,20 @@ body {
 }
 
 .welcome-message h3 {
-    color: #2c3e50;
+    color: var(--vulthor-primary);
     margin-bottom: 1rem;
     font-size: 1.5rem;
 }
 
 .welcome-message p {
     margin-bottom: 1rem;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .welcome-message ol {
     text-align: left;
     display: inline-block;
-    color: #555;
+    color: var(--text-secondary);
 }
 
 .welcome-message li {
@@ -163,14 +236,14 @@ body {
 
 /* Keybindings Styles */
 .keybindings {
-    background-color: #f8f9fa;
+    background-color: var(--bg-tertiary);
     padding: 2rem;
     border-radius: 8px;
     margin-top: 2rem;
 }
 
 .keybindings h3 {
-    color: #2c3e50;
+    color: var(--vulthor-primary);
     margin-bottom: 1.5rem;
     text-align: center;
     font-size: 1.3rem;
@@ -187,19 +260,20 @@ body {
     align-items: center;
     gap: 1rem;
     padding: 0.75rem;
-    background: white;
+    background: var(--bg-secondary);
     border-radius: 6px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px var(--shadow-color);
     transition: transform 0.2s ease;
 }
 
 .keybinding:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 8px rgba(26, 47, 58, 0.15);
+    background: var(--vulthor-cyan-light);
 }
 
 kbd {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--vulthor-accent) 0%, var(--vulthor-accent-light) 100%);
     color: white;
     padding: 0.3rem 0.6rem;
     border-radius: 4px;
@@ -209,20 +283,20 @@ kbd {
     min-width: 3rem;
     text-align: center;
     display: inline-block;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 4px rgba(26, 47, 58, 0.2);
 }
 
 /* Attachments Styles */
 .attachments-section {
-    background-color: #f8f9fa;
+    background-color: rgba(125, 211, 192, 0.1);
     padding: 1.5rem;
     border-radius: 8px;
     margin: 2rem 0;
-    border: 1px solid #e9ecef;
+    border: 1px solid var(--vulthor-cyan);
 }
 
 .attachments-section h3 {
-    color: #2c3e50;
+    color: var(--vulthor-primary);
     margin-bottom: 1rem;
     font-size: 1.2rem;
     display: flex;
@@ -248,35 +322,35 @@ kbd {
     background: white;
     border-radius: 6px;
     margin-bottom: 0.5rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--vulthor-gray-light);
     transition: background-color 0.2s ease;
 }
 
 .attachment-item:hover {
-    background-color: #f0f0f0;
+    background-color: var(--vulthor-cyan-light);
 }
 
 .attachment-icon {
     font-size: 1.2rem;
-    color: #6c757d;
+    color: var(--vulthor-gray-dark);
 }
 
 .attachment-name {
     font-weight: 600;
-    color: #2c3e50;
+    color: var(--vulthor-primary);
     flex: 1;
 }
 
 .attachment-type {
-    color: #6c757d;
+    color: var(--vulthor-gray-dark);
     font-size: 0.9rem;
     font-style: italic;
 }
 
 .attachment-size {
-    color: #495057;
+    color: var(--vulthor-dark);
     font-size: 0.9rem;
-    background-color: #e9ecef;
+    background-color: var(--vulthor-gray-light);
     padding: 0.25rem 0.5rem;
     border-radius: 12px;
     min-width: 4rem;
@@ -285,7 +359,7 @@ kbd {
 
 /* Footer Styles */
 .app-footer {
-    background-color: #2c3e50;
+    background-color: var(--vulthor-dark);
     color: white;
     text-align: center;
     padding: 1.5rem;
@@ -298,7 +372,7 @@ kbd {
 }
 
 .app-footer strong {
-    color: #3498db;
+    color: var(--vulthor-cyan);
 }
 
 /* Responsive Design */
@@ -306,6 +380,27 @@ kbd {
     .container {
         margin: 0;
         box-shadow: none;
+    }
+    
+    .app-banner {
+        padding: 0.5rem 1rem;
+        gap: 0.75rem;
+    }
+    
+    .app-banner .logo-bird {
+        height: 60px;
+        width: auto;
+    }
+    
+    .app-banner .logo-text {
+        height: 45px;
+        width: auto;
+        max-width: calc(100vw - 120px); /* Prevent overflow on small screens */
+    }
+    
+    .welcome-logo {
+        height: 180px;
+        width: auto;
     }
     
     .email-header, .welcome-header {
@@ -337,7 +432,7 @@ kbd {
 
 /* Code blocks */
 pre, code {
-    background-color: #f1f1f1;
+    background-color: rgba(125, 211, 192, 0.1);
     border-radius: 4px;
     font-family: 'Courier New', monospace;
     font-size: 0.9rem;
@@ -347,7 +442,7 @@ pre {
     padding: 1rem;
     overflow-x: auto;
     margin: 1rem 0;
-    border-left: 4px solid #3498db;
+    border-left: 4px solid var(--vulthor-accent);
 }
 
 code {
@@ -356,13 +451,13 @@ code {
 
 /* Links */
 a {
-    color: #3498db;
+    color: var(--vulthor-accent);
     text-decoration: none;
     transition: color 0.2s ease;
 }
 
 a:hover {
-    color: #2980b9;
+    color: var(--vulthor-accent-light);
     text-decoration: underline;
 }
 
@@ -377,17 +472,17 @@ table th,
 table td {
     padding: 0.75rem;
     text-align: left;
-    border-bottom: 1px solid #dee2e6;
+    border-bottom: 1px solid var(--vulthor-gray-light);
 }
 
 table th {
-    background-color: #f8f9fa;
+    background-color: rgba(125, 211, 192, 0.1);
     font-weight: 600;
-    color: #2c3e50;
+    color: var(--vulthor-primary);
 }
 
 table tr:hover {
-    background-color: #f8f9fa;
+    background-color: var(--vulthor-cyan-light);
 }
 
 /* Scrollbar styling for webkit browsers */
@@ -396,15 +491,121 @@ table tr:hover {
 }
 
 ::-webkit-scrollbar-track {
-    background: #f1f1f1;
+    background: var(--vulthor-gray-light);
     border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
+    background: var(--vulthor-cyan);
     border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
+    background: var(--vulthor-accent);
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    :root {
+        /* Dark mode colors */
+        --bg-primary: #0f1419;
+        --bg-secondary: var(--vulthor-dark);
+        --bg-tertiary: rgba(125, 211, 192, 0.05);
+        --text-primary: #e8eaed;
+        --text-secondary: #9aa0a6;
+        --text-on-dark: white;
+        --border-color: var(--vulthor-light);
+        --shadow-color: rgba(0, 0, 0, 0.3);
+    }
+    
+    body {
+        color: var(--text-primary);
+        background-color: var(--bg-primary);
+    }
+    
+    .container {
+        background-color: var(--bg-secondary);
+        box-shadow: 0 0 10px var(--shadow-color);
+    }
+    
+    /* Email content specific */
+    .email-content, .welcome-content {
+        color: var(--text-primary);
+    }
+    
+    .email-content h1, .email-content h2, .email-content h3 {
+        color: var(--vulthor-cyan);
+    }
+    
+    .email-content blockquote {
+        background-color: var(--bg-tertiary);
+        border-left-color: var(--vulthor-accent);
+    }
+    
+    /* Code blocks */
+    pre, code {
+        background-color: rgba(0, 0, 0, 0.3);
+        color: var(--vulthor-cyan-light);
+    }
+    
+    /* Keybindings */
+    .keybindings {
+        background-color: var(--bg-tertiary);
+    }
+    
+    .keybinding {
+        background: var(--bg-secondary);
+        box-shadow: 0 2px 4px var(--shadow-color);
+    }
+    
+    .keybinding:hover {
+        background: var(--vulthor-light);
+    }
+    
+    /* Attachments */
+    .attachments-section {
+        background-color: var(--bg-tertiary);
+        border-color: var(--vulthor-light);
+    }
+    
+    .attachment-item {
+        background: var(--bg-secondary);
+        border-color: var(--vulthor-light);
+    }
+    
+    .attachment-item:hover {
+        background-color: var(--vulthor-light);
+    }
+    
+    /* Welcome page */
+    .welcome-message h3 {
+        color: var(--vulthor-cyan);
+    }
+    
+    /* Tables */
+    table th {
+        background-color: var(--bg-tertiary);
+        color: var(--vulthor-cyan);
+    }
+    
+    table td {
+        border-bottom-color: var(--vulthor-light);
+    }
+    
+    table tr:hover {
+        background-color: var(--bg-tertiary);
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar-track {
+        background: var(--vulthor-dark);
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: var(--vulthor-light);
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--vulthor-cyan);
+    }
 }

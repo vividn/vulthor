@@ -11,8 +11,11 @@ impl TestMailDir {
     pub fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let root_path = temp_dir.path().to_path_buf();
-        
-        let fixture = Self { temp_dir, root_path };
+
+        let fixture = Self {
+            temp_dir,
+            root_path,
+        };
         fixture.create_structure();
         fixture
     }
@@ -20,31 +23,31 @@ impl TestMailDir {
     fn create_structure(&self) {
         // Create INBOX folder with maildir structure
         self.create_maildir_folder("INBOX");
-        
+
         // Create Sent folder
         self.create_maildir_folder("Sent");
-        
+
         // Create Drafts folder
         self.create_maildir_folder("Drafts");
-        
+
         // Create Trash folder
         self.create_maildir_folder("Trash");
-        
+
         // Create Work folder with subfolders
         self.create_maildir_folder("Work");
         self.create_maildir_folder("Work/Projects");
         self.create_maildir_folder("Work/Meetings");
-        
+
         // Create Personal folder with subfolders
         self.create_maildir_folder("Personal");
         self.create_maildir_folder("Personal/Family");
         self.create_maildir_folder("Personal/Friends");
-        
+
         // Create Archive folder
         self.create_maildir_folder("Archive");
         self.create_maildir_folder("Archive/2023");
         self.create_maildir_folder("Archive/2024");
-        
+
         // Add sample emails to various folders
         self.add_sample_emails();
     }
@@ -52,7 +55,7 @@ impl TestMailDir {
     fn create_maildir_folder(&self, folder_name: &str) {
         let folder_path = self.root_path.join(folder_name);
         fs::create_dir_all(&folder_path).expect("Failed to create folder");
-        
+
         // Create maildir subdirectories
         fs::create_dir_all(folder_path.join("cur")).expect("Failed to create cur directory");
         fs::create_dir_all(folder_path.join("new")).expect("Failed to create new directory");
@@ -61,35 +64,91 @@ impl TestMailDir {
 
     fn add_sample_emails(&self) {
         // Add emails to INBOX
-        self.write_email("INBOX/cur", "1234567890.email1", &self.create_welcome_email());
-        self.write_email("INBOX/cur", "1234567891.email2", &self.create_meeting_email());
-        self.write_email("INBOX/new", "1234567892.email3", &self.create_urgent_email());
-        self.write_email("INBOX/cur", "1234567893.email4", &self.create_newsletter_email());
-        self.write_email("INBOX/cur", "1234567894.email5", &self.create_attachment_email());
-        
+        self.write_email(
+            "INBOX/cur",
+            "1234567890.email1",
+            &self.create_welcome_email(),
+        );
+        self.write_email(
+            "INBOX/cur",
+            "1234567891.email2",
+            &self.create_meeting_email(),
+        );
+        self.write_email(
+            "INBOX/new",
+            "1234567892.email3",
+            &self.create_urgent_email(),
+        );
+        self.write_email(
+            "INBOX/cur",
+            "1234567893.email4",
+            &self.create_newsletter_email(),
+        );
+        self.write_email(
+            "INBOX/cur",
+            "1234567894.email5",
+            &self.create_attachment_email(),
+        );
+
         // Add emails to Sent
         self.write_email("Sent/cur", "1234567895.sent1", &self.create_sent_response());
         self.write_email("Sent/cur", "1234567896.sent2", &self.create_sent_proposal());
-        
+
         // Add emails to Work folders
         self.write_email("Work/cur", "1234567897.work1", &self.create_work_email());
-        self.write_email("Work/Projects/cur", "1234567898.project1", &self.create_project_email());
-        self.write_email("Work/Meetings/cur", "1234567899.meeting1", &self.create_meeting_reminder());
-        
+        self.write_email(
+            "Work/Projects/cur",
+            "1234567898.project1",
+            &self.create_project_email(),
+        );
+        self.write_email(
+            "Work/Meetings/cur",
+            "1234567899.meeting1",
+            &self.create_meeting_reminder(),
+        );
+
         // Add emails to Personal folders
-        self.write_email("Personal/cur", "1234567900.personal1", &self.create_personal_email());
-        self.write_email("Personal/Family/cur", "1234567901.family1", &self.create_family_email());
-        self.write_email("Personal/Friends/new", "1234567902.friend1", &self.create_friend_email());
-        
+        self.write_email(
+            "Personal/cur",
+            "1234567900.personal1",
+            &self.create_personal_email(),
+        );
+        self.write_email(
+            "Personal/Family/cur",
+            "1234567901.family1",
+            &self.create_family_email(),
+        );
+        self.write_email(
+            "Personal/Friends/new",
+            "1234567902.friend1",
+            &self.create_friend_email(),
+        );
+
         // Add archived emails
-        self.write_email("Archive/2023/cur", "1234567903.archive1", &self.create_old_email());
-        self.write_email("Archive/2024/cur", "1234567904.archive2", &self.create_recent_archive());
-        
+        self.write_email(
+            "Archive/2023/cur",
+            "1234567903.archive1",
+            &self.create_old_email(),
+        );
+        self.write_email(
+            "Archive/2024/cur",
+            "1234567904.archive2",
+            &self.create_recent_archive(),
+        );
+
         // Add draft
-        self.write_email("Drafts/cur", "1234567905.draft1", &self.create_draft_email());
-        
+        self.write_email(
+            "Drafts/cur",
+            "1234567905.draft1",
+            &self.create_draft_email(),
+        );
+
         // Add deleted email
-        self.write_email("Trash/cur", "1234567906.trash1", &self.create_deleted_email());
+        self.write_email(
+            "Trash/cur",
+            "1234567906.trash1",
+            &self.create_deleted_email(),
+        );
     }
 
     fn write_email(&self, folder: &str, filename: &str, content: &str) {
@@ -137,7 +196,8 @@ The Vulthor Team
 
 --
 Vulthor Email Client
-https://github.com/vulthor/vulthor"#.to_string()
+https://github.com/vulthor/vulthor"#
+            .to_string()
     }
 
     fn create_meeting_email(&self) -> String {
@@ -168,7 +228,8 @@ Sarah
 Sarah Johnson
 Project Manager
 Company Inc.
-sarah.johnson@company.com"#.to_string()
+sarah.johnson@company.com"#
+            .to_string()
     }
 
     fn create_urgent_email(&self) -> String {
@@ -197,11 +258,13 @@ If you have any questions or encounter issues, please contact the IT helpdesk
 immediately at extension 1234.
 
 Security Team
-IT Department"#.to_string()
+IT Department"#
+            .to_string()
     }
 
     fn create_newsletter_email(&self) -> String {
-        format!(r#"From: Tech News Daily <newsletter@technews.com>
+        format!(
+            r#"From: Tech News Daily <newsletter@technews.com>
 To: user@example.com
 Subject: Daily Tech Digest - AI Breakthrough & Rust 1.75 Released
 Date: Thu, 04 Jan 2024 06:00:00 +0000
@@ -232,7 +295,9 @@ Content-Type: text/html; charset=UTF-8
     <p><small>You're receiving this because you subscribed to Tech News Daily.<br>
     <a href="{}unsubscribe">Unsubscribe</a> | <a href="{}preferences">Preferences</a></small></p>
 </body>
-</html>"#, "#", "#")
+</html>"#,
+            "#", "#"
+        )
     }
 
     fn create_attachment_email(&self) -> String {
@@ -283,7 +348,8 @@ AhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEB
 AQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwDX4/8A
 AH/Z
 
---boundary123--"#.to_string()
+--boundary123--"#
+            .to_string()
     }
 
     fn create_sent_response(&self) -> String {
@@ -310,7 +376,8 @@ On Tue, 02 Jan 2024 at 14:30, Sarah Johnson wrote:
 > Hi team,
 >
 > Quick reminder about our team meeting tomorrow at 2 PM in Conference Room B.
-> [...]"#.to_string()
+> [...]"#
+            .to_string()
     }
 
     fn create_sent_proposal(&self) -> String {
@@ -342,7 +409,8 @@ you'd be available for a call.
 
 Best regards,
 User Name
-Senior Developer"#.to_string()
+Senior Developer"#
+            .to_string()
     }
 
     fn create_work_email(&self) -> String {
@@ -366,7 +434,8 @@ Please prepare:
 The review will take place in my office. Let me know if you need to reschedule.
 
 Thanks,
-Manager"#.to_string()
+Manager"#
+            .to_string()
     }
 
     fn create_project_email(&self) -> String {
@@ -393,7 +462,8 @@ Key changes:
 Please review by Monday. Priority is medium.
 
 Best,
-Lead Developer"#.to_string()
+Lead Developer"#
+            .to_string()
     }
 
     fn create_meeting_reminder(&self) -> String {
@@ -422,7 +492,8 @@ Agenda:
 Meeting link: https://meet.company.com/sprint-planning
 
 --
-Company Calendar System"#.to_string()
+Company Calendar System"#
+            .to_string()
     }
 
     fn create_personal_email(&self) -> String {
@@ -450,7 +521,8 @@ or visiting any of our branch locations.
 Thank you for choosing MyBank.
 
 Sincerely,
-MyBank Customer Service"#.to_string()
+MyBank Customer Service"#
+            .to_string()
     }
 
     fn create_family_email(&self) -> String {
@@ -477,7 +549,8 @@ Looking forward to seeing everyone!
 Love,
 Mom
 
-P.S. - Don't forget to call Grandma for her birthday next week!"#.to_string()
+P.S. - Don't forget to call Grandma for her birthday next week!"#
+            .to_string()
     }
 
     fn create_friend_email(&self) -> String {
@@ -501,7 +574,8 @@ Let me know what works for you. Saturday or Sunday evening both work for me.
 Talk soon!
 Best Friend
 
-P.S. - Thanks again for helping me move last weekend. You're awesome! 😊"#.to_string()
+P.S. - Thanks again for helping me move last weekend. You're awesome! 😊"#
+            .to_string()
     }
 
     fn create_old_email(&self) -> String {
@@ -531,7 +605,8 @@ ACHIEVEMENTS:
 
 Stay tuned for more updates!
 
-HR Team"#.to_string()
+HR Team"#
+            .to_string()
     }
 
     fn create_recent_archive(&self) -> String {
@@ -561,7 +636,8 @@ Resources:
 We hope to see you again next year!
 
 Best regards,
-TechConf Organizing Committee"#.to_string()
+TechConf Organizing Committee"#
+            .to_string()
     }
 
     fn create_draft_email(&self) -> String {
@@ -589,7 +665,8 @@ Budget estimate: $[AMOUNT]
 Let me know your thoughts on this approach.
 
 Best,
-[Need to finish this...]"#.to_string()
+[Need to finish this...]"#
+            .to_string()
     }
 
     fn create_deleted_email(&self) -> String {
@@ -618,7 +695,8 @@ CLICK HERE IMMEDIATELY to claim your prize:
 <p><small>This offer expires in 24 hours! Act fast!</small></p>
 
 </body>
-</html>"#.to_string()
+</html>"#
+            .to_string()
     }
 
     pub fn get_folder_path(&self, folder: &str) -> PathBuf {
@@ -628,17 +706,17 @@ CLICK HERE IMMEDIATELY to claim your prize:
     pub fn get_email_count(&self, folder: &str) -> usize {
         let cur_path = self.get_folder_path(folder).join("cur");
         let new_path = self.get_folder_path(folder).join("new");
-        
+
         let mut count = 0;
-        
+
         if cur_path.exists() {
             count += fs::read_dir(cur_path).unwrap().count();
         }
-        
+
         if new_path.exists() {
             count += fs::read_dir(new_path).unwrap().count();
         }
-        
+
         count
     }
 
@@ -670,13 +748,13 @@ CLICK HERE IMMEDIATELY to claim your prize:
                     if name == "cur" || name == "new" || name == "tmp" {
                         continue;
                     }
-                    
+
                     let folder_name = if prefix.is_empty() {
                         name.clone()
                     } else {
                         format!("{}/{}", prefix, name)
                     };
-                    
+
                     folders.push(folder_name.clone());
                     self.collect_folders(&entry.path(), &folder_name, folders);
                 }
@@ -689,14 +767,14 @@ CLICK HERE IMMEDIATELY to claim your prize:
         let folders = self.list_folders();
         let mut total_emails = 0;
         let mut unread_emails = 0;
-        
+
         for folder in &folders {
             let cur_count = self.count_emails_in_subdir(&format!("{}/cur", folder));
             let new_count = self.count_emails_in_subdir(&format!("{}/new", folder));
             total_emails += cur_count + new_count;
             unread_emails += new_count;
         }
-        
+
         TestMaildirStats {
             total_folders: folders.len(),
             total_emails,
@@ -708,7 +786,9 @@ CLICK HERE IMMEDIATELY to claim your prize:
     fn count_emails_in_subdir(&self, subdir: &str) -> usize {
         let path = self.root_path.join(subdir);
         if path.exists() && path.is_dir() {
-            fs::read_dir(path).map(|entries| entries.count()).unwrap_or(0)
+            fs::read_dir(path)
+                .map(|entries| entries.count())
+                .unwrap_or(0)
         } else {
             0
         }
@@ -741,12 +821,12 @@ mod tests {
     fn test_maildir_creation() {
         let test_maildir = TestMailDir::new();
         let stats = test_maildir.get_stats();
-        
+
         // Verify we have the expected folder structure
         assert!(stats.total_folders >= 10); // Should have at least the main folders
-        assert!(stats.total_emails > 15);   // Should have at least 15+ test emails
-        assert!(stats.unread_emails >= 2);  // Should have some unread emails
-        
+        assert!(stats.total_emails > 15); // Should have at least 15+ test emails
+        assert!(stats.unread_emails >= 2); // Should have some unread emails
+
         // Verify specific folders exist
         assert!(stats.folders.contains(&"INBOX".to_string()));
         assert!(stats.folders.contains(&"Sent".to_string()));
@@ -765,13 +845,13 @@ mod tests {
     #[test]
     fn test_folder_structure() {
         let test_maildir = TestMailDir::new();
-        
+
         // Verify maildir structure exists for INBOX
         let inbox_path = test_maildir.get_folder_path("INBOX");
         assert!(inbox_path.join("cur").exists());
         assert!(inbox_path.join("new").exists());
         assert!(inbox_path.join("tmp").exists());
-        
+
         // Verify Work subfolder structure
         let work_projects_path = test_maildir.get_folder_path("Work/Projects");
         assert!(work_projects_path.exists());
@@ -781,7 +861,7 @@ mod tests {
     #[test]
     fn test_custom_email_addition() {
         let test_maildir = TestMailDir::new();
-        
+
         // Add a custom email
         let custom_email = r#"From: test@example.com
 To: user@example.com
@@ -790,9 +870,9 @@ Date: Mon, 01 Jan 2024 12:00:00 +0000
 Message-ID: <test@example.com>
 
 This is a test email."#;
-        
+
         test_maildir.add_custom_email("INBOX", "test_email", custom_email);
-        
+
         // Verify it was added
         let new_count = test_maildir.get_email_count("INBOX");
         assert!(new_count >= 6); // Should now have one more email
@@ -801,7 +881,7 @@ This is a test email."#;
     #[test]
     fn test_unread_email_addition() {
         let test_maildir = TestMailDir::new();
-        
+
         // Add an unread email
         let unread_email = r#"From: urgent@example.com
 To: user@example.com
@@ -810,9 +890,9 @@ Date: Mon, 01 Jan 2024 12:00:00 +0000
 Message-ID: <urgent@example.com>
 
 This is an urgent email."#;
-        
+
         test_maildir.add_unread_email("INBOX", "urgent_email", unread_email);
-        
+
         // Verify the email was added to the 'new' folder
         let new_path = test_maildir.get_folder_path("INBOX").join("new");
         let unread_count = fs::read_dir(new_path).unwrap().count();

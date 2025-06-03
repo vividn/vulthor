@@ -3,6 +3,7 @@ mod config;
 mod email;
 mod input;
 mod maildir;
+mod theme;
 mod ui;
 mod web;
 
@@ -15,12 +16,12 @@ use config::{CliArgs, Config};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use email::EmailStore;
 use input::handle_input;
 use maildir::MaildirScanner;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     io,
     sync::{Arc, Mutex},

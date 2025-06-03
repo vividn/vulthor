@@ -43,7 +43,6 @@ impl Default for PaneVisibility {
 }
 
 impl PaneVisibility {
-
     /// Get available panes based on view mode
     pub fn get_available_panes(&self) -> Vec<ActivePane> {
         match self.view_mode {
@@ -185,7 +184,7 @@ impl App {
                 if let Some(remembered_index) = self.selection.remembered_email_index {
                     self.selection.email_index = remembered_index;
                     self.email_store.select_email(remembered_index);
-                    
+
                     // Reload the email content
                     if let Some(_email) = self.email_store.get_selected_email() {
                         // Email content will be loaded automatically by get_selected_email
@@ -235,8 +234,6 @@ impl App {
             ViewMode::FolderMessage => None, // Show welcome screen in folder view
         }
     }
-
-
 
     /// Auto-select INBOX folder on startup without loading messages (deferred until UI is ready)
     fn auto_select_inbox_without_loading(&mut self) {
@@ -303,10 +300,10 @@ impl App {
         if self.email_store.selected_email.is_some() {
             self.selection.remembered_email_index = Some(self.selection.email_index);
         }
-        
+
         // Deselect the email to show welcome screen
         self.email_store.selected_email = None;
-        
+
         self.pane_visibility.set_folder_message_mode();
         self.active_pane = ActivePane::Folders;
     }
@@ -315,12 +312,12 @@ impl App {
     pub fn switch_to_message_content_view(&mut self) {
         self.pane_visibility.set_message_content_mode();
         self.active_pane = ActivePane::List;
-        
+
         // Restore remembered email selection if available
         if let Some(remembered_index) = self.selection.remembered_email_index {
             self.selection.email_index = remembered_index;
             self.email_store.select_email(remembered_index);
-            
+
             // Reload the email content but stay in List pane
             if let Some(_email) = self.email_store.get_selected_email() {
                 // Email content will be loaded automatically by get_selected_email

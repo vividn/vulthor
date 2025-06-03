@@ -1,6 +1,8 @@
 use crate::app::{ActivePane, App, AppState, ViewMode};
 use crate::email::{Email, Folder};
+use crate::theme::VulthorTheme;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -8,7 +10,6 @@ use ratatui::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
-    Frame,
 };
 
 pub struct UI {
@@ -85,13 +86,13 @@ impl UI {
         let folder_items = Self::build_folder_list_static(root_folder, 0);
 
         let style = if is_active {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(VulthorTheme::ACCENT)
         } else {
             Style::default()
         };
 
         let border_style = if is_active {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(VulthorTheme::ACCENT)
         } else {
             Style::default()
         };
@@ -106,7 +107,8 @@ impl UI {
             .style(style)
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(VulthorTheme::SELECTION_BG)
+                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -144,13 +146,13 @@ impl UI {
         let email_items = Self::build_email_list_static(&folder_to_display.emails);
 
         let style = if is_active {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(VulthorTheme::CYAN)
         } else {
             Style::default()
         };
 
         let border_style = if is_active {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(VulthorTheme::CYAN)
         } else {
             Style::default()
         };
@@ -198,7 +200,8 @@ impl UI {
             .style(style)
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(VulthorTheme::SELECTION_BG)
+                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -211,7 +214,7 @@ impl UI {
 
     fn draw_content_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
         let border_style = if is_active {
-            Style::default().fg(Color::Green)
+            Style::default().fg(VulthorTheme::CYAN_LIGHT)
         } else {
             Style::default()
         };
@@ -299,7 +302,7 @@ impl UI {
 
             let paragraph = Paragraph::new(text)
                 .block(block)
-                .style(Style::default().fg(Color::DarkGray));
+                .style(Style::default().fg(VulthorTheme::GRAY_DARK));
 
             f.render_widget(paragraph, area);
         }
@@ -342,12 +345,13 @@ impl UI {
 
                 let block = Block::default()
                     .borders(Borders::ALL)
-                    .style(Style::default().fg(Color::Magenta))
+                    .style(Style::default().fg(VulthorTheme::ACCENT_LIGHT))
                     .title("Attachments - Enter: Open, Shift+Enter: Custom Command, Esc: Close");
 
                 let list = List::new(attachment_items).block(block).highlight_style(
                     Style::default()
-                        .bg(Color::DarkGray)
+                        .bg(VulthorTheme::SELECTION_BG)
+                        .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 );
 
@@ -374,22 +378,35 @@ impl UI {
         let help_text = match app.state {
             AppState::AttachmentView => "Enter: Open | Shift+Enter: Custom | Esc: Close",
             _ => match app.pane_visibility.view_mode {
-                ViewMode::FolderMessage => "j/k: Navigate | Tab: Switch Pane | l: Content View | M-a: Attachments | q: Quit",
-                ViewMode::MessageContent => "j/k: Navigate | Tab: Switch Pane | h: Folder View | M-a: Attachments | q: Quit",
+                ViewMode::FolderMessage => {
+                    "j/k: Navigate | Tab: Switch Pane | l: Content View | M-a: Attachments | q: Quit"
+                }
+                ViewMode::MessageContent => {
+                    "j/k: Navigate | Tab: Switch Pane | h: Folder View | M-a: Attachments | q: Quit"
+                }
             },
         };
 
-        status_text.push(Span::styled(help_text, Style::default().fg(Color::Gray)));
+        status_text.push(Span::styled(
+            help_text,
+            Style::default().fg(VulthorTheme::GRAY_DARK),
+        ));
 
         // Add status message if present
         if let Some(ref message) = app.status_message {
             status_text.push(Span::raw(" | "));
-            status_text.push(Span::styled(message, Style::default().fg(Color::Yellow)));
+            status_text.push(Span::styled(
+                message,
+                Style::default().fg(VulthorTheme::WARNING),
+            ));
         }
 
         let status_line = Line::from(status_text);
-        let status_paragraph =
-            Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray));
+        let status_paragraph = Paragraph::new(status_line).style(
+            Style::default()
+                .bg(VulthorTheme::STATUS_BG)
+                .fg(Color::White),
+        );
 
         f.render_widget(status_paragraph, status_area);
     }
@@ -420,7 +437,7 @@ impl UI {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .style(Style::default().fg(Color::Blue))
+            .style(Style::default().fg(VulthorTheme::CYAN))
             .title("Help");
 
         let paragraph = Paragraph::new(help_text)

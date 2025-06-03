@@ -123,7 +123,6 @@ impl MaildirScanner {
         Ok(())
     }
 
-
     /// Scan emails in a specific directory with optional limit (cur or new)
     fn scan_emails_in_folder_with_limit(
         &self,
@@ -191,7 +190,6 @@ impl MaildirScanner {
             })
             .unwrap_or(false)
     }
-
 }
 
 #[cfg(test)]

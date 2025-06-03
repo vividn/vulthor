@@ -65,7 +65,6 @@ impl Config {
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
-
 }
 
 #[cfg(test)]
@@ -77,7 +76,7 @@ mod tests {
     #[test]
     fn test_cli_args_default_values() {
         use clap::Parser;
-        
+
         let args = CliArgs::parse_from(&["vulthor"]);
         assert_eq!(args.port, 8080);
         assert!(args.config_path.is_none());
@@ -86,10 +85,10 @@ mod tests {
     #[test]
     fn test_cli_args_port_override() {
         use clap::Parser;
-        
+
         let args = CliArgs::parse_from(&["vulthor", "-p", "3000"]);
         assert_eq!(args.port, 3000);
-        
+
         let args = CliArgs::parse_from(&["vulthor", "--port", "9090"]);
         assert_eq!(args.port, 9090);
     }
@@ -97,10 +96,10 @@ mod tests {
     #[test]
     fn test_cli_args_config_path() {
         use clap::Parser;
-        
+
         let args = CliArgs::parse_from(&["vulthor", "-c", "/custom/config.toml"]);
         assert_eq!(args.config_path, Some(PathBuf::from("/custom/config.toml")));
-        
+
         let args = CliArgs::parse_from(&["vulthor", "--config", "/another/path.toml"]);
         assert_eq!(args.config_path, Some(PathBuf::from("/another/path.toml")));
     }
@@ -109,7 +108,7 @@ mod tests {
     fn test_config_default() {
         let config = Config::default();
         assert!(config.maildir_path.to_string_lossy().contains("Mail"));
-        
+
         // Should either be ~/Mail or ./Mail as fallback
         let path_str = config.maildir_path.to_string_lossy();
         assert!(path_str.ends_with("Mail"));
@@ -120,11 +119,11 @@ mod tests {
         let config = Config {
             maildir_path: PathBuf::from("/test/maildir"),
         };
-        
+
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("maildir_path"));
         assert!(toml_str.contains("/test/maildir"));
-        
+
         // Test deserialization
         let deserialized: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(deserialized.maildir_path, PathBuf::from("/test/maildir"));
@@ -134,18 +133,21 @@ mod tests {
     fn test_config_load_with_explicit_path_exists() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        
+
         let test_config = Config {
             maildir_path: PathBuf::from("/custom/mail/path"),
         };
-        
+
         // Write test config
         let contents = toml::to_string(&test_config).unwrap();
         fs::write(&config_path, contents).unwrap();
-        
+
         // Load it back
         let loaded_config = Config::load(Some(config_path)).unwrap();
-        assert_eq!(loaded_config.maildir_path, PathBuf::from("/custom/mail/path"));
+        assert_eq!(
+            loaded_config.maildir_path,
+            PathBuf::from("/custom/mail/path")
+        );
     }
 
     #[test]
@@ -153,7 +155,7 @@ mod tests {
         let non_existent_path = PathBuf::from("/definitely/does/not/exist/config.toml");
         let result = Config::load(Some(non_existent_path));
         assert!(result.is_err());
-        
+
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Config file not found"));
     }
@@ -163,7 +165,7 @@ mod tests {
         // When no explicit path and no config files exist
         let result = Config::load(None);
         assert!(result.is_ok());
-        
+
         let config = result.unwrap();
         // Should be default config
         assert!(config.maildir_path.to_string_lossy().contains("Mail"));
@@ -175,14 +177,14 @@ mod tests {
         // the ~/.config/vulthor/config.toml scenario
         let temp_dir = TempDir::new().unwrap();
         let config_content = r#"maildir_path = "/home/user/TestMail""#;
-        
+
         let config_file = temp_dir.path().join("config.toml");
         fs::write(&config_file, config_content).unwrap();
-        
+
         // Load from the file directly (simulating home config scenario)
         let result = Config::load_from_file(&config_file);
         assert!(result.is_ok());
-        
+
         let config = result.unwrap();
         assert_eq!(config.maildir_path, PathBuf::from("/home/user/TestMail"));
     }
@@ -191,27 +193,26 @@ mod tests {
     fn test_config_load_from_local_config() {
         let temp_dir = TempDir::new().unwrap();
         let config_content = r#"maildir_path = "/project/local/mail""#;
-        
+
         let config_file = temp_dir.path().join("vulthor.toml");
         fs::write(&config_file, config_content).unwrap();
-        
+
         // Load from the file directly (simulating local config scenario)
         let result = Config::load_from_file(&config_file);
         assert!(result.is_ok());
-        
+
         let config = result.unwrap();
         assert_eq!(config.maildir_path, PathBuf::from("/project/local/mail"));
     }
-
 
     #[test]
     fn test_config_load_from_file_invalid_toml() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("invalid.toml");
-        
+
         // Write invalid TOML content
         fs::write(&config_path, "invalid toml content [[[").unwrap();
-        
+
         let result = Config::load_from_file(&config_path);
         assert!(result.is_err());
     }
@@ -220,10 +221,10 @@ mod tests {
     fn test_config_load_from_file_missing_fields() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("incomplete.toml");
-        
+
         // Write TOML with missing required field
         fs::write(&config_path, r#"some_other_field = "value""#).unwrap();
-        
+
         let result = Config::load_from_file(&config_path);
         assert!(result.is_err());
     }
@@ -233,16 +234,19 @@ mod tests {
         let config = Config {
             maildir_path: PathBuf::from("./relative/mail/path"),
         };
-        
+
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        
+
         // Save and load relative path
         let contents = toml::to_string(&config).unwrap();
         fs::write(&config_path, contents).unwrap();
         let loaded_config = Config::load(Some(config_path)).unwrap();
-        
-        assert_eq!(loaded_config.maildir_path, PathBuf::from("./relative/mail/path"));
+
+        assert_eq!(
+            loaded_config.maildir_path,
+            PathBuf::from("./relative/mail/path")
+        );
     }
 
     #[test]
@@ -250,19 +254,18 @@ mod tests {
         let config = Config {
             maildir_path: PathBuf::from("/home/用户/邮件"),
         };
-        
+
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("unicode_config.toml");
-        
+
         // Save and load unicode path
         let contents = toml::to_string(&config).unwrap();
         let save_result = fs::write(&config_path, contents);
         assert!(save_result.is_ok());
-        
+
         let loaded_config = Config::load(Some(config_path)).unwrap();
         assert_eq!(loaded_config.maildir_path, PathBuf::from("/home/用户/邮件"));
     }
-
 
     #[test]
     fn test_config_error_handling_file_permission() {
@@ -270,12 +273,12 @@ mod tests {
         let config = Config {
             maildir_path: PathBuf::from("/test/path"),
         };
-        
+
         // Try to save to a path that should fail (like root directory on Unix)
         let invalid_path = PathBuf::from("/root/cannot_write_here.toml");
         let contents = toml::to_string(&config).unwrap();
         let result = fs::write(&invalid_path, contents);
-        
+
         // Should fail gracefully (unless running as root)
         if !std::env::var("USER").unwrap_or_default().eq("root") {
             assert!(result.is_err());

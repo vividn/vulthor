@@ -1,10 +1,10 @@
 use crate::app::SharedAppState;
 use axum::{
+    Router,
     extract::State,
     http::StatusCode,
     response::{Html, IntoResponse, Json, Response, Sse},
     routing::get,
-    Router,
 };
 use futures::stream::{self, Stream};
 use serde::Serialize;
@@ -12,7 +12,6 @@ use std::convert::Infallible;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
-
 
 #[derive(Serialize)]
 struct EmailData {
@@ -48,7 +47,8 @@ impl WebServer {
             .route("/", get(serve_email))
             .route("/health", get(health_check))
             .route("/styles.css", get(serve_styles))
-            .route("/vulthor_logo.png", get(serve_logo))
+            .route("/vulthor_bird.png", get(serve_bird))
+            .route("/vulthor_letters.png", get(serve_letters))
             .route("/events", get(email_events))
             .route("/api/current-email", get(get_current_email_json))
             .with_state(self.app_state.clone());
@@ -92,8 +92,13 @@ async fn serve_styles() -> Response {
     ([("content-type", "text/css")], css).into_response()
 }
 
-async fn serve_logo() -> Response {
-    let logo_bytes = include_bytes!("../assets/vulthor_logo.png");
+async fn serve_bird() -> Response {
+    let logo_bytes = include_bytes!("../assets/vulthor_bird.png");
+    ([("content-type", "image/png")], logo_bytes).into_response()
+}
+
+async fn serve_letters() -> Response {
+    let logo_bytes = include_bytes!("../assets/vulthor_letters.png");
     ([("content-type", "image/png")], logo_bytes).into_response()
 }
 
@@ -112,11 +117,8 @@ async fn email_events(
                     let folder_index = app.selection.folder_index;
                     let email_index = app.selection.email_index;
                     let has_email = app.get_current_email_for_web().is_some();
-                    
-                    format!(
-                        "{}:{}:{}",
-                        folder_index, email_index, has_email
-                    )
+
+                    format!("{}:{}:{}", folder_index, email_index, has_email)
                 };
 
                 if last_email_id.as_ref() != Some(&current_email_id) {
@@ -161,10 +163,7 @@ async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Resp
     let email_index = app.selection.email_index;
     let current_email = app.get_current_email_for_web();
     let has_email = current_email.is_some();
-    let email_id = format!(
-        "{}:{}:{}",
-        folder_index, email_index, has_email
-    );
+    let email_id = format!("{}:{}:{}", folder_index, email_index, has_email);
 
     if let Some(email) = current_email {
         let body_content = if let Some(html) = &email.body_html {
@@ -333,7 +332,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
             document.querySelector('.container').className = 'container welcome-view';
             document.querySelector('.container').innerHTML = `
                 <header class="welcome-header">
-                    <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+                    <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
                     <h1>Vulthor</h1>
                     <h2>TUI Email Client</h2>
                 </header>
@@ -375,6 +374,10 @@ fn generate_email_html(email: &crate::email::Email) -> String {
     </script>
 </head>
 <body>
+    <div class="app-banner">
+        <img src="/vulthor_bird.png" alt="Vulthor Bird" class="logo-bird">
+        <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
+    </div>
     <div class="container">
         <header class="email-header">
             <h1 class="email-subject">{}</h1>
@@ -463,6 +466,17 @@ fn generate_welcome_html() -> String {
             
             // Check if we need to create the email layout (transitioning from welcome screen)
             if (!document.querySelector('.email-header')) {
+                // Add banner if not present
+                if (!document.querySelector('.app-banner')) {
+                    const banner = document.createElement('div');
+                    banner.className = 'app-banner';
+                    banner.innerHTML = `
+                        <img src="/vulthor_bird.png" alt="Vulthor Bird" class="logo-bird">
+                        <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
+                    `;
+                    document.body.insertBefore(banner, document.body.firstChild);
+                }
+                
                 document.querySelector('.container').className = 'container email-view';
                 document.querySelector('.container').innerHTML = `
                     <header class="email-header">
@@ -519,12 +533,18 @@ fn generate_welcome_html() -> String {
         function showWelcomeMessage() {
             document.title = 'Vulthor - Email Client';
             
+            // Remove banner when showing welcome screen
+            const banner = document.querySelector('.app-banner');
+            if (banner) {
+                banner.remove();
+            }
+            
             // Check if we need to create the welcome layout (transitioning from email view)
             if (!document.querySelector('.welcome-header')) {
                 document.querySelector('.container').className = 'container welcome-view';
                 document.querySelector('.container').innerHTML = `
                     <header class="welcome-header">
-                        <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+                        <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
                         <h1>Vulthor</h1>
                         <h2>TUI Email Client</h2>
                     </header>
@@ -572,7 +592,7 @@ fn generate_welcome_html() -> String {
 <body>
     <div class="container">
         <header class="welcome-header">
-            <img src="/vulthor_logo.png" alt="Vulthor Logo" class="welcome-logo">
+            <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
             <h1>Vulthor</h1>
             <h2>TUI Email Client</h2>
         </header>
@@ -720,7 +740,6 @@ fn format_file_size(bytes: usize) -> String {
         format!("{:.1} {}", size, UNITS[unit_index])
     }
 }
-
 
 #[cfg(test)]
 mod tests {

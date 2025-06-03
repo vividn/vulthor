@@ -54,7 +54,6 @@ impl Email {
         }
     }
 
-
     /// Parse only headers from file (fast for folder loading)
     pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let content = fs::read(&self.file_path)?;
@@ -244,7 +243,6 @@ impl Folder {
             count => format!("{} ({})", self.name, count),
         }
     }
-
 }
 
 #[derive(Debug)]
@@ -285,14 +283,11 @@ impl EmailStore {
         folder
     }
 
-
     /// Navigate to a folder by following a path of indices
     pub fn enter_folder_by_path(&mut self, path: &[usize]) {
         self.current_folder.extend_from_slice(path);
         self.selected_email = None; // Reset email selection
     }
-
-
 
     /// Load emails for a folder at a specific path with visible row limit
     pub fn ensure_folder_at_path_loaded(
@@ -456,7 +451,7 @@ mod tests {
     fn test_email_new() {
         let email_path = PathBuf::from("/tmp/test_email");
         let email = Email::new(email_path.clone());
-        
+
         assert_eq!(email.file_path, email_path);
         assert_eq!(email.headers.subject, "");
         assert_eq!(email.headers.from, "");
@@ -472,27 +467,35 @@ mod tests {
     fn test_email_parse_headers_only() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
+
         // Find the first email file
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
-        assert!(!email_files.is_empty(), "No email files found in test INBOX");
-        
+
+        assert!(
+            !email_files.is_empty(),
+            "No email files found in test INBOX"
+        );
+
         let email_path = email_files[0].path();
         let mut email = Email::new(email_path);
-        
+
         // Parse headers only
         let result = email.parse_headers_only();
-        assert!(result.is_ok(), "Failed to parse email headers: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Failed to parse email headers: {:?}",
+            result
+        );
+
         // Verify headers were parsed
         assert!(!email.headers.subject.is_empty());
         assert!(!email.headers.from.is_empty());
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
-        
+
         // Body should still be empty since we only parsed headers
         assert_eq!(email.body_text, "");
     }
@@ -501,25 +504,26 @@ mod tests {
     fn test_email_parse_from_file_complete() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
+
         // Find the first email file
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
+
         let email_path = email_files[0].path();
         let mut email = Email::new(email_path);
-        
+
         // Parse complete email
         let result = email.parse_from_file();
         assert!(result.is_ok(), "Failed to parse email: {:?}", result);
-        
+
         // Verify headers were parsed
         assert!(!email.headers.subject.is_empty());
         assert!(!email.headers.from.is_empty());
         assert!(!email.headers.to.is_empty());
-        
+
         // Verify body was parsed
         assert!(!email.body_text.is_empty());
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
@@ -529,20 +533,21 @@ mod tests {
     fn test_email_ensure_fully_loaded() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
+
         let email_path = email_files[0].path();
         let mut email = Email::new(email_path);
-        
+
         // Start with headers only
         email.parse_headers_only().unwrap();
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
         assert_eq!(email.body_text, "");
-        
+
         // Ensure fully loaded
         let result = email.ensure_fully_loaded();
         assert!(result.is_ok());
@@ -554,13 +559,14 @@ mod tests {
     fn test_email_with_attachments() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
+
         // Find the attachment email (should be the 5th email based on our fixture)
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
+
         // Find the email with attachments by checking content
         let mut attachment_email = None;
         for file in email_files {
@@ -570,15 +576,18 @@ mod tests {
                 break;
             }
         }
-        
-        assert!(attachment_email.is_some(), "No attachment email found in test data");
-        
+
+        assert!(
+            attachment_email.is_some(),
+            "No attachment email found in test data"
+        );
+
         let mut email = Email::new(attachment_email.unwrap());
         email.parse_from_file().unwrap();
-        
+
         assert!(email.has_attachments());
         assert!(email.attachment_count() > 0);
-        
+
         // Verify attachment details
         let attachment = &email.attachments[0];
         assert!(!attachment.filename.is_empty());
@@ -590,13 +599,14 @@ mod tests {
     fn test_email_html_content() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
+
         // Find the newsletter email (contains HTML)
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
+
         let mut html_email = None;
         for file in email_files {
             let content = fs::read_to_string(file.path()).unwrap();
@@ -605,32 +615,32 @@ mod tests {
                 break;
             }
         }
-        
+
         if let Some(email_path) = html_email {
             let mut email = Email::new(email_path);
             email.parse_from_file().unwrap();
-            
+
             assert!(email.body_html.is_some());
             let html_content = email.body_html.as_ref().unwrap();
             assert!(html_content.contains("<html>") || html_content.contains("<h1>"));
         }
     }
 
-
     #[test]
     fn test_email_get_header_display() {
         let test_maildir = TestMailDir::new();
         let inbox_path = test_maildir.get_folder_path("INBOX").join("cur");
-        
-        let email_files: Vec<_> = fs::read_dir(&inbox_path).unwrap()
+
+        let email_files: Vec<_> = fs::read_dir(&inbox_path)
+            .unwrap()
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.path().is_file())
             .collect();
-        
+
         let email_path = email_files[0].path();
         let mut email = Email::new(email_path);
         email.parse_from_file().unwrap();
-        
+
         let header_display = email.get_header_display();
         assert!(header_display.contains("From:"));
         assert!(header_display.contains("To:"));
@@ -643,7 +653,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let folder_path = temp_dir.path().to_path_buf();
         let folder = Folder::new("Test Folder".to_string(), folder_path.clone());
-        
+
         assert_eq!(folder.name, "Test Folder");
         assert_eq!(folder.path, folder_path);
         assert_eq!(folder.emails.len(), 0);
@@ -657,12 +667,12 @@ mod tests {
     fn test_folder_add_email() {
         let temp_dir = TempDir::new().unwrap();
         let mut folder = Folder::new("Test".to_string(), temp_dir.path().to_path_buf());
-        
+
         let mut email = Email::new(PathBuf::from("/tmp/test"));
         email.is_unread = true;
-        
+
         folder.add_email(email);
-        
+
         assert_eq!(folder.emails.len(), 1);
         assert_eq!(folder.unread_count, 1);
         assert_eq!(folder.total_count, 1);
@@ -673,9 +683,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let mut parent_folder = Folder::new("Parent".to_string(), temp_dir.path().to_path_buf());
         let child_folder = Folder::new("Child".to_string(), temp_dir.path().join("child"));
-        
+
         parent_folder.add_subfolder(child_folder);
-        
+
         assert_eq!(parent_folder.subfolders.len(), 1);
         assert_eq!(parent_folder.subfolders[0].name, "Child");
     }
@@ -684,14 +694,23 @@ mod tests {
     fn test_folder_get_sorted_subfolders() {
         let temp_dir = TempDir::new().unwrap();
         let mut folder = Folder::new("Root".to_string(), temp_dir.path().to_path_buf());
-        
+
         // Add folders in non-alphabetical order
-        folder.add_subfolder(Folder::new("Zebra".to_string(), temp_dir.path().join("zebra")));
-        folder.add_subfolder(Folder::new("INBOX".to_string(), temp_dir.path().join("inbox")));
-        folder.add_subfolder(Folder::new("Alpha".to_string(), temp_dir.path().join("alpha")));
-        
+        folder.add_subfolder(Folder::new(
+            "Zebra".to_string(),
+            temp_dir.path().join("zebra"),
+        ));
+        folder.add_subfolder(Folder::new(
+            "INBOX".to_string(),
+            temp_dir.path().join("inbox"),
+        ));
+        folder.add_subfolder(Folder::new(
+            "Alpha".to_string(),
+            temp_dir.path().join("alpha"),
+        ));
+
         let sorted = folder.get_sorted_subfolders();
-        
+
         // INBOX should be first, then alphabetical
         assert_eq!(sorted[0].name, "INBOX");
         assert_eq!(sorted[1].name, "Alpha");
@@ -702,10 +721,10 @@ mod tests {
     fn test_folder_get_display_name() {
         let temp_dir = TempDir::new().unwrap();
         let mut folder = Folder::new("Test".to_string(), temp_dir.path().to_path_buf());
-        
+
         // No unread emails
         assert_eq!(folder.get_display_name(), "Test");
-        
+
         // With unread emails
         folder.unread_count = 5;
         assert_eq!(folder.get_display_name(), "Test (5)");
@@ -715,7 +734,7 @@ mod tests {
     fn test_email_store_creation() {
         let temp_dir = TempDir::new().unwrap();
         let store = EmailStore::new(temp_dir.path().to_path_buf());
-        
+
         assert_eq!(store.root_folder.name, "Mail");
         assert_eq!(store.root_folder.path, temp_dir.path());
         assert!(store.current_folder.is_empty());
@@ -726,17 +745,17 @@ mod tests {
     fn test_email_store_navigation() {
         let test_maildir = TestMailDir::new();
         let mut store = EmailStore::new(test_maildir.root_path.clone());
-        
+
         // Set up root folder with test structure
         let scanner = crate::maildir::MaildirScanner::new(test_maildir.root_path.clone());
         store.root_folder = scanner.scan().unwrap();
-        
+
         // Test entering a folder
         assert!(store.current_folder.is_empty());
         store.enter_folder_by_path(&[0]); // Enter first subfolder
         assert_eq!(store.current_folder.len(), 1);
         assert_eq!(store.current_folder[0], 0);
-        
+
         // Test exiting folder
         store.exit_folder();
         assert!(store.current_folder.is_empty());
@@ -746,15 +765,15 @@ mod tests {
     fn test_email_store_get_folder_path() {
         let test_maildir = TestMailDir::new();
         let mut store = EmailStore::new(test_maildir.root_path.clone());
-        
+
         // Set up root folder with test structure
         let scanner = crate::maildir::MaildirScanner::new(test_maildir.root_path.clone());
         store.root_folder = scanner.scan().unwrap();
-        
+
         // Test root path
         let path = store.get_folder_path();
         assert_eq!(path, "Mail");
-        
+
         // Test with navigation - enter first folder
         if !store.root_folder.subfolders.is_empty() {
             store.enter_folder_by_path(&[0]);
@@ -767,24 +786,26 @@ mod tests {
     fn test_email_store_email_selection() {
         let test_maildir = TestMailDir::new();
         let mut store = EmailStore::new(test_maildir.root_path.clone());
-        
+
         // Set up root folder with test structure
         let scanner = crate::maildir::MaildirScanner::new(test_maildir.root_path.clone());
         store.root_folder = scanner.scan().unwrap();
-        
+
         // Navigate to INBOX and load emails
         store.enter_folder_by_path(&[0]); // Enter first folder (should be INBOX)
-        scanner.load_folder_emails(store.get_current_folder_mut()).unwrap();
-        
+        scanner
+            .load_folder_emails(store.get_current_folder_mut())
+            .unwrap();
+
         // Initially no email selected
         assert!(store.selected_email.is_none());
-        
+
         // Select an email (if there are emails in the folder)
         let current_folder = store.get_current_folder();
         if !current_folder.emails.is_empty() {
             store.select_email(0);
             assert_eq!(store.selected_email, Some(0));
-            
+
             // Test invalid selection
             store.select_email(999);
             assert_eq!(store.selected_email, Some(0)); // Should remain unchanged
@@ -796,13 +817,13 @@ mod tests {
         // Test email with missing headers
         let temp_dir = TempDir::new().unwrap();
         let email_path = temp_dir.path().join("malformed_email");
-        
+
         let malformed_content = "This is not a proper email format\nNo headers here";
         fs::write(&email_path, malformed_content).unwrap();
-        
+
         let mut email = Email::new(email_path);
         let result = email.parse_from_file();
-        
+
         // Should handle gracefully
         assert!(result.is_ok());
     }
@@ -811,7 +832,7 @@ mod tests {
     fn test_email_with_unicode_content() {
         let temp_dir = TempDir::new().unwrap();
         let email_path = temp_dir.path().join("unicode_email");
-        
+
         let unicode_content = r#"From: sender@example.com
 To: recipient@example.com
 Subject: Unicode Test 🚀
@@ -820,12 +841,12 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 
 Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
-        
+
         fs::write(&email_path, unicode_content).unwrap();
-        
+
         let mut email = Email::new(email_path);
         let result = email.parse_from_file();
-        
+
         assert!(result.is_ok());
         assert!(email.headers.subject.contains("🚀"));
         assert!(email.body_text.contains("世界"));
