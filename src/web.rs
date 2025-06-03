@@ -48,6 +48,7 @@ impl WebServer {
             .route("/health", get(health_check))
             .route("/styles.css", get(serve_styles))
             .route("/vulthor_bird.png", get(serve_bird))
+            .route("/vulthor_head.png", get(serve_head))
             .route("/vulthor_letters.png", get(serve_letters))
             .route("/events", get(email_events))
             .route("/api/current-email", get(get_current_email_json))
@@ -94,6 +95,11 @@ async fn serve_styles() -> Response {
 
 async fn serve_bird() -> Response {
     let logo_bytes = include_bytes!("../assets/vulthor_bird.png");
+    ([("content-type", "image/png")], logo_bytes).into_response()
+}
+
+async fn serve_head() -> Response {
+    let logo_bytes = include_bytes!("../assets/vulthor_head.png");
     ([("content-type", "image/png")], logo_bytes).into_response()
 }
 
@@ -375,7 +381,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
 </head>
 <body>
     <div class="app-banner">
-        <img src="/vulthor_bird.png" alt="Vulthor Bird" class="logo-bird">
+        <img src="/vulthor_head.png" alt="Vulthor Bird" class="logo-bird">
         <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
     </div>
     <div class="container">
@@ -471,7 +477,7 @@ fn generate_welcome_html() -> String {
                     const banner = document.createElement('div');
                     banner.className = 'app-banner';
                     banner.innerHTML = `
-                        <img src="/vulthor_bird.png" alt="Vulthor Bird" class="logo-bird">
+                        <img src="/vulthor_head.png" alt="Vulthor Bird" class="logo-bird">
                         <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
                     `;
                     document.body.insertBefore(banner, document.body.firstChild);
