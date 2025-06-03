@@ -77,12 +77,29 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             false
         }
         KeyCode::Char('l') if key.modifiers.is_empty() => {
-            // If we're in folder pane and at the root level, enter the selected folder
-            // Otherwise, do view navigation
-            if matches!(app.active_pane, ActivePane::Folders)
-                && app.email_store.current_folder.is_empty()
-            {
-                handle_folder_selection_and_switch_view(app);
+            // If we're in folder pane, check if we're navigating or entering a folder
+            if matches!(app.active_pane, ActivePane::Folders) {
+                // Get the currently selected folder path
+                let root_folder = &app.email_store.root_folder;
+                let selected_folder_path = get_folder_path_from_display_index(
+                    root_folder,
+                    app.selection.folder_index,
+                );
+                
+                // If we're already in the selected folder, just do view navigation
+                // Otherwise, enter the folder (like Enter key)
+                if let Some(path) = selected_folder_path {
+                    if path == app.email_store.current_folder {
+                        // Already in this folder, just navigate views
+                        app.next_view();
+                    } else {
+                        // Different folder selected, enter it
+                        handle_folder_selection_and_switch_view(app);
+                    }
+                } else {
+                    // No valid folder selected, just navigate views
+                    app.next_view();
+                }
             } else {
                 app.next_view();
             }
