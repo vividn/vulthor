@@ -80,7 +80,9 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('l') if key.modifiers.is_empty() => {
             // If we're in folder pane and at the root level, enter the selected folder
             // Otherwise, do view navigation
-            if matches!(app.active_pane, ActivePane::Folders) && app.email_store.current_folder.is_empty() {
+            if matches!(app.active_pane, ActivePane::Folders)
+                && app.email_store.current_folder.is_empty()
+            {
                 handle_folder_selection_and_switch_view(app);
             } else {
                 app.next_view();
@@ -562,7 +564,7 @@ mod tests {
 
         // Test toggle content with Alt+c
         assert!(!app.content_pane_hidden);
-        
+
         let key_event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
         handle_key_event(&mut app, key_event);
 

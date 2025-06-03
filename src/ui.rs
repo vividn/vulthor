@@ -483,11 +483,20 @@ impl UI {
 
         // Add key bindings help
         let help_text = match app.state {
-            AppState::AttachmentView => "Enter: Open | Shift+Enter: Custom | Esc: Close".to_string(),
+            AppState::AttachmentView => {
+                "Enter: Open | Shift+Enter: Custom | Esc: Close".to_string()
+            }
             _ => {
                 let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
-                let content_toggle = if app.content_pane_hidden { "" } else { " | M-c: Hide Content" };
-                format!("{}{} | M-a: Attachments | q: Quit", base_help, content_toggle)
+                let content_toggle = if app.content_pane_hidden {
+                    ""
+                } else {
+                    " | M-c: Hide Content"
+                };
+                format!(
+                    "{}{} | M-a: Attachments | q: Quit",
+                    base_help, content_toggle
+                )
             }
         };
 

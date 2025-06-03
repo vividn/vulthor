@@ -161,14 +161,18 @@ impl App {
             }
             AppState::EmailList => {
                 // When entering email list, ensure we're in the list pane
-                let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
+                let available_panes = self
+                    .current_view
+                    .get_available_panes(self.content_pane_hidden);
                 if available_panes.contains(&ActivePane::List) {
                     self.active_pane = ActivePane::List;
                 }
             }
             AppState::EmailContent => {
                 // When viewing email content, switch to content pane if visible
-                let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
+                let available_panes = self
+                    .current_view
+                    .get_available_panes(self.content_pane_hidden);
                 if available_panes.contains(&ActivePane::Content) {
                     self.active_pane = ActivePane::Content;
                 }
@@ -180,7 +184,9 @@ impl App {
 
     /// Navigate between panes using Tab
     pub fn switch_pane(&mut self, direction: PaneSwitchDirection) {
-        let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
+        let available_panes = self
+            .current_view
+            .get_available_panes(self.content_pane_hidden);
         if available_panes.is_empty() {
             return;
         }
@@ -221,16 +227,23 @@ impl App {
                 self.email_store.selected_email = None;
             }
             (ActivePane::Folders, ActivePane::List) => {
-                // Moving from Folders to List - restore remembered selection
+                // Moving from Folders to List - restore remembered selection or select first email
                 if let Some(remembered_index) = self.selection.remembered_email_index {
                     self.selection.email_index = remembered_index;
                     self.email_store.select_email(remembered_index);
-
-                    // Reload the email content
-                    if let Some(_email) = self.email_store.get_selected_email() {
-                        // Email content will be loaded automatically by get_selected_email
-                        self.set_state(AppState::EmailContent);
+                } else {
+                    // If no remembered selection, select the first email if available
+                    let current_folder = self.email_store.get_current_folder();
+                    if !current_folder.emails.is_empty() {
+                        self.selection.email_index = 0;
+                        self.email_store.select_email(0);
                     }
+                }
+
+                // Reload the email content if an email is now selected
+                if let Some(_email) = self.email_store.get_selected_email() {
+                    // Email content will be loaded automatically by get_selected_email
+                    self.set_state(AppState::EmailContent);
                 }
             }
             _ => {}
@@ -245,26 +258,35 @@ impl App {
             // Handle memory logic when transitioning between views
             match (&self.current_view, &new_view) {
                 (View::FolderMessages, View::MessagesContent) => {
-                    // Moving from folder view to messages view - restore remembered selection
+                    // Moving from folder view to messages view - restore remembered selection or select first email
                     if let Some(remembered_index) = self.selection.remembered_email_index {
                         self.selection.email_index = remembered_index;
                         self.email_store.select_email(remembered_index);
-
-                        // Reload the email content
-                        if let Some(_email) = self.email_store.get_selected_email() {
-                            self.set_state(AppState::EmailContent);
+                    } else {
+                        // If no remembered selection, select the first email if available
+                        let current_folder = self.email_store.get_current_folder();
+                        if !current_folder.emails.is_empty() {
+                            self.selection.email_index = 0;
+                            self.email_store.select_email(0);
                         }
+                    }
+
+                    // Reload the email content if an email is now selected
+                    if let Some(_email) = self.email_store.get_selected_email() {
+                        self.set_state(AppState::EmailContent);
                     }
                 }
                 _ => {}
             }
-            
+
             self.current_view = new_view;
-            self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+            self.active_pane = self
+                .current_view
+                .get_default_active_pane(self.content_pane_hidden);
         }
     }
 
-    /// Navigate to previous view (h key) 
+    /// Navigate to previous view (h key)
     pub fn prev_view(&mut self) {
         if let Some(new_view) = self.current_view.prev_view(self.content_pane_hidden) {
             // Handle memory logic when transitioning between views
@@ -279,16 +301,18 @@ impl App {
                 }
                 _ => {}
             }
-            
+
             self.current_view = new_view;
-            self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+            self.active_pane = self
+                .current_view
+                .get_default_active_pane(self.content_pane_hidden);
         }
     }
 
     /// Toggle content pane visibility (M-c key)
     pub fn toggle_content_pane(&mut self) {
         self.content_pane_hidden = !self.content_pane_hidden;
-        
+
         // Adjust current view based on new content visibility
         if self.content_pane_hidden {
             // Content is now hidden - switch to appropriate hidden-content view
@@ -325,9 +349,11 @@ impl App {
                 }
             }
         }
-        
+
         // Reset to appropriate pane for the new view
-        self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+        self.active_pane = self
+            .current_view
+            .get_default_active_pane(self.content_pane_hidden);
     }
 
     /// Set status message
@@ -358,12 +384,17 @@ impl App {
     }
 
     /// Get the currently selected email for web serving
-    /// Returns None when in folder/message view to show welcome screen
-    pub fn get_current_email_for_web(&mut self) -> Option<&crate::email::Email> {
-        // Only show email content when in views that include content
-        match self.current_view {
-            View::MessagesContent | View::Content => self.email_store.get_selected_email(),
-            _ => None, // Show welcome screen in other views
+    /// Returns None when active pane is Folders to show welcome screen
+    pub fn get_current_email_for_web(&self) -> Option<&crate::email::Email> {
+        // Show welcome screen when user is actively browsing folders
+        // Only serve emails when focused on email-related panes
+        match self.active_pane {
+            ActivePane::Folders => None, // Show welcome screen when browsing folders
+            ActivePane::List | ActivePane::Content | ActivePane::Attachments => {
+                // Serve email when focused on email-related panes
+                // Use headers-only version for web serving (more efficient and reliable)
+                self.email_store.get_selected_email_headers()
+            }
         }
     }
 
@@ -426,7 +457,6 @@ impl App {
         }
     }
 
-
     /// Get the currently selected folder in folder view mode
     pub fn get_selected_folder(&self) -> Option<&crate::email::Folder> {
         // Get the folder path for the currently selected folder
@@ -458,3 +488,136 @@ pub enum ScrollDirection {
 
 /// Thread-safe wrapper for sharing app state with web server
 pub type SharedAppState = Arc<Mutex<App>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::email::{Email, EmailStore, Folder};
+    use std::path::PathBuf;
+
+    fn create_test_app_with_emails() -> App {
+        let mut email_store = EmailStore::new(PathBuf::from("/tmp"));
+
+        // Add a test folder with some emails
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/email1")));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/email2")));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/email3")));
+        inbox.is_loaded = true;
+
+        email_store.root_folder.add_subfolder(inbox);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(email_store, scanner);
+        
+        // Navigate into the INBOX folder so emails are available
+        app.email_store.current_folder = vec![0]; // Navigate to INBOX folder (first subfolder)
+        
+        // Select first email
+        app.email_store.select_email(0);
+        
+        app
+    }
+
+    #[test]
+    fn test_web_serving_behavior_based_on_active_pane() {
+        let mut app = create_test_app_with_emails();
+
+        // Test: When active pane is Folders, should return None (welcome screen)
+        app.active_pane = ActivePane::Folders;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should show welcome screen when active pane is Folders");
+
+        // Test: When active pane is List, should return selected email
+        app.active_pane = ActivePane::List;
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email when active pane is List");
+
+        // Test: When active pane is Content, should return selected email
+        app.active_pane = ActivePane::Content;
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email when active pane is Content");
+
+        // Test: When active pane is Attachments, should return selected email
+        app.active_pane = ActivePane::Attachments;
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email when active pane is Attachments");
+    }
+
+    #[test]
+    fn test_pane_switching_preserves_email_serving() {
+        let mut app = create_test_app_with_emails();
+
+        // Start in Folders pane (welcome screen)
+        app.active_pane = ActivePane::Folders;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should show welcome screen initially in Folders pane");
+
+        // Switch to List pane - email should be immediately available
+        app.switch_pane(PaneSwitchDirection::Right);
+        assert_eq!(app.active_pane, ActivePane::List, 
+                  "Should be in List pane after switching from Folders");
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email immediately when switching to List pane");
+
+        // Switch back to Folders pane - should show welcome screen
+        app.switch_pane(PaneSwitchDirection::Left);
+        assert_eq!(app.active_pane, ActivePane::Folders, 
+                  "Should be back in Folders pane");
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should show welcome screen when switching back to Folders pane");
+    }
+
+    #[test]
+    fn test_email_serving_with_no_selected_email() {
+        let email_store = EmailStore::new(PathBuf::from("/tmp"));
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(email_store, scanner);
+
+        // Test all panes when no email is selected
+        app.active_pane = ActivePane::Folders;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should return None in Folders pane with no selected email");
+
+        app.active_pane = ActivePane::List;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should return None in List pane with no selected email");
+
+        app.active_pane = ActivePane::Content;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should return None in Content pane with no selected email");
+
+        app.active_pane = ActivePane::Attachments;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should return None in Attachments pane with no selected email");
+    }
+
+    #[test]
+    fn test_view_transitions_maintain_correct_web_serving() {
+        let mut app = create_test_app_with_emails();
+
+        // Start in FolderMessages view with Folders active (welcome screen)
+        app.current_view = View::FolderMessages;
+        app.active_pane = ActivePane::Folders;
+        assert!(app.get_current_email_for_web().is_none(), 
+                "Should show welcome screen in FolderMessages view with Folders active");
+
+        // Switch to List pane in same view - should serve email
+        app.active_pane = ActivePane::List;
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email in FolderMessages view with List active");
+
+        // Navigate to MessagesContent view - should still serve email
+        app.next_view();
+        assert_eq!(app.current_view, View::MessagesContent);
+        // Active pane should now be List (default for MessagesContent)
+        assert_eq!(app.active_pane, ActivePane::List);
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email in MessagesContent view");
+
+        // Switch to Content pane - should still serve email
+        app.active_pane = ActivePane::Content;
+        assert!(app.get_current_email_for_web().is_some(), 
+                "Should serve email in Content pane");
+    }
+}

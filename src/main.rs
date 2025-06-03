@@ -10,7 +10,6 @@ mod web;
 #[cfg(test)]
 mod test_fixtures;
 
-
 use app::{App, AppState, SharedAppState};
 use clap::Parser;
 use config::{CliArgs, Config};
