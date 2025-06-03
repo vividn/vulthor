@@ -13,57 +13,98 @@ pub enum AppState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ViewMode {
-    FolderMessage,  // Show folders and messages (2-panel view)
-    MessageContent, // Show messages and content (2-panel view)
+pub enum View {
+    FolderMessages,      // [*Folder, Messages]
+    MessagesContent,     // [*Messages, Content]
+    Content,             // [*Content]
+    Messages,            // [*Messages] (when content hidden)
+    MessagesAttachments, // [Messages, *Attachments] (when content hidden)
+}
+
+impl View {
+    /// Get the available panes for this view
+    pub fn get_available_panes(&self, content_hidden: bool) -> Vec<ActivePane> {
+        if content_hidden {
+            match self {
+                View::FolderMessages => vec![ActivePane::Folders, ActivePane::List],
+                View::Messages => vec![ActivePane::List],
+                View::MessagesAttachments => vec![ActivePane::List, ActivePane::Attachments],
+                _ => vec![ActivePane::List], // Fallback for invalid states
+            }
+        } else {
+            match self {
+                View::FolderMessages => vec![ActivePane::Folders, ActivePane::List],
+                View::MessagesContent => vec![ActivePane::List, ActivePane::Content],
+                View::Content => vec![ActivePane::Content],
+                _ => vec![ActivePane::List], // Fallback for invalid states
+            }
+        }
+    }
+
+    /// Get the default active pane for this view
+    pub fn get_default_active_pane(&self, content_hidden: bool) -> ActivePane {
+        if content_hidden {
+            match self {
+                View::FolderMessages => ActivePane::Folders,
+                View::Messages => ActivePane::List,
+                View::MessagesAttachments => ActivePane::Attachments,
+                _ => ActivePane::List,
+            }
+        } else {
+            match self {
+                View::FolderMessages => ActivePane::Folders,
+                View::MessagesContent => ActivePane::List,
+                View::Content => ActivePane::Content,
+                _ => ActivePane::List,
+            }
+        }
+    }
+
+    /// Get the next view when pressing 'l' (right)
+    pub fn next_view(&self, content_hidden: bool) -> Option<View> {
+        if content_hidden {
+            match self {
+                View::FolderMessages => Some(View::Messages),
+                View::Messages => Some(View::MessagesAttachments),
+                View::MessagesAttachments => None, // No wraparound
+                _ => None,
+            }
+        } else {
+            match self {
+                View::FolderMessages => Some(View::MessagesContent),
+                View::MessagesContent => Some(View::Content),
+                View::Content => None, // No wraparound
+                _ => None,
+            }
+        }
+    }
+
+    /// Get the previous view when pressing 'h' (left)
+    pub fn prev_view(&self, content_hidden: bool) -> Option<View> {
+        if content_hidden {
+            match self {
+                View::MessagesAttachments => Some(View::Messages),
+                View::Messages => Some(View::FolderMessages),
+                View::FolderMessages => None, // No wraparound
+                _ => None,
+            }
+        } else {
+            match self {
+                View::Content => Some(View::MessagesContent),
+                View::MessagesContent => Some(View::FolderMessages),
+                View::FolderMessages => None, // No wraparound
+                _ => None,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActivePane {
-    Folders, // Left pane
-    List,    // Center pane
-    Content, // Right pane
-}
-
-#[derive(Debug)]
-pub struct PaneVisibility {
-    pub folders_visible: bool,
-    pub content_visible: bool,
-    pub view_mode: ViewMode,
-}
-
-impl Default for PaneVisibility {
-    fn default() -> Self {
-        Self {
-            folders_visible: true,
-            content_visible: false,
-            view_mode: ViewMode::FolderMessage,
-        }
-    }
-}
-
-impl PaneVisibility {
-    /// Get available panes based on view mode
-    pub fn get_available_panes(&self) -> Vec<ActivePane> {
-        match self.view_mode {
-            ViewMode::FolderMessage => vec![ActivePane::Folders, ActivePane::List],
-            ViewMode::MessageContent => vec![ActivePane::List, ActivePane::Content],
-        }
-    }
-
-    /// Switch to folder/message view mode
-    pub fn set_folder_message_mode(&mut self) {
-        self.view_mode = ViewMode::FolderMessage;
-        self.folders_visible = true;
-        self.content_visible = false;
-    }
-
-    /// Switch to message/content view mode
-    pub fn set_message_content_mode(&mut self) {
-        self.view_mode = ViewMode::MessageContent;
-        self.folders_visible = false;
-        self.content_visible = true;
-    }
+    Folders,     // Left pane
+    List,        // Center pane (messages)
+    Content,     // Right pane
+    Attachments, // Attachment pane
 }
 
 #[derive(Debug, Default)]
@@ -79,7 +120,8 @@ pub struct SelectionState {
 pub struct App {
     pub state: AppState,
     pub active_pane: ActivePane,
-    pub pane_visibility: PaneVisibility,
+    pub current_view: View,
+    pub content_pane_hidden: bool,
     pub selection: SelectionState,
     pub email_store: EmailStore,
     pub scanner: MaildirScanner,
@@ -94,7 +136,8 @@ impl App {
         let mut app = Self {
             state: AppState::FolderView,
             active_pane: ActivePane::Folders,
-            pane_visibility: PaneVisibility::default(),
+            current_view: View::FolderMessages,
+            content_pane_hidden: false,
             selection: SelectionState::default(),
             email_store,
             scanner,
@@ -118,17 +161,15 @@ impl App {
             }
             AppState::EmailList => {
                 // When entering email list, ensure we're in the list pane
-                if self
-                    .pane_visibility
-                    .get_available_panes()
-                    .contains(&ActivePane::List)
-                {
+                let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
+                if available_panes.contains(&ActivePane::List) {
                     self.active_pane = ActivePane::List;
                 }
             }
             AppState::EmailContent => {
                 // When viewing email content, switch to content pane if visible
-                if self.pane_visibility.content_visible {
+                let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
+                if available_panes.contains(&ActivePane::Content) {
                     self.active_pane = ActivePane::Content;
                 }
             }
@@ -137,9 +178,9 @@ impl App {
         self.state = new_state;
     }
 
-    /// Navigate between panes
+    /// Navigate between panes using Tab
     pub fn switch_pane(&mut self, direction: PaneSwitchDirection) {
-        let available_panes = self.pane_visibility.get_available_panes();
+        let available_panes = self.current_view.get_available_panes(self.content_pane_hidden);
         if available_panes.is_empty() {
             return;
         }
@@ -198,6 +239,97 @@ impl App {
         self.active_pane = new_pane;
     }
 
+    /// Navigate to next view (l key)
+    pub fn next_view(&mut self) {
+        if let Some(new_view) = self.current_view.next_view(self.content_pane_hidden) {
+            // Handle memory logic when transitioning between views
+            match (&self.current_view, &new_view) {
+                (View::FolderMessages, View::MessagesContent) => {
+                    // Moving from folder view to messages view - restore remembered selection
+                    if let Some(remembered_index) = self.selection.remembered_email_index {
+                        self.selection.email_index = remembered_index;
+                        self.email_store.select_email(remembered_index);
+
+                        // Reload the email content
+                        if let Some(_email) = self.email_store.get_selected_email() {
+                            self.set_state(AppState::EmailContent);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            
+            self.current_view = new_view;
+            self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+        }
+    }
+
+    /// Navigate to previous view (h key) 
+    pub fn prev_view(&mut self) {
+        if let Some(new_view) = self.current_view.prev_view(self.content_pane_hidden) {
+            // Handle memory logic when transitioning between views
+            match (&self.current_view, &new_view) {
+                (View::MessagesContent, View::FolderMessages) => {
+                    // Moving from messages view to folder view - remember current selection
+                    if self.email_store.selected_email.is_some() {
+                        self.selection.remembered_email_index = Some(self.selection.email_index);
+                    }
+                    // Deselect the email to show welcome screen
+                    self.email_store.selected_email = None;
+                }
+                _ => {}
+            }
+            
+            self.current_view = new_view;
+            self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+        }
+    }
+
+    /// Toggle content pane visibility (M-c key)
+    pub fn toggle_content_pane(&mut self) {
+        self.content_pane_hidden = !self.content_pane_hidden;
+        
+        // Adjust current view based on new content visibility
+        if self.content_pane_hidden {
+            // Content is now hidden - switch to appropriate hidden-content view
+            match self.current_view {
+                View::MessagesContent => {
+                    self.current_view = View::Messages;
+                }
+                View::Content => {
+                    self.current_view = View::Messages;
+                }
+                View::FolderMessages => {
+                    // Already compatible with hidden content
+                }
+                _ => {
+                    // For other views, default to Messages
+                    self.current_view = View::Messages;
+                }
+            }
+        } else {
+            // Content is now shown - switch to appropriate full-content view
+            match self.current_view {
+                View::Messages => {
+                    self.current_view = View::MessagesContent;
+                }
+                View::MessagesAttachments => {
+                    self.current_view = View::MessagesContent;
+                }
+                View::FolderMessages => {
+                    // Already compatible with shown content
+                }
+                _ => {
+                    // For other views, default to MessagesContent
+                    self.current_view = View::MessagesContent;
+                }
+            }
+        }
+        
+        // Reset to appropriate pane for the new view
+        self.active_pane = self.current_view.get_default_active_pane(self.content_pane_hidden);
+    }
+
     /// Set status message
     pub fn set_status(&mut self, message: String) {
         self.status_message = Some(message);
@@ -228,10 +360,10 @@ impl App {
     /// Get the currently selected email for web serving
     /// Returns None when in folder/message view to show welcome screen
     pub fn get_current_email_for_web(&mut self) -> Option<&crate::email::Email> {
-        // Only show email content when in message/content view mode
-        match self.pane_visibility.view_mode {
-            ViewMode::MessageContent => self.email_store.get_selected_email(),
-            ViewMode::FolderMessage => None, // Show welcome screen in folder view
+        // Only show email content when in views that include content
+        match self.current_view {
+            View::MessagesContent | View::Content => self.email_store.get_selected_email(),
+            _ => None, // Show welcome screen in other views
         }
     }
 
@@ -294,38 +426,6 @@ impl App {
         }
     }
 
-    /// Switch to folder/message view (h key)
-    pub fn switch_to_folder_message_view(&mut self) {
-        // Remember current email selection before switching
-        if self.email_store.selected_email.is_some() {
-            self.selection.remembered_email_index = Some(self.selection.email_index);
-        }
-
-        // Deselect the email to show welcome screen
-        self.email_store.selected_email = None;
-
-        self.pane_visibility.set_folder_message_mode();
-        self.active_pane = ActivePane::Folders;
-    }
-
-    /// Switch to message/content view (l key)
-    pub fn switch_to_message_content_view(&mut self) {
-        self.pane_visibility.set_message_content_mode();
-        self.active_pane = ActivePane::List;
-
-        // Restore remembered email selection if available
-        if let Some(remembered_index) = self.selection.remembered_email_index {
-            self.selection.email_index = remembered_index;
-            self.email_store.select_email(remembered_index);
-
-            // Reload the email content but stay in List pane
-            if let Some(_email) = self.email_store.get_selected_email() {
-                // Email content will be loaded automatically by get_selected_email
-                // Set the state but don't let it change the active pane
-                self.state = AppState::EmailContent;
-            }
-        }
-    }
 
     /// Get the currently selected folder in folder view mode
     pub fn get_selected_folder(&self) -> Option<&crate::email::Folder> {

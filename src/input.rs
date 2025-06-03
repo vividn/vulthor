@@ -1,4 +1,4 @@
-use crate::app::{ActivePane, App, AppState, PaneSwitchDirection, ScrollDirection};
+use crate::app::{ActivePane, App, AppState, PaneSwitchDirection, ScrollDirection, View};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 pub fn handle_input(app: &mut App, event: Event) -> bool {
@@ -72,28 +72,25 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             false
         }
 
-        // View mode switching
+        // View navigation with h/l keys
         KeyCode::Char('h') if key.modifiers.is_empty() => {
-            app.switch_to_folder_message_view();
+            app.prev_view();
             false
         }
         KeyCode::Char('l') if key.modifiers.is_empty() => {
-            // If we're in folder pane, check if we're already in a folder or need to enter one
-            if matches!(app.active_pane, ActivePane::Folders) {
+            // If we're in folder pane and at the root level, enter the selected folder
+            // Otherwise, do view navigation
+            if matches!(app.active_pane, ActivePane::Folders) && app.email_store.current_folder.is_empty() {
                 handle_folder_selection_and_switch_view(app);
             } else {
-                app.switch_to_message_content_view();
+                app.next_view();
             }
             false
         }
 
-        // Legacy pane visibility (keeping for compatibility)
-        KeyCode::Char('e') if key.modifiers == KeyModifiers::ALT => {
-            app.switch_to_folder_message_view();
-            false
-        }
+        // Content pane toggle
         KeyCode::Char('c') if key.modifiers == KeyModifiers::ALT => {
-            app.switch_to_message_content_view();
+            app.toggle_content_pane();
             false
         }
 
@@ -239,6 +236,23 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
                 }
             }
         }
+        ActivePane::Attachments => {
+            // Navigate attachments list
+            match direction {
+                NavigationDirection::Down => {
+                    if let Some(email) = app.email_store.get_selected_email() {
+                        if app.selection.attachment_index + 1 < email.attachments.len() {
+                            app.selection.attachment_index += 1;
+                        }
+                    }
+                }
+                NavigationDirection::Up => {
+                    if app.selection.attachment_index > 0 {
+                        app.selection.attachment_index -= 1;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -273,7 +287,13 @@ fn handle_folder_selection_and_switch_view(app: &mut App) {
                     app.email_store.select_email(0);
                 }
 
-                app.switch_to_message_content_view();
+                // Choose appropriate view based on content visibility
+                if app.content_pane_hidden {
+                    app.current_view = View::Messages;
+                } else {
+                    app.current_view = View::MessagesContent;
+                }
+                app.active_pane = ActivePane::List;
                 app.set_state(AppState::EmailList);
             }
             Err(e) => {
@@ -331,12 +351,22 @@ fn handle_selection(app: &mut App) {
             let current_folder = app.email_store.get_current_folder();
             if app.selection.email_index < current_folder.emails.len() {
                 app.email_store.select_email(app.selection.email_index);
-                app.switch_to_message_content_view();
+                // Choose appropriate view based on content visibility
+                if app.content_pane_hidden {
+                    app.current_view = View::Messages;
+                } else {
+                    app.current_view = View::MessagesContent;
+                }
+                app.active_pane = ActivePane::List;
                 app.set_state(AppState::EmailContent);
             }
         }
         ActivePane::Content => {
             // No action for content pane selection
+        }
+        ActivePane::Attachments => {
+            // Open selected attachment
+            handle_attachment_open(app, false);
         }
     }
 }
@@ -353,6 +383,12 @@ fn handle_back_navigation(app: &mut App) {
         }
         ActivePane::Content => {
             // Switch back to email list
+            app.set_state(AppState::EmailList);
+        }
+        ActivePane::Attachments => {
+            // Switch back to messages view
+            app.current_view = View::MessagesContent;
+            app.active_pane = ActivePane::List;
             app.set_state(AppState::EmailList);
         }
     }
@@ -519,24 +555,24 @@ mod tests {
     }
 
     #[test]
-    fn test_view_mode_switch() {
+    fn test_content_toggle() {
         let email_store = EmailStore::new(PathBuf::from("/tmp"));
         let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
         let mut app = App::new(email_store, scanner);
 
-        // Test switch to content view with Alt+c
+        // Test toggle content with Alt+c
+        assert!(!app.content_pane_hidden);
+        
         let key_event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
         handle_key_event(&mut app, key_event);
 
-        assert!(app.pane_visibility.content_visible);
-        assert!(!app.pane_visibility.folders_visible);
+        assert!(app.content_pane_hidden);
 
-        // Test switch back to folder view with Alt+e
-        let key_event = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
+        // Test toggle back
+        let key_event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
         handle_key_event(&mut app, key_event);
 
-        assert!(app.pane_visibility.folders_visible);
-        assert!(!app.pane_visibility.content_visible);
+        assert!(!app.content_pane_hidden);
     }
 
     #[test]
@@ -545,7 +581,7 @@ mod tests {
 
         // Navigate into INBOX folder
         app.email_store.current_folder = vec![0]; // Enter INBOX
-        app.switch_to_message_content_view();
+        app.current_view = View::MessagesContent;
         app.active_pane = ActivePane::List;
 
         // Select the third email (index 2)
@@ -565,10 +601,7 @@ mod tests {
         // Should remember the selection but deselect the email
         assert_eq!(app.selection.remembered_email_index, Some(2));
         assert_eq!(app.email_store.selected_email, None);
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::FolderMessage
-        ));
+        assert_eq!(app.current_view, View::FolderMessages);
 
         // Switch back to message view using 'l' from List pane
         app.active_pane = ActivePane::List; // Simulate being in List pane
@@ -578,10 +611,7 @@ mod tests {
         );
 
         // Should restore the selection
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::MessageContent
-        ));
+        assert_eq!(app.current_view, View::MessagesContent);
         assert_eq!(app.selection.email_index, 2);
         assert_eq!(app.email_store.selected_email, Some(2));
     }
@@ -590,14 +620,11 @@ mod tests {
     fn test_realistic_navigation_scenario() {
         let mut app = create_test_app_with_emails();
 
-        // Start in default state (FolderMessage view, Folders pane)
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::FolderMessage
-        ));
+        // Start in default state (FolderMessages view, Folders pane)
+        assert_eq!(app.current_view, View::FolderMessages);
         assert_eq!(app.active_pane, ActivePane::Folders);
 
-        // Enter INBOX folder using 'l' from folder pane (should switch to MessageContent view)
+        // Enter INBOX folder using 'l' from folder pane (should switch to MessagesContent view)
         handle_key_event(
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
@@ -671,10 +698,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::MessageContent
-        ));
+        assert_eq!(app.current_view, View::MessagesContent);
         assert_eq!(app.active_pane, ActivePane::List);
 
         // Navigate to second email
@@ -689,10 +713,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
         );
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::FolderMessage
-        ));
+        assert_eq!(app.current_view, View::FolderMessages);
         assert_eq!(app.active_pane, ActivePane::Folders);
 
         // Go back to message view using 'l'
@@ -700,10 +721,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::MessageContent
-        ));
+        assert_eq!(app.current_view, View::MessagesContent);
         assert_eq!(app.active_pane, ActivePane::List);
         assert_eq!(app.selection.email_index, 1); // Should restore selection
 
@@ -712,10 +730,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
         );
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::FolderMessage
-        ));
+        assert_eq!(app.current_view, View::FolderMessages);
         assert_eq!(app.active_pane, ActivePane::Folders);
 
         // Go back to message view again using 'l'
@@ -723,10 +738,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::MessageContent
-        ));
+        assert_eq!(app.current_view, View::MessagesContent);
         assert_eq!(app.active_pane, ActivePane::List);
         assert_eq!(app.selection.email_index, 1); // Should still restore selection
     }
@@ -775,10 +787,7 @@ mod tests {
 
         // Should have entered Sent folder, not INBOX
         assert_eq!(app.email_store.current_folder, vec![1]); // Should be in Sent folder (index 1)
-        assert!(matches!(
-            app.pane_visibility.view_mode,
-            crate::app::ViewMode::MessageContent
-        ));
+        assert_eq!(app.current_view, View::MessagesContent);
 
         // Verify we're actually in the Sent folder by checking the folder path
         let folder_path = app.email_store.get_folder_path();
@@ -795,7 +804,7 @@ mod tests {
 
         // Enter INBOX folder and select an email
         app.email_store.current_folder = vec![0];
-        app.switch_to_message_content_view();
+        app.current_view = View::MessagesContent;
         app.active_pane = ActivePane::List;
         app.selection.email_index = 1;
         app.email_store.select_email(1);

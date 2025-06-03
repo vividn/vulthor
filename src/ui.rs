@@ -1,4 +1,4 @@
-use crate::app::{ActivePane, App, AppState, ViewMode};
+use crate::app::{ActivePane, App, AppState, View};
 use crate::email::{Email, Folder};
 use crate::theme::VulthorTheme;
 use ratatui::{
@@ -51,28 +51,55 @@ impl UI {
     }
 
     fn draw_main_layout(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
-        // 2-panel layout based on view mode
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
+        match app.current_view {
+            View::FolderMessages => {
+                // Two panes: folders and messages
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
 
-        match app.pane_visibility.view_mode {
-            ViewMode::FolderMessage => {
-                // Left panel: folders, Right panel: messages
                 let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
                 let is_list_active = matches!(app.active_pane, ActivePane::List);
 
                 self.draw_folder_pane(f, app, chunks[0], is_folders_active);
                 self.draw_email_list_pane(f, app, chunks[1], is_list_active);
             }
-            ViewMode::MessageContent => {
-                // Left panel: messages, Right panel: content
+            View::MessagesContent => {
+                // Two panes: messages and content
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+
                 let is_list_active = matches!(app.active_pane, ActivePane::List);
                 let is_content_active = matches!(app.active_pane, ActivePane::Content);
 
                 self.draw_email_list_pane(f, app, chunks[0], is_list_active);
                 self.draw_content_pane(f, app, chunks[1], is_content_active);
+            }
+            View::Content => {
+                // Single pane: content only
+                let is_content_active = matches!(app.active_pane, ActivePane::Content);
+                self.draw_content_pane(f, app, area, is_content_active);
+            }
+            View::Messages => {
+                // Single pane: messages only (when content hidden)
+                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                self.draw_email_list_pane(f, app, area, is_list_active);
+            }
+            View::MessagesAttachments => {
+                // Two panes: messages and attachments
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+
+                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                let is_attachments_active = matches!(app.active_pane, ActivePane::Attachments);
+
+                self.draw_email_list_pane(f, app, chunks[0], is_list_active);
+                self.draw_attachments_pane(f, app, chunks[1], is_attachments_active);
             }
         }
 
@@ -130,14 +157,14 @@ impl UI {
         app.perform_initial_loading_if_needed();
 
         // In folder/message view mode, show messages from the selected folder
-        // In message/content view mode, show messages from the current folder
-        let folder_to_display = match app.pane_visibility.view_mode {
-            ViewMode::FolderMessage => {
+        // In other view modes, show messages from the current folder
+        let folder_to_display = match app.current_view {
+            View::FolderMessages => {
                 // Show messages from the selected folder in the folder pane
                 app.get_selected_folder()
                     .unwrap_or_else(|| app.email_store.get_current_folder())
             }
-            ViewMode::MessageContent => {
+            _ => {
                 // Show messages from the current folder we've navigated into
                 app.email_store.get_current_folder()
             }
@@ -157,8 +184,8 @@ impl UI {
             Style::default()
         };
 
-        let folder_path = match app.pane_visibility.view_mode {
-            ViewMode::FolderMessage => {
+        let folder_path = match app.current_view {
+            View::FolderMessages => {
                 // Show path of the selected folder
                 let root_folder = &app.email_store.root_folder;
                 if let Some(path_indices) = crate::input::get_folder_path_from_display_index(
@@ -170,7 +197,7 @@ impl UI {
                     app.email_store.get_folder_path()
                 }
             }
-            ViewMode::MessageContent => {
+            _ => {
                 // Show path of the current folder
                 app.email_store.get_folder_path()
             }
@@ -308,6 +335,86 @@ impl UI {
         }
     }
 
+    fn draw_attachments_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
+        let border_style = if is_active {
+            Style::default().fg(VulthorTheme::ACCENT_LIGHT)
+        } else {
+            Style::default()
+        };
+
+        if let Some(email) = app.email_store.get_selected_email() {
+            if !email.attachments.is_empty() {
+                // Create attachment list
+                let attachment_items: Vec<ListItem> = email
+                    .attachments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, attachment)| {
+                        let size_str = if attachment.size < 1024 {
+                            format!("{} B", attachment.size)
+                        } else if attachment.size < 1024 * 1024 {
+                            format!("{:.1} KB", attachment.size as f64 / 1024.0)
+                        } else {
+                            format!("{:.1} MB", attachment.size as f64 / (1024.0 * 1024.0))
+                        };
+
+                        let content = format!(
+                            "{:2}. {} ({}) - {}",
+                            i + 1,
+                            attachment.filename,
+                            attachment.content_type,
+                            size_str
+                        );
+
+                        ListItem::new(content)
+                    })
+                    .collect();
+
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .style(border_style)
+                    .title("Attachments");
+
+                let list = List::new(attachment_items).block(block).highlight_style(
+                    Style::default()
+                        .bg(VulthorTheme::SELECTION_BG)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                );
+
+                // Update selection state
+                self.attachment_list_state
+                    .select(Some(app.selection.attachment_index));
+
+                f.render_stateful_widget(list, area, &mut self.attachment_list_state);
+            } else {
+                // No attachments
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .style(border_style)
+                    .title("Attachments");
+
+                let paragraph = Paragraph::new("No attachments in this email")
+                    .block(block)
+                    .style(Style::default().fg(VulthorTheme::GRAY_DARK));
+
+                f.render_widget(paragraph, area);
+            }
+        } else {
+            // No email selected
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .style(border_style)
+                .title("Attachments");
+
+            let paragraph = Paragraph::new("Select an email to view attachments")
+                .block(block)
+                .style(Style::default().fg(VulthorTheme::GRAY_DARK));
+
+            f.render_widget(paragraph, area);
+        }
+    }
+
     fn draw_attachment_popup(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
         if let Some(email) = app.email_store.get_selected_email() {
             if !email.attachments.is_empty() {
@@ -376,15 +483,12 @@ impl UI {
 
         // Add key bindings help
         let help_text = match app.state {
-            AppState::AttachmentView => "Enter: Open | Shift+Enter: Custom | Esc: Close",
-            _ => match app.pane_visibility.view_mode {
-                ViewMode::FolderMessage => {
-                    "j/k: Navigate | Tab: Switch Pane | l: Content View | M-a: Attachments | q: Quit"
-                }
-                ViewMode::MessageContent => {
-                    "j/k: Navigate | Tab: Switch Pane | h: Folder View | M-a: Attachments | q: Quit"
-                }
-            },
+            AppState::AttachmentView => "Enter: Open | Shift+Enter: Custom | Esc: Close".to_string(),
+            _ => {
+                let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
+                let content_toggle = if app.content_pane_hidden { "" } else { " | M-c: Hide Content" };
+                format!("{}{} | M-a: Attachments | q: Quit", base_help, content_toggle)
+            }
         };
 
         status_text.push(Span::styled(
