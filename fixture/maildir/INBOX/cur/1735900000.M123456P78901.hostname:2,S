@@ -1,0 +1,146 @@
+Return-Path: <alice@example.com>
+Delivered-To: user@example.com
+Received: from mail.example.com ([192.168.1.100])
+	by hostname with ESMTP id ABC123
+	for <user@example.com>; Thu, 2 Jan 2025 10:30:00 -0500
+From: Alice Johnson <alice@example.com>
+To: You <user@example.com>
+Subject: Project Update - Q1 Planning
+Date: Thu, 2 Jan 2025 10:30:00 -0500
+Message-ID: <20250102103000.ABC123@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="----=_Part_123_456.789"
+
+------=_Part_123_456.789
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Hi there,
+
+I wanted to give you a quick update on our Q1 planning. We've made great progress on the roadmap:
+
+- Feature A is 80% complete
+- Feature B design is finalized
+- Feature C is in testing phase
+
+Let's sync up next week to review the timeline.
+
+Best regards,
+Alice
+
+------=_Part_123_456.789
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body { 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 20px;
+}
+.header { 
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+.progress-bar {
+    background: #e0e0e0;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+.progress-fill {
+    height: 20px;
+    background: linear-gradient(to right, #4CAF50, #8BC34A);
+    text-align: center;
+    color: white;
+    font-size: 12px;
+    line-height: 20px;
+}
+.feature-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.cta-button {
+    display: inline-block;
+    background: #667eea;
+    color: white;
+    padding: 12px 30px;
+    text-decoration: none;
+    border-radius: 25px;
+    margin: 20px 0;
+}
+.cta-button:hover {
+    background: #764ba2;
+}
+.chart {
+    text-align: center;
+    margin: 20px 0;
+}
+</style>
+</head>
+<body>
+<div class="header">
+    <h1 style="margin: 0;">Q1 Planning Update</h1>
+    <p style="margin: 10px 0 0 0;">Project Dashboard</p>
+</div>
+
+<h2>Hi there!</h2>
+<p>I wanted to give you a quick update on our Q1 planning. We've made great progress on the roadmap:</p>
+
+<div class="feature-card">
+    <h3>🚀 Feature A: User Authentication</h3>
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 80%;">80% Complete</div>
+    </div>
+    <p>OAuth integration and 2FA implementation are done. Final testing in progress.</p>
+</div>
+
+<div class="feature-card">
+    <h3>🎨 Feature B: UI Redesign</h3>
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 100%;">Design Finalized</div>
+    </div>
+    <p>All mockups approved. Development starts next week.</p>
+</div>
+
+<div class="feature-card">
+    <h3>🧪 Feature C: Analytics Dashboard</h3>
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 60%;">In Testing</div>
+    </div>
+    <p>Core functionality complete. Performance optimization ongoing.</p>
+</div>
+
+<div class="chart">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" alt="Progress Chart" style="width:100%; max-width:400px; height:200px; background:#f0f0f0; border-radius:8px;">
+    <p style="font-style:italic; color:#666;">Sprint velocity chart placeholder</p>
+</div>
+
+<p>Let's sync up next week to review the timeline and discuss resource allocation for Q2.</p>
+
+<a href="#" class="cta-button">Schedule Meeting</a>
+
+<p>Best regards,<br><strong>Alice Johnson</strong><br>Product Manager</p>
+
+<hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+<p style="font-size: 12px; color: #999; text-align: center;">
+    You're receiving this because you're part of the Q1 planning team.<br>
+    <a href="#" style="color: #667eea;">Unsubscribe</a> | <a href="#" style="color: #667eea;">Update preferences</a>
+</p>
+</body>
+</html>
+
+------=_Part_123_456.789--

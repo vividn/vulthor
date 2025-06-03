@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
 
     // Load configuration
-    let config = match Config::load(args.config_path) {
+    let mut config = match Config::load(args.config_path) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {}", e);
@@ -44,6 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Config::default()
         }
     };
+
+    // Override maildir path if provided via CLI
+    if let Some(maildir_path) = args.maildir_path {
+        config.maildir_path = maildir_path;
+    }
 
     // Initialize maildir scanner and scan folder structure
     println!(

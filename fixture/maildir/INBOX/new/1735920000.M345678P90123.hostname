@@ -1,0 +1,271 @@
+Return-Path: <noreply@github.com>
+Delivered-To: user@example.com
+Received: from out-123.smtp.github.com ([192.30.252.123])
+	by hostname with ESMTP id GHI789
+	for <user@example.com>; Fri, 3 Jan 2025 09:00:00 -0500
+From: GitHub <noreply@github.com>
+To: user@example.com
+Subject: [GitHub] New pull request in vulthor repository
+Date: Fri, 3 Jan 2025 09:00:00 -0500
+Message-ID: <20250103090000.GHI789@github.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_567_890.123"
+X-GitHub-Reason: pull_request
+
+------=_Part_567_890.123
+Content-Type: text/plain; charset=UTF-8
+
+A new pull request has been opened in the vulthor repository:
+
+PR #42: Add keyboard shortcuts for folder navigation
+Author: contributor123
+
+This PR adds the following keyboard shortcuts:
+- Ctrl+N: Next folder
+- Ctrl+P: Previous folder
+- Ctrl+U: Up one folder level
+
+View the pull request: https://github.com/yourusername/vulthor/pull/42
+
+------=_Part_567_890.123
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: #24292e;
+    line-height: 1.5;
+    background: #f6f8fa;
+    margin: 0;
+    padding: 0;
+}
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+.header {
+    background: #24292e;
+    color: white;
+    padding: 20px;
+    text-align: center;
+}
+.header img {
+    width: 32px;
+    height: 32px;
+    vertical-align: middle;
+    margin-right: 10px;
+}
+.content {
+    padding: 30px;
+}
+.pr-header {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 20px;
+}
+.pr-title {
+    margin: 0 0 10px 0;
+    color: #24292e;
+    font-size: 20px;
+}
+.pr-meta {
+    display: flex;
+    gap: 20px;
+    font-size: 14px;
+    color: #586069;
+}
+.label {
+    display: inline-block;
+    padding: 0 7px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 20px;
+    border-radius: 2px;
+    margin-right: 5px;
+}
+.label-enhancement {
+    background: #a2eeef;
+    color: #0a6b7c;
+}
+.label-ready {
+    background: #0e8a16;
+    color: white;
+}
+.diff-stat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    background: #fafbfc;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    margin: 20px 0;
+}
+.additions {
+    color: #28a745;
+    font-weight: 600;
+}
+.deletions {
+    color: #d73a49;
+    font-weight: 600;
+}
+.code-block {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 10px 0;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 14px;
+    overflow-x: auto;
+}
+.file-list {
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    margin: 20px 0;
+}
+.file-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid #e1e4e8;
+}
+.file-item:last-child {
+    border-bottom: none;
+}
+.file-icon {
+    margin-right: 10px;
+    color: #959da5;
+}
+.btn {
+    display: inline-block;
+    padding: 6px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+.btn-primary {
+    background: #2ea44f;
+    color: white;
+    border: 1px solid #2ea44f;
+}
+.btn-primary:hover {
+    background: #2c974b;
+}
+.btn-secondary {
+    background: #fafbfc;
+    color: #24292e;
+    border: 1px solid #e1e4e8;
+    margin-left: 10px;
+}
+.btn-secondary:hover {
+    background: #f3f4f6;
+}
+.avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNiAwQzcuMTYgMCAwIDcuMTYgMCAxNkMwIDIzLjA4IDQuNTggMjguODYgMTAuOTQgMzAuOTdDMTEuNzQgMzEuMTIgMTIuMDQgMzAuNjIgMTIuMDQgMzAuMjFDMTIuMDQgMjkuODQgMTIuMDIgMjguNjQgMTIuMDIgMjcuMjhDNy41MyAyOC4yMiA2LjU5IDI1LjM3IDYuNTkgMjUuMzdDNS44NyAyMy41NSA0LjgzIDIzLjA0IDQuODMgMjMuMDRDMy4zOSAyMi4wNyA0Ljk1IDIyLjA5IDQuOTUgMjIuMDlDNi41NyAyMi4yMSA3LjQyIDIzLjc2IDcuNDIgMjMuNzZDOC44NSAyNi42NCAxMS4xOCAyNS40NCAxMi4xIDI1LjAzQzEyLjI0IDI0IDEyLjcyIDIzLjMzIDEzLjI0IDIyLjk5QzkuNDcgMjIuNTkgNS41MSAyMS4yMiA1LjUxIDE1LjFDNS41MSAxMy4zNyA2LjExIDExLjk2IDcuNDYgMTAuODZDNy4yOSAxMC40NiA2LjcgOC43OSA3LjY0IDYuNTRDNy42NCA2LjU0IDguODUgNi4xIDExLjk2IDguMjNDMTMuMTcgNy44OSAxNC42MSA3LjcyIDE2LjA2IDcuNzJDMTcuNTEgNy43MiAxOC45NSA3Ljg5IDIwLjE3IDguMjNDMjMuMjggNi4wOSAyNC40OSA2LjU0IDI0LjQ5IDYuNTRDMjUuNDMgOC43OSAyNC44NCAxMC40NiAyNC42NyAxMC44NkMyNi4wMiAxMS45NiAyNi42MiAxMy4zNyAyNi42MiAxNS4xQzI2LjYyIDIxLjI0IDIyLjY1IDIyLjU4IDE4Ljg3IDIyLjk4QzE5LjUzIDIzLjU1IDIwLjEgMjQuNjQgMjAuMSAyNi41NkMyMC4xIDI5LjE4IDIwLjA4IDMxLjMgMjAuMDggMzEuM0MyMC4wOCAzMS43NSAyMC4zOCAzMi4yMiAyMS4xOSAzMi4wN0MyNy41NSAyOS45NiAzMiAyMy4xNiAzMiAxNkMzMiA3LjE2IDI0Ljg0IDAgMTYgMFoiIGZpbGw9IndoaXRlIi8+Cjwvc3ZnPgo=" alt="GitHub">
+        <span style="font-size: 18px; font-weight: 600;">GitHub</span>
+    </div>
+    
+    <div class="content">
+        <div class="pr-header">
+            <h2 class="pr-title">
+                <span style="color: #28a745;">●</span> 
+                PR #42: Add keyboard shortcuts for folder navigation
+            </h2>
+            <div class="pr-meta">
+                <span>
+                    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" alt="Avatar" class="avatar">
+                    <strong>contributor123</strong> wants to merge 3 commits
+                </span>
+                <span>into <strong>main</strong></span>
+                <span>from <strong>feature/keyboard-shortcuts</strong></span>
+            </div>
+            <div style="margin-top: 10px;">
+                <span class="label label-enhancement">enhancement</span>
+                <span class="label label-ready">ready for review</span>
+            </div>
+        </div>
+        
+        <div class="diff-stat">
+            <span>📄 3 files changed</span>
+            <span class="additions">+142</span>
+            <span class="deletions">-8</span>
+            <div style="flex-grow: 1; display: flex; height: 8px; margin-left: 10px;">
+                <div style="background: #28a745; width: 70%; border-radius: 4px 0 0 4px;"></div>
+                <div style="background: #d73a49; width: 30%; border-radius: 0 4px 4px 0;"></div>
+            </div>
+        </div>
+        
+        <h3>Description</h3>
+        <p>This PR adds keyboard shortcuts for improved folder navigation:</p>
+        
+        <div class="code-block">
+Ctrl+N  → Next folder
+Ctrl+P  → Previous folder  
+Ctrl+U  → Up one folder level
+Ctrl+D  → Down into folder
+        </div>
+        
+        <h3>Changes</h3>
+        <div class="file-list">
+            <div class="file-item">
+                <span class="file-icon">📄</span>
+                <span>src/input.rs</span>
+                <span style="margin-left: auto; color: #28a745;">+85</span>
+            </div>
+            <div class="file-item">
+                <span class="file-icon">📄</span>
+                <span>src/app.rs</span>
+                <span style="margin-left: auto;"><span style="color: #28a745;">+45</span> <span style="color: #d73a49;">-8</span></span>
+            </div>
+            <div class="file-item">
+                <span class="file-icon">📄</span>
+                <span>README.md</span>
+                <span style="margin-left: auto; color: #28a745;">+12</span>
+            </div>
+        </div>
+        
+        <h3>Testing</h3>
+        <p>✅ All tests passing<br>
+        ✅ Manual testing completed<br>
+        ✅ Documentation updated</p>
+        
+        <div style="margin-top: 30px; text-align: center;">
+            <a href="https://github.com/yourusername/vulthor/pull/42" class="btn btn-primary">View Pull Request</a>
+            <a href="https://github.com/yourusername/vulthor/pull/42/files" class="btn btn-secondary">Review Changes</a>
+        </div>
+    </div>
+    
+    <div style="background: #f6f8fa; padding: 20px; text-align: center; font-size: 12px; color: #586069;">
+        <p>You're receiving this because you're watching this repository.</p>
+        <p>
+            <a href="#" style="color: #0366d6; text-decoration: none;">Manage notifications</a> · 
+            <a href="#" style="color: #0366d6; text-decoration: none;">Unsubscribe</a>
+        </p>
+    </div>
+</div>
+</body>
+</html>
+
+------=_Part_567_890.123--

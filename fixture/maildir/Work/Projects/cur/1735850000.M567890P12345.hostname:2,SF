@@ -1,0 +1,53 @@
+Return-Path: <team@projectmgmt.com>
+Delivered-To: user@example.com
+Received: from mail.projectmgmt.com ([172.16.0.100])
+	by hostname with ESMTP id MNO345
+	for <user@example.com>; Thu, 2 Jan 2025 08:00:00 -0500
+From: Project Team <team@projectmgmt.com>
+To: Development Team <dev-team@example.com>
+Subject: Sprint Review Summary - Sprint 23
+Date: Thu, 2 Jan 2025 08:00:00 -0500
+Message-ID: <20250102080000.MNO345@projectmgmt.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_789_012.345"
+X-Priority: 1
+
+------=_Part_789_012.345
+Content-Type: text/plain; charset=UTF-8
+
+Team,
+
+Great work on Sprint 23! Here's the summary:
+
+Completed:
+- User authentication module (8 story points)
+- Database migration tooling (5 story points)
+- API rate limiting (3 story points)
+
+In Progress:
+- Email notification system (5 story points) - 60% complete
+- Admin dashboard (8 story points) - 40% complete
+
+Velocity: 16 story points (target was 20)
+
+Next sprint planning: Monday, Jan 6 at 2 PM
+
+------=_Part_789_012.345
+Content-Type: application/pdf; name="sprint-23-burndown.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="sprint-23-burndown.pdf"
+
+JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIK
+Pj4KZW5kb2JqCjIgMCBvYmoKPDwKL1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50
+IDEKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUg
+L1BhZ2UKL1BhcmVudCAyIDAgUgovUmVzb3VyY2VzIDw8Ci9Gb250IDw8Ci9GMSA0IDAgUgo+
+PgogICAgPj4KL0NvbnRlbnRzIDUgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9UeXBlIC9G
+b250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYQo+PgplbmRvYmoKNSAw
+IG9iago8PAovTGVuZ3RoIDQ0Cj4+CnN0cmVhbQpCVAovRjEgMTIgVGYKNzIgNzEyIFRkCihT
+cHJpbnQgMjMgQnVybmRvd24gQ2hhcnQpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgow
+IDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNzQg
+MDAwMDAgbiAKMDAwMDAwMDE2MSAwMDAwMCBuIAowMDAwMDAwMjk1IDAwMDAwIG4gCjAwMDAw
+MDAzOTAgMDAwMDAgbiAKdHJhaWxlcgo8PAovU2l6ZSA2Ci9Sb290IDEgMCBSCj4+CnN0YXJ0
+eHJlZgo0ODYKJSVFT0YK
+
+------=_Part_789_012.345--

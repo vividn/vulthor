@@ -1,0 +1,43 @@
+Return-Path: <newsletter@techweekly.com>
+Delivered-To: user@example.com
+Received: from mail.techweekly.com ([54.32.10.98])
+	by hostname with ESMTP id STU901
+	for <user@example.com>; Mon, 1 Jan 2024 10:00:00 -0500
+From: Tech Weekly <newsletter@techweekly.com>
+To: user@example.com
+Subject: Tech Weekly: AI Advances in 2024
+Date: Mon, 1 Jan 2024 10:00:00 -0500
+Message-ID: <20240101100000.STU901@techweekly.com>
+List-Unsubscribe: <mailto:unsubscribe@techweekly.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Tech Weekly Newsletter</title>
+<style>
+body { font-family: Georgia, serif; max-width: 600px; margin: 0 auto; }
+h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+.article { margin: 20px 0; padding: 15px; background: #f8f9fa; border-left: 4px solid #3498db; }
+</style>
+</head>
+<body>
+<h1>Tech Weekly: AI Advances in 2024</h1>
+<div class="article">
+<h2>The Year of AI Assistants</h2>
+<p>2024 marks a pivotal year in AI development with major breakthroughs in natural language processing...</p>
+<a href="https://techweekly.com/ai-2024">Read more →</a>
+</div>
+<div class="article">
+<h2>Quantum Computing Goes Mainstream</h2>
+<p>IBM and Google announce commercial quantum computing services available to enterprises...</p>
+<a href="https://techweekly.com/quantum-2024">Read more →</a>
+</div>
+<p style="margin-top: 40px; font-size: 12px; color: #666;">
+You're receiving this because you subscribed to Tech Weekly. 
+<a href="https://techweekly.com/unsubscribe">Unsubscribe</a>
+</p>
+</body>
+</html>

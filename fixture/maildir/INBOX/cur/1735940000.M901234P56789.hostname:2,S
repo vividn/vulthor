@@ -1,0 +1,314 @@
+Return-Path: <marketing@techstore.com>
+Delivered-To: user@example.com
+Received: from mail.techstore.com ([198.51.100.42])
+	by hostname with ESMTP id YZA567
+	for <user@example.com>; Fri, 3 Jan 2025 14:00:00 -0500
+From: TechStore <marketing@techstore.com>
+To: Valued Customer <user@example.com>
+Subject: =?UTF-8?B?8J+OiSBOZXcgWWVhciBTYWxlIC0gVXAgdG8gNTAlIE9mZiE=?=
+Date: Fri, 3 Jan 2025 14:00:00 -0500
+Message-ID: <20250103140000.YZA567@techstore.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="----=_Part_890_123.456"
+
+------=_Part_890_123.456
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Poppins', Arial, sans-serif;
+    background: #f5f5f5;
+}
+
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: white;
+}
+
+.hero {
+    background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+    color: white;
+    text-align: center;
+    padding: 50px 20px;
+    position: relative;
+    overflow: hidden;
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -50%;
+    width: 200%;
+    height: 200%;
+    background: repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 10px,
+        rgba(255,255,255,0.1) 10px,
+        rgba(255,255,255,0.1) 20px
+    );
+    animation: slide 20s linear infinite;
+}
+
+@keyframes slide {
+    0% { transform: translate(0, 0); }
+    100% { transform: translate(50px, 50px); }
+}
+
+.hero h1 {
+    font-size: 48px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    position: relative;
+    z-index: 1;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.hero .subtitle {
+    font-size: 24px;
+    position: relative;
+    z-index: 1;
+}
+
+.product-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 30px 20px;
+}
+
+.product {
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 10px;
+    overflow: hidden;
+    transition: transform 0.3s, box-shadow 0.3s;
+    text-align: center;
+}
+
+.product:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+}
+
+.product-image {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    background: #f0f0f0;
+}
+
+.product-info {
+    padding: 15px;
+}
+
+.product-name {
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.price {
+    color: #FF6B6B;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.old-price {
+    color: #999;
+    text-decoration: line-through;
+    margin-right: 10px;
+}
+
+.badge {
+    display: inline-block;
+    background: #4ECDC4;
+    color: white;
+    padding: 5px 15px;
+    border-radius: 20px;
+    font-size: 12px;
+    margin-top: 10px;
+}
+
+.cta-section {
+    background: #333;
+    color: white;
+    text-align: center;
+    padding: 40px 20px;
+}
+
+.cta-button {
+    display: inline-block;
+    background: #FF6B6B;
+    color: white;
+    padding: 15px 40px;
+    text-decoration: none;
+    border-radius: 30px;
+    font-weight: 600;
+    font-size: 18px;
+    transition: background 0.3s;
+}
+
+.cta-button:hover {
+    background: #FF5252;
+}
+
+.features {
+    display: flex;
+    justify-content: space-around;
+    padding: 30px 20px;
+    background: #fafafa;
+    text-align: center;
+}
+
+.feature {
+    flex: 1;
+}
+
+.feature-icon {
+    font-size: 40px;
+    margin-bottom: 10px;
+}
+
+.countdown {
+    background: #FF6B6B;
+    color: white;
+    padding: 20px;
+    text-align: center;
+    font-size: 18px;
+}
+
+.footer {
+    padding: 20px;
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="hero">
+        <h1>🎉 NEW YEAR SALE</h1>
+        <p class="subtitle">Up to 50% Off Everything!</p>
+    </div>
+    
+    <div class="countdown">
+        ⏰ Sale ends in: 2 days 14 hours 32 minutes
+    </div>
+    
+    <div class="product-grid">
+        <div class="product">
+            <img src="cid:laptop-image" alt="Laptop" class="product-image">
+            <div class="product-info">
+                <h3 class="product-name">UltraBook Pro</h3>
+                <p><span class="old-price">$1,299</span><span class="price">$899</span></p>
+                <span class="badge">31% OFF</span>
+            </div>
+        </div>
+        
+        <div class="product">
+            <img src="cid:headphones-image" alt="Headphones" class="product-image">
+            <div class="product-info">
+                <h3 class="product-name">Wireless ANC</h3>
+                <p><span class="old-price">$349</span><span class="price">$199</span></p>
+                <span class="badge">43% OFF</span>
+            </div>
+        </div>
+        
+        <div class="product">
+            <img src="cid:tablet-image" alt="Tablet" class="product-image">
+            <div class="product-info">
+                <h3 class="product-name">TabMax 10"</h3>
+                <p><span class="old-price">$599</span><span class="price">$399</span></p>
+                <span class="badge">33% OFF</span>
+            </div>
+        </div>
+        
+        <div class="product">
+            <img src="cid:smartwatch-image" alt="Smartwatch" class="product-image">
+            <div class="product-info">
+                <h3 class="product-name">FitWatch Pro</h3>
+                <p><span class="old-price">$299</span><span class="price">$149</span></p>
+                <span class="badge">50% OFF</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="features">
+        <div class="feature">
+            <div class="feature-icon">🚚</div>
+            <h4>Free Shipping</h4>
+            <p>On orders over $50</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">↩️</div>
+            <h4>Easy Returns</h4>
+            <p>30-day return policy</p>
+        </div>
+        <div class="feature">
+            <div class="feature-icon">🔒</div>
+            <h4>Secure Payment</h4>
+            <p>SSL encrypted</p>
+        </div>
+    </div>
+    
+    <div class="cta-section">
+        <h2>Don't Miss Out!</h2>
+        <p style="margin: 20px 0;">Limited quantities available</p>
+        <a href="https://techstore.com/sale" class="cta-button">Shop Now →</a>
+    </div>
+    
+    <div class="footer">
+        <p>You received this email because you subscribed to TechStore updates.</p>
+        <p><a href="#" style="color: #666;">Unsubscribe</a> | <a href="#" style="color: #666;">Privacy Policy</a></p>
+        <p>© 2025 TechStore. All rights reserved.</p>
+    </div>
+</div>
+</body>
+</html>
+
+------=_Part_890_123.456
+Content-Type: image/png; name="laptop.png"
+Content-Transfer-Encoding: base64
+Content-ID: <laptop-image>
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/
+PchI7wAAAABJRU5ErkJggg==
+
+------=_Part_890_123.456
+Content-Type: image/png; name="headphones.png"
+Content-Transfer-Encoding: base64
+Content-ID: <headphones-image>
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA
+60e6kgAAAABJRU5ErkJggg==
+
+------=_Part_890_123.456
+Content-Type: image/png; name="tablet.png"
+Content-Transfer-Encoding: base64
+Content-ID: <tablet-image>
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA
+60e6kgAAAABJRU5ErkJggg==
+
+------=_Part_890_123.456
+Content-Type: image/png; name="smartwatch.png"
+Content-Transfer-Encoding: base64
+Content-ID: <smartwatch-image>
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA
+60e6kgAAAABJRU5ErkJggg==
+
+------=_Part_890_123.456--

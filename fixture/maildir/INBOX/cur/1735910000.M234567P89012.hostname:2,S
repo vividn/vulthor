@@ -1,0 +1,27 @@
+Return-Path: <bob@techcorp.com>
+Delivered-To: user@example.com
+Received: from smtp.techcorp.com ([10.0.0.50])
+	by hostname with ESMTP id DEF456
+	for <user@example.com>; Thu, 2 Jan 2025 13:45:00 -0500
+From: Bob Smith <bob@techcorp.com>
+To: You <user@example.com>
+Subject: Re: API Documentation Review
+Date: Thu, 2 Jan 2025 13:45:00 -0500
+Message-ID: <20250102134500.DEF456@techcorp.com>
+In-Reply-To: <20250102090000.XYZ789@example.com>
+References: <20250102090000.XYZ789@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Thanks for the feedback on the API docs. I've made the following changes:
+
+1. Added more examples for authentication
+2. Clarified the rate limiting section
+3. Updated the error codes table
+
+The updated version is now live at https://api.techcorp.com/docs
+
+Let me know if you need anything else!
+
+Cheers,
+Bob

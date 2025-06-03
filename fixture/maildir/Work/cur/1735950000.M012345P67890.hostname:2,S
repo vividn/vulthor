@@ -1,0 +1,321 @@
+Return-Path: <reports@analytics.company.com>
+Delivered-To: user@example.com
+Received: from mail.analytics.company.com ([192.168.100.50])
+	by hostname with ESMTP id ABC789
+	for <user@example.com>; Fri, 3 Jan 2025 16:30:00 -0500
+From: Analytics Team <reports@analytics.company.com>
+To: Team <team@example.com>
+Subject: Weekly Performance Report - Week 1, 2025
+Date: Fri, 3 Jan 2025 16:30:00 -0500
+Message-ID: <20250103163000.ABC789@analytics.company.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #f4f4f4;
+    margin: 0;
+    padding: 0;
+    color: #333;
+}
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    background: white;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+}
+.header {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    color: white;
+    padding: 40px;
+    text-align: center;
+}
+.header h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 300;
+}
+.header .subtitle {
+    margin-top: 10px;
+    opacity: 0.9;
+}
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    padding: 30px;
+    background: #fafafa;
+}
+.kpi-card {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    text-align: center;
+}
+.kpi-value {
+    font-size: 32px;
+    font-weight: bold;
+    color: #2a5298;
+}
+.kpi-label {
+    color: #666;
+    font-size: 14px;
+    margin-top: 5px;
+}
+.kpi-change {
+    font-size: 12px;
+    margin-top: 5px;
+}
+.positive {
+    color: #27ae60;
+}
+.negative {
+    color: #e74c3c;
+}
+.content {
+    padding: 40px;
+}
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+.data-table th {
+    background: #2a5298;
+    color: white;
+    padding: 12px;
+    text-align: left;
+    font-weight: 500;
+}
+.data-table td {
+    padding: 12px;
+    border-bottom: 1px solid #eee;
+}
+.data-table tr:hover {
+    background: #f8f9fa;
+}
+.chart-container {
+    margin: 30px 0;
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+.bar-chart {
+    display: flex;
+    align-items: flex-end;
+    height: 200px;
+    gap: 10px;
+    margin: 20px 0;
+}
+.bar {
+    flex: 1;
+    background: #2a5298;
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    color: white;
+    font-size: 12px;
+    padding-bottom: 5px;
+    transition: opacity 0.3s;
+}
+.bar:hover {
+    opacity: 0.8;
+}
+.bar-label {
+    position: absolute;
+    bottom: -20px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+}
+.heatmap {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 5px;
+    margin: 20px 0;
+}
+.heatmap-cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    border-radius: 4px;
+    color: white;
+    font-weight: 500;
+}
+.heat-low { background: #3498db; }
+.heat-medium { background: #f39c12; }
+.heat-high { background: #e74c3c; }
+.footer {
+    background: #2c3e50;
+    color: white;
+    padding: 30px;
+    text-align: center;
+}
+.footer a {
+    color: #3498db;
+    text-decoration: none;
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Weekly Performance Report</h1>
+        <div class="subtitle">Week 1, 2025 (Dec 30 - Jan 5)</div>
+    </div>
+    
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-value">98.7%</div>
+            <div class="kpi-label">Uptime</div>
+            <div class="kpi-change positive">↑ 0.3% from last week</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value">142ms</div>
+            <div class="kpi-label">Avg Response Time</div>
+            <div class="kpi-change positive">↓ 18ms from last week</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value">2.4M</div>
+            <div class="kpi-label">Total Requests</div>
+            <div class="kpi-change positive">↑ 12% from last week</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value">0.02%</div>
+            <div class="kpi-label">Error Rate</div>
+            <div class="kpi-change negative">↑ 0.01% from last week</div>
+        </div>
+    </div>
+    
+    <div class="content">
+        <h2>Top Endpoints by Traffic</h2>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Requests</th>
+                    <th>Avg Response</th>
+                    <th>Error Rate</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>/api/v2/users</code></td>
+                    <td>842,391</td>
+                    <td>89ms</td>
+                    <td>0.01%</td>
+                    <td><span style="color: #27ae60;">●</span> Healthy</td>
+                </tr>
+                <tr>
+                    <td><code>/api/v2/products</code></td>
+                    <td>623,102</td>
+                    <td>124ms</td>
+                    <td>0.02%</td>
+                    <td><span style="color: #27ae60;">●</span> Healthy</td>
+                </tr>
+                <tr>
+                    <td><code>/api/v2/orders</code></td>
+                    <td>412,847</td>
+                    <td>156ms</td>
+                    <td>0.04%</td>
+                    <td><span style="color: #f39c12;">●</span> Warning</td>
+                </tr>
+                <tr>
+                    <td><code>/api/v2/auth</code></td>
+                    <td>298,412</td>
+                    <td>201ms</td>
+                    <td>0.08%</td>
+                    <td><span style="color: #e74c3c;">●</span> Critical</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="chart-container">
+            <h3>Daily Traffic Distribution</h3>
+            <div class="bar-chart">
+                <div class="bar" style="height: 60%;">
+                    <span>Mon</span>
+                    <span class="bar-label">Mon</span>
+                </div>
+                <div class="bar" style="height: 75%;">
+                    <span>Tue</span>
+                    <span class="bar-label">Tue</span>
+                </div>
+                <div class="bar" style="height: 85%;">
+                    <span>Wed</span>
+                    <span class="bar-label">Wed</span>
+                </div>
+                <div class="bar" style="height: 90%;">
+                    <span>Thu</span>
+                    <span class="bar-label">Thu</span>
+                </div>
+                <div class="bar" style="height: 100%;">
+                    <span>Fri</span>
+                    <span class="bar-label">Fri</span>
+                </div>
+                <div class="bar" style="height: 45%; background: #7f8c8d;">
+                    <span>Sat</span>
+                    <span class="bar-label">Sat</span>
+                </div>
+                <div class="bar" style="height: 40%; background: #7f8c8d;">
+                    <span>Sun</span>
+                    <span class="bar-label">Sun</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <h3>Hourly Error Rate Heatmap</h3>
+            <p style="color: #666; font-size: 14px;">Last 7 days, hourly breakdown</p>
+            <div class="heatmap">
+                <div class="heatmap-cell heat-low">0.01%</div>
+                <div class="heatmap-cell heat-low">0.02%</div>
+                <div class="heatmap-cell heat-medium">0.05%</div>
+                <div class="heatmap-cell heat-high">0.08%</div>
+                <div class="heatmap-cell heat-medium">0.04%</div>
+                <div class="heatmap-cell heat-low">0.02%</div>
+                <div class="heatmap-cell heat-low">0.01%</div>
+                <div class="heatmap-cell heat-low">0.02%</div>
+                <div class="heatmap-cell heat-low">0.01%</div>
+                <div class="heatmap-cell heat-medium">0.06%</div>
+                <div class="heatmap-cell heat-high">0.09%</div>
+                <div class="heatmap-cell heat-medium">0.05%</div>
+                <div class="heatmap-cell heat-low">0.03%</div>
+                <div class="heatmap-cell heat-low">0.02%</div>
+            </div>
+        </div>
+        
+        <h2>Action Items</h2>
+        <ul style="line-height: 1.8;">
+            <li><strong>Auth Service:</strong> Error rate exceeding threshold - investigation required</li>
+            <li><strong>Orders API:</strong> Response time degradation detected - consider caching</li>
+            <li><strong>Weekend Traffic:</strong> 60% drop in traffic - normal pattern</li>
+        </ul>
+    </div>
+    
+    <div class="footer">
+        <p>This report was automatically generated by the Analytics Platform</p>
+        <p>View detailed metrics at <a href="https://analytics.company.com">analytics.company.com</a></p>
+        <p style="margin-top: 20px; font-size: 12px; opacity: 0.7;">
+            To unsubscribe from these reports, <a href="#">click here</a>
+        </p>
+    </div>
+</div>
+</body>
+</html>

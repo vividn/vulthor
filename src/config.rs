@@ -12,6 +12,10 @@ pub struct CliArgs {
     /// Override config file path
     #[arg(short = 'c', long = "config")]
     pub config_path: Option<PathBuf>,
+
+    /// Override MailDir path (takes precedence over config file)
+    #[arg(short = 'm', long = "maildir")]
+    pub maildir_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -102,6 +106,32 @@ mod tests {
 
         let args = CliArgs::parse_from(&["vulthor", "--config", "/another/path.toml"]);
         assert_eq!(args.config_path, Some(PathBuf::from("/another/path.toml")));
+    }
+
+    #[test]
+    fn test_cli_args_maildir_path() {
+        use clap::Parser;
+
+        let args = CliArgs::parse_from(&["vulthor", "-m", "/custom/maildir"]);
+        assert_eq!(args.maildir_path, Some(PathBuf::from("/custom/maildir")));
+
+        let args = CliArgs::parse_from(&["vulthor", "--maildir", "/another/maildir"]);
+        assert_eq!(args.maildir_path, Some(PathBuf::from("/another/maildir")));
+    }
+
+    #[test]
+    fn test_cli_args_combined() {
+        use clap::Parser;
+
+        let args = CliArgs::parse_from(&[
+            "vulthor",
+            "-p", "9000",
+            "-c", "/config.toml",
+            "-m", "/maildir"
+        ]);
+        assert_eq!(args.port, 9000);
+        assert_eq!(args.config_path, Some(PathBuf::from("/config.toml")));
+        assert_eq!(args.maildir_path, Some(PathBuf::from("/maildir")));
     }
 
     #[test]
