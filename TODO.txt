@@ -1,132 +1,73 @@
-VULTHOR IMPLEMENTATION TODO
-=============================
+# Vulthor TODO List
 
-## Phase 1: Project Setup & Dependencies ✅ COMPLETED
-[✅] Add required dependencies to Cargo.toml:
-    ✅ ratatui (TUI framework) - v0.29
-    ✅ crossterm (terminal handling) - v0.28  
-    ✅ tokio (async runtime for web server) - v1.0 with full features
-    ✅ axum (web server) - v0.7
-    ✅ serde + toml (config parsing) - v1.0 + v0.8
-    ✅ mailparse (email parsing) - v0.15
-    ✅ html2md (HTML to markdown conversion) - v0.2
-    ✅ walkdir (directory traversal) - v2.0
-    ✅ clap (CLI argument parsing) - v4.0 with derive features
-    ✅ dirs (home directory detection) - v5.0
-    ✅ tempfile (testing) - v3.0
+## Error Handling Improvements
+- [ ] Migrate from `Box<dyn Error>` to custom error types using thiserror
+  - [ ] Create VulthorError enum with variants for IO, Config, MailParser, Web errors
+  - [ ] Update all Result types throughout codebase
+  - [ ] Add context to errors (which file/folder caused the error)
+  - [ ] Implement proper error recovery strategies
 
-## Phase 2: Core Data Structures ✅ COMPLETED
-[✅] Create config.rs module:
-    ✅ Config struct with maildir_path field
-    ✅ Load from ~/.config/vulthor/config.toml or ./vulthor.toml
-    ✅ CLI args struct with port option (-p)
-    ✅ Default configuration fallback
+## Documentation Updates
+- [x] Update README.md with comprehensive user documentation
+  - [x] Installation instructions
+  - [x] Usage examples with screenshots
+  - [x] Configuration file format
+  - [x] Keyboard shortcuts reference
+  - [x] Add developer section at the end
+- [x] Update CLAUDE.md with developer documentation
+  - [x] Architecture decisions and preferences
+  - [x] Code patterns and conventions
+  - [x] Testing strategy (TDD approach)
+  - [x] Future development guidelines
+  - [x] Add reminder to keep README.md updated
+  - [x] Document comment style preferences
 
-[✅] Create email.rs module:
-    ✅ Email struct (headers, body, attachments)
-    ✅ Folder struct (name, path, emails, subfolders)
-    ✅ EmailStore struct to manage all folders/emails
-    ✅ Full email parsing with multipart support
-    ✅ Attachment detection and metadata extraction
+## Future Features (Architecture Planning)
+- [ ] Add account management system
+  - [ ] Design account panel (left of folders)
+  - [ ] Multiple MailDir source support
+  - [ ] Account switching keybindings
+- [ ] Integrate notmuch for search functionality
+  - [ ] Design search interface
+  - [ ] Notmuch query integration
+  - [ ] Search results display
+- [ ] Email composition and management
+  - [ ] Reply/forward functionality
+  - [ ] Mark as read/unread
+  - [ ] Delete/move operations
+  - [ ] Draft composition
 
-[✅] Create app.rs module:
-    ✅ AppState enum (folder view, email list, email content, attachment view, help)
-    ✅ App struct with current selection state
-    ✅ Pane visibility state (folders, content collapsible)
-    ✅ Thread-safe SharedAppState for web server integration
+## Performance Optimizations
+- [ ] Implement proper email caching strategy
+- [ ] Add configuration for email loading limits
+- [ ] Profile and optimize folder scanning
+- [ ] Consider async folder loading
 
-## Phase 3: MailDir Parsing ✅ COMPLETED
-[✅] Implement MailDir folder discovery:
-    ✅ Scan maildir structure recursively
-    ✅ Build folder hierarchy tree
-    ✅ Handle cur/, new/, tmp/ subdirectories properly
-    ✅ Error handling for malformed MailDir structures
+## Testing Improvements
+- [ ] Add integration tests for full workflows
+- [ ] Test error scenarios comprehensively
+- [ ] Add benchmarks for performance-critical paths
+- [ ] Document testing requirements in CLAUDE.md
 
-[✅] Implement email parsing:
-    ✅ Parse email files using mailparse
-    ✅ Extract headers (From, To, Subject, Date, Message-ID)
-    ✅ Handle multipart messages recursively
-    ✅ Extract attachments list with Content-Disposition parsing
-    ✅ Convert HTML parts to markdown using html2md
-    ✅ Graceful error handling for malformed emails
+## Architecture Refactoring
+- [ ] Migrate to component-based state management
+  - [ ] Design component trait/interface for UI elements
+  - [ ] Refactor each pane (Folders, List, Content) as independent components
+  - [ ] Implement message passing between components
+  - [ ] Create event bus or message queue for component communication
+  - [ ] Remove global AppState enum in favor of component states
+  - [ ] Consider using a framework like Elm-inspired architecture
 
-## Phase 4: TUI Implementation ✅ COMPLETED
-[✅] Create ui.rs module:
-    ✅ 3-pane layout function with responsive sizing
-    ✅ Folder pane rendering (tree view with unread counts)
-    ✅ Email list pane rendering with attachment indicators
-    ✅ Email content pane rendering (markdown with scrollbar)
-    ✅ Collapsible pane logic for Alt+e and Alt+c
-    ✅ Help screen with keybinding documentation
-    ✅ Status bar with context-sensitive help
+## Async Migration
+- [ ] Migrate entire codebase to async (long-term goal)
+  - [ ] Convert MailDir scanning to async with tokio::fs
+  - [ ] Make email parsing async
+  - [ ] Unify TUI event loop with tokio runtime
+  - [ ] Consider async TUI framework or custom implementation
+  - [ ] Ensure no blocking operations in main thread
 
-[✅] Create input handling:
-    ✅ j/k for scrolling in active pane
-    ✅ Alt+h/Alt+l for pane navigation
-    ✅ Alt+e toggle folder pane visibility
-    ✅ Alt+c toggle content pane visibility
-    ✅ Alt+a for attachment popup
-    ✅ Enter for selection, Backspace for navigation back
-    ✅ '?' for help, 'q' for quit
-
-[✅] Create attachment popup:
-    ✅ List all attachments for current email
-    ✅ Navigation with j/k, selection with Enter
-    ✅ Enter: placeholder for xdg-open (framework ready)
-    ✅ Shift+Enter: placeholder for custom command (framework ready)
-    ✅ File size formatting and content type display
-
-## Phase 5: Web Server Implementation ✅ COMPLETED
-[✅] Create web.rs module:
-    ✅ Axum web server setup with multiple routes
-    ✅ Route for serving current email as HTML
-    ✅ Welcome page when no email selected
-    ✅ Static CSS styling for email display
-    ✅ Health check endpoint
-
-[✅] Email to HTML conversion:
-    ✅ Convert markdown back to HTML for web display
-    ✅ Preserve email headers in web view with styling
-    ✅ Handle attachments in web view with icons and metadata
-    ✅ HTML escaping for security
-    ✅ Responsive design for mobile and desktop
-
-## Phase 6: Main Application Loop ✅ COMPLETED
-[✅] Implement main.rs:
-    ✅ Parse CLI arguments with clap
-    ✅ Load configuration with fallback to defaults
-    ✅ Initialize MailDir scanning with error handling
-    ✅ Start web server in background with tokio::spawn
-    ✅ Initialize TUI with proper terminal setup
-    ✅ Main event loop with input polling and proper cleanup
-    ✅ Graceful shutdown of both TUI and web server
-
-## Phase 7: Error Handling & Polish ✅ COMPLETED
-[✅] Add comprehensive error handling:
-    ✅ Config file missing/invalid - fallback to defaults
-    ✅ MailDir access issues - user-friendly error messages
-    ✅ Email parsing failures - graceful fallback with error info
-    ✅ Web server startup failures - proper error propagation
-
-[✅] Add graceful shutdown handling - terminal restoration and web server abort
-[✅] Update CLAUDE.md with final architecture - comprehensive documentation
-[⚠️] Logging/debugging support - basic error messages (could be enhanced with tracing crate)
-
-## Phase 8: Testing & Documentation ✅ COMPLETED
-[✅] Write unit tests for core modules:
-    ✅ MailDir scanner tests (2 tests)
-    ✅ Input handling tests (3 tests)  
-    ✅ Web server utility tests (3 tests)
-    ✅ Main application tests (2 tests)
-    ✅ Total: 10 passing tests
-
-[✅] Update README.md with usage examples
-[⚠️] Integration tests - basic functionality covered (could add more comprehensive integration tests)
-[⚠️] Example config file - documentation provided (could add standalone example file)
-
-IMPLEMENTATION NOTES:
-- Use ratatui's block and layout widgets for 3-pane design
-- Store current email selection globally for web server access
-- Use Arc<Mutex<>> for shared state between TUI and web server
-- Handle terminal resize events properly
-- Use crossterm for cross-platform key event handling
+## Code Quality
+- [ ] Add more comprehensive logging with tracing crate
+- [ ] Document public APIs with rustdoc comments
+- [ ] Consider splitting large modules (ui.rs, app.rs)
+- [ ] Add CI/CD configuration

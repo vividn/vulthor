@@ -91,8 +91,7 @@ Vulthor is built with modern Rust technologies:
 - **[crossterm](https://github.com/crossterm-rs/crossterm)** - Cross-platform terminal manipulation
 - **[tokio](https://tokio.rs/)** - Async runtime for concurrent TUI and web server
 - **[axum](https://github.com/tokio-rs/axum)** - Web framework for HTML email serving
-- **[mailparse](https://github.com/staktrace/mailparse)** - Email parsing and multipart handling
-- **[html2md](https://github.com/Swatinem/html2md)** - HTML to markdown conversion
+- **[mail-parser](https://docs.rs/mail-parser)** - Email parsing and multipart handling
 
 ### Project Structure
 ```
@@ -111,33 +110,127 @@ vulthor/
 └── README.md
 ```
 
-## 🧪 Development
+## 🧪 Developer Guide
 
-### Running Tests
+### Getting Started with Development
+
+1. **Clone and setup**:
+   ```bash
+   git clone https://github.com/yourusername/vulthor.git
+   cd vulthor
+   cargo build
+   ```
+
+2. **Running in development**:
+   ```bash
+   # Run with auto-reload (requires cargo-watch)
+   cargo watch -x run
+   
+   # Run with debug logging
+   RUST_LOG=debug cargo run
+   ```
+
+### Testing Philosophy
+
+Vulthor follows a **Test-Driven Development (TDD)** approach:
+
+1. **Write tests first** - Before implementing a feature, write tests that define its behavior
+2. **Make tests pass** - Implement the minimal code needed to pass the tests
+3. **Refactor** - Clean up the implementation while keeping tests green
+4. **Regression prevention** - If a bug is found, write a test that catches it before fixing
+
 ```bash
+# Run all tests
 cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run specific test
+cargo test test_folder_navigation
+
+# Run tests continuously
+cargo watch -x test
 ```
 
-### Code Quality
+### Code Quality Standards
+
 ```bash
-# Check formatting
-cargo fmt --check
+# Format code (required before commits)
+cargo fmt
 
-# Run clippy linter  
-cargo clippy
+# Run linter with suggestions
+cargo clippy -- -W clippy::pedantic
 
-# Type checking
+# Check for common mistakes
 cargo check
+
+# Run all quality checks
+cargo fmt && cargo clippy && cargo test
 ```
 
-### Building for Release
+### Architecture Overview
+
+Vulthor is transitioning to a **component-based architecture**:
+
+- **Components**: Each UI pane (folders, list, content) will be an independent component
+- **Message Passing**: Components communicate through events rather than shared state
+- **Async-first**: Moving towards full async to eliminate blocking operations
+- **Performance**: Prioritizing startup time and basic email info display speed
+
+### Performance Profiling
+
 ```bash
-cargo build --release
+# Build with profiling
+cargo build --release --features profiling
+
+# Run with performance tracking
+cargo run --release -- --profile
+
+# Benchmark critical paths
+cargo bench
 ```
+
+### Contributing Guidelines
+
+1. **Check existing issues** before starting work
+2. **Write tests first** following TDD principles
+3. **Keep commits atomic** - one logical change per commit
+4. **Update documentation** - especially README.md for user-facing changes
+5. **Run quality checks** - `cargo fmt && cargo clippy && cargo test`
+6. **Performance matters** - profile changes that might affect startup time
+
+### Common Development Tasks
+
+#### Adding a New Keybinding
+1. Write test in `src/input.rs` defining the expected behavior
+2. Add the key handler in the match statement
+3. Update the help screen in `src/ui.rs`
+4. Document in README.md keybindings section
+
+#### Adding a New UI Component
+1. Create component struct implementing a common trait
+2. Add message types for component communication
+3. Write comprehensive tests for component behavior
+4. Integrate with existing layout system
+
+#### Debugging Tips
+- Use `dbg!()` macro for quick debugging
+- Enable `RUST_LOG=trace` for detailed logs
+- Use `cargo expand` to see macro expansions
+- Profile with `cargo flamegraph` for performance issues
+
+### Release Process
+
+1. Update version in `Cargo.toml`
+2. Run full test suite: `cargo test --release`
+3. Update CHANGELOG.md
+4. Tag release: `git tag -a v0.x.x -m "Release version 0.x.x"`
+5. Build releases: `cargo build --release --target x86_64-unknown-linux-gnu`
 
 ## 📋 Requirements
 
-- **Rust 1.70+** with Cargo
+- **Rust 1.70+** with Cargo (nightly recommended for edition 2024)
 - **MailDir-compatible email storage** (Thunderbird, mutt, etc.)
 - **Terminal** supporting modern features (most terminals work)
 - **Web browser** for HTML email viewing
