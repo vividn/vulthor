@@ -4,12 +4,11 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppState {
-    FolderView,     // Navigating folders
-    EmailList,      // Viewing emails in current folder
-    EmailContent,   // Reading an email
-    AttachmentView, // Viewing attachments popup
-    Help,           // Help screen
-    Quit,           // Application should quit
+    FolderView,   // Navigating folders
+    EmailList,    // Viewing emails in current folder
+    EmailContent, // Reading an email
+    Help,         // Help screen
+    Quit,         // Application should quit
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -509,13 +508,13 @@ mod tests {
 
         let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
         let mut app = App::new(email_store, scanner);
-        
+
         // Navigate into the INBOX folder so emails are available
         app.email_store.current_folder = vec![0]; // Navigate to INBOX folder (first subfolder)
-        
+
         // Select first email
         app.email_store.select_email(0);
-        
+
         app
     }
 
@@ -525,23 +524,31 @@ mod tests {
 
         // Test: When active pane is Folders, should return None (welcome screen)
         app.active_pane = ActivePane::Folders;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should show welcome screen when active pane is Folders");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should show welcome screen when active pane is Folders"
+        );
 
         // Test: When active pane is Messages, should return selected email
         app.active_pane = ActivePane::Messages;
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email when active pane is Messages");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email when active pane is Messages"
+        );
 
         // Test: When active pane is Content, should return selected email
         app.active_pane = ActivePane::Content;
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email when active pane is Content");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email when active pane is Content"
+        );
 
         // Test: When active pane is Attachments, should return selected email
         app.active_pane = ActivePane::Attachments;
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email when active pane is Attachments");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email when active pane is Attachments"
+        );
     }
 
     #[test]
@@ -550,22 +557,34 @@ mod tests {
 
         // Start in Folders pane (welcome screen)
         app.active_pane = ActivePane::Folders;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should show welcome screen initially in Folders pane");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should show welcome screen initially in Folders pane"
+        );
 
         // Switch to Messages pane - email should be immediately available
         app.switch_pane(PaneSwitchDirection::Right);
-        assert_eq!(app.active_pane, ActivePane::Messages, 
-                  "Should be in Messages pane after switching from Folders");
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email immediately when switching to Messages pane");
+        assert_eq!(
+            app.active_pane,
+            ActivePane::Messages,
+            "Should be in Messages pane after switching from Folders"
+        );
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email immediately when switching to Messages pane"
+        );
 
         // Switch back to Folders pane - should show welcome screen
         app.switch_pane(PaneSwitchDirection::Left);
-        assert_eq!(app.active_pane, ActivePane::Folders, 
-                  "Should be back in Folders pane");
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should show welcome screen when switching back to Folders pane");
+        assert_eq!(
+            app.active_pane,
+            ActivePane::Folders,
+            "Should be back in Folders pane"
+        );
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should show welcome screen when switching back to Folders pane"
+        );
     }
 
     #[test]
@@ -576,20 +595,28 @@ mod tests {
 
         // Test all panes when no email is selected
         app.active_pane = ActivePane::Folders;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should return None in Folders pane with no selected email");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should return None in Folders pane with no selected email"
+        );
 
         app.active_pane = ActivePane::Messages;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should return None in Messages pane with no selected email");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should return None in Messages pane with no selected email"
+        );
 
         app.active_pane = ActivePane::Content;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should return None in Content pane with no selected email");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should return None in Content pane with no selected email"
+        );
 
         app.active_pane = ActivePane::Attachments;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should return None in Attachments pane with no selected email");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should return None in Attachments pane with no selected email"
+        );
     }
 
     #[test]
@@ -599,25 +626,33 @@ mod tests {
         // Start in FolderMessages view with Folders active (welcome screen)
         app.current_view = View::FolderMessages;
         app.active_pane = ActivePane::Folders;
-        assert!(app.get_current_email_for_web().is_none(), 
-                "Should show welcome screen in FolderMessages view with Folders active");
+        assert!(
+            app.get_current_email_for_web().is_none(),
+            "Should show welcome screen in FolderMessages view with Folders active"
+        );
 
         // Switch to Messages pane in same view - should serve email
         app.active_pane = ActivePane::Messages;
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email in FolderMessages view with Messages active");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email in FolderMessages view with Messages active"
+        );
 
         // Navigate to MessagesContent view - should still serve email
         app.next_view();
         assert_eq!(app.current_view, View::MessagesContent);
         // Active pane should now be Messages (default for MessagesContent)
         assert_eq!(app.active_pane, ActivePane::Messages);
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email in MessagesContent view");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email in MessagesContent view"
+        );
 
         // Switch to Content pane - should still serve email
         app.active_pane = ActivePane::Content;
-        assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email in Content pane");
+        assert!(
+            app.get_current_email_for_web().is_some(),
+            "Should serve email in Content pane"
+        );
     }
 }

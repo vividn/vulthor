@@ -7,8 +7,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Wrap,
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
     },
 };
 
@@ -37,10 +37,6 @@ impl UI {
         let size = f.area();
 
         match app.state {
-            AppState::AttachmentView => {
-                self.draw_main_layout(f, app, size);
-                self.draw_attachment_popup(f, app, size);
-            }
             AppState::Help => {
                 self.draw_help_screen(f, size);
             }
@@ -415,62 +411,6 @@ impl UI {
         }
     }
 
-    fn draw_attachment_popup(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
-        if let Some(email) = app.email_store.get_selected_email() {
-            if !email.attachments.is_empty() {
-                // Calculate popup size
-                let popup_area = self.centered_rect(60, 70, area);
-
-                // Clear the area
-                f.render_widget(Clear, popup_area);
-
-                // Create attachment list
-                let attachment_items: Vec<ListItem> = email
-                    .attachments
-                    .iter()
-                    .enumerate()
-                    .map(|(i, attachment)| {
-                        let size_str = if attachment.size < 1024 {
-                            format!("{} B", attachment.size)
-                        } else if attachment.size < 1024 * 1024 {
-                            format!("{:.1} KB", attachment.size as f64 / 1024.0)
-                        } else {
-                            format!("{:.1} MB", attachment.size as f64 / (1024.0 * 1024.0))
-                        };
-
-                        let content = format!(
-                            "{:2}. {} ({}) - {}",
-                            i + 1,
-                            attachment.filename,
-                            attachment.content_type,
-                            size_str
-                        );
-
-                        ListItem::new(content)
-                    })
-                    .collect();
-
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().fg(VulthorTheme::ACCENT_LIGHT))
-                    .title("Attachments - Enter: Open, Shift+Enter: Custom Command, Esc: Close");
-
-                let list = List::new(attachment_items).block(block).highlight_style(
-                    Style::default()
-                        .bg(VulthorTheme::SELECTION_BG)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                );
-
-                // Update selection state
-                self.attachment_list_state
-                    .select(Some(app.selection.attachment_index));
-
-                f.render_stateful_widget(list, popup_area, &mut self.attachment_list_state);
-            }
-        }
-    }
-
     fn draw_status_bar(&mut self, f: &mut Frame, app: &App, area: Rect) {
         let status_area = Rect {
             x: area.x,
@@ -482,22 +422,14 @@ impl UI {
         let mut status_text = vec![];
 
         // Add key bindings help
-        let help_text = match app.state {
-            AppState::AttachmentView => {
-                "Enter: Open | Shift+Enter: Custom | Esc: Close".to_string()
-            }
-            _ => {
-                let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
-                let content_toggle = if app.content_pane_hidden {
-                    ""
-                } else {
-                    " | M-c: Hide Content"
-                };
-                format!(
-                    "{}{} | M-a: Attachments | q: Quit",
-                    base_help, content_toggle
-                )
-            }
+        let help_text = {
+            let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
+            let content_toggle = if app.content_pane_hidden {
+                " | M-c: Show Content"
+            } else {
+                " | M-c: Hide Content"
+            };
+            format!("{}{} | q: Quit", base_help, content_toggle)
         };
 
         status_text.push(Span::styled(
@@ -538,9 +470,6 @@ impl UI {
             Line::from("  h          - Switch to folder/message view"),
             Line::from("  l          - Switch to message/content view"),
             Line::from(""),
-            Line::from("Email Actions:"),
-            Line::from("  M-a        - View attachments"),
-            Line::from(""),
             Line::from("Other:"),
             Line::from("  ?          - Show this help"),
             Line::from("  q          - Quit application"),
@@ -557,9 +486,7 @@ impl UI {
             .block(block)
             .wrap(Wrap { trim: true });
 
-        let help_area = self.centered_rect(60, 80, area);
-        f.render_widget(Clear, help_area);
-        f.render_widget(paragraph, help_area);
+        f.render_widget(paragraph, area);
     }
 
     fn build_folder_list_static(folder: &Folder, depth: usize) -> Vec<ListItem> {
@@ -609,26 +536,5 @@ impl UI {
                 ListItem::new(content).style(style)
             })
             .collect()
-    }
-
-    /// Helper function to create a centered rect
-    fn centered_rect(&self, percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-        let popup_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((100 - percent_y) / 2),
-                Constraint::Percentage(percent_y),
-                Constraint::Percentage((100 - percent_y) / 2),
-            ])
-            .split(r);
-
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage((100 - percent_x) / 2),
-                Constraint::Percentage(percent_x),
-                Constraint::Percentage((100 - percent_x) / 2),
-            ])
-            .split(popup_layout[1])[1]
     }
 }

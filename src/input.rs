@@ -37,7 +37,6 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> bool {
             app.set_state(AppState::FolderView);
             false
         }
-        AppState::AttachmentView => handle_attachment_view_input(app, key),
         _ => handle_main_view_input(app, key),
     }
 }
@@ -111,20 +110,6 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             false
         }
 
-        // Attachments
-        KeyCode::Char('a') if key.modifiers == KeyModifiers::ALT => {
-            if let Some(email) = app.email_store.get_selected_email() {
-                if email.has_attachments() {
-                    app.set_state(AppState::AttachmentView);
-                } else {
-                    app.set_status("No attachments in this email".to_string());
-                }
-            } else {
-                app.set_status("No email selected".to_string());
-            }
-            false
-        }
-
         // Scrolling in content pane
         KeyCode::PageDown if matches!(app.active_pane, ActivePane::Content) => {
             app.scroll(ScrollDirection::Down, 10);
@@ -135,38 +120,6 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             false
         }
 
-        _ => false,
-    }
-}
-
-fn handle_attachment_view_input(app: &mut App, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Esc => {
-            app.set_state(AppState::EmailContent);
-            false
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(email) = app.email_store.get_selected_email() {
-                if app.selection.attachment_index + 1 < email.attachments.len() {
-                    app.selection.attachment_index += 1;
-                }
-            }
-            false
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if app.selection.attachment_index > 0 {
-                app.selection.attachment_index -= 1;
-            }
-            false
-        }
-        KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
-            handle_attachment_open(app, true);
-            false
-        }
-        KeyCode::Enter => {
-            handle_attachment_open(app, false);
-            false
-        }
         _ => false,
     }
 }
