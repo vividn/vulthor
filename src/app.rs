@@ -384,15 +384,15 @@ impl App {
 
     /// Get the currently selected email for web serving
     /// Returns None when active pane is Folders to show welcome screen
-    pub fn get_current_email_for_web(&self) -> Option<&crate::email::Email> {
+    pub fn get_current_email_for_web(&mut self) -> Option<&crate::email::Email> {
         // Show welcome screen when user is actively browsing folders
         // Only serve emails when focused on email-related panes
         match self.active_pane {
             ActivePane::Folders => None, // Show welcome screen when browsing folders
             ActivePane::Messages | ActivePane::Content | ActivePane::Attachments => {
                 // Serve email when focused on email-related panes
-                // Use headers-only version for web serving (more efficient and reliable)
-                self.email_store.get_selected_email_headers()
+                // Use fully loaded version for web serving to include body content
+                self.email_store.get_selected_email()
             }
         }
     }

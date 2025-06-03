@@ -65,7 +65,7 @@ impl WebServer {
 }
 
 async fn serve_email(State(app_state): State<SharedAppState>) -> Response {
-    let app = match app_state.lock() {
+    let mut app = match app_state.lock() {
         Ok(app) => app,
         Err(_) => {
             return (
@@ -118,7 +118,7 @@ async fn email_events(
                 sleep(Duration::from_millis(200)).await; // Faster polling for better responsiveness
 
                 let current_email_id = {
-                    let app = app_state.lock().ok()?;
+                    let mut app = app_state.lock().ok()?;
                     // Create a unique identifier that changes when displayable content changes
                     let folder_index = app.selection.folder_index;
                     let email_index = app.selection.email_index;
@@ -145,7 +145,7 @@ async fn email_events(
 }
 
 async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Response {
-    let app = match app_state.lock() {
+    let mut app = match app_state.lock() {
         Ok(app) => app,
         Err(_) => {
             return (
