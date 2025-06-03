@@ -26,17 +26,17 @@ impl View {
     pub fn get_available_panes(&self, content_hidden: bool) -> Vec<ActivePane> {
         if content_hidden {
             match self {
-                View::FolderMessages => vec![ActivePane::Folders, ActivePane::List],
-                View::Messages => vec![ActivePane::List],
-                View::MessagesAttachments => vec![ActivePane::List, ActivePane::Attachments],
-                _ => vec![ActivePane::List], // Fallback for invalid states
+                View::FolderMessages => vec![ActivePane::Folders, ActivePane::Messages],
+                View::Messages => vec![ActivePane::Messages],
+                View::MessagesAttachments => vec![ActivePane::Messages, ActivePane::Attachments],
+                _ => vec![ActivePane::Messages], // Fallback for invalid states
             }
         } else {
             match self {
-                View::FolderMessages => vec![ActivePane::Folders, ActivePane::List],
-                View::MessagesContent => vec![ActivePane::List, ActivePane::Content],
+                View::FolderMessages => vec![ActivePane::Folders, ActivePane::Messages],
+                View::MessagesContent => vec![ActivePane::Messages, ActivePane::Content],
                 View::Content => vec![ActivePane::Content],
-                _ => vec![ActivePane::List], // Fallback for invalid states
+                _ => vec![ActivePane::Messages], // Fallback for invalid states
             }
         }
     }
@@ -46,16 +46,16 @@ impl View {
         if content_hidden {
             match self {
                 View::FolderMessages => ActivePane::Folders,
-                View::Messages => ActivePane::List,
+                View::Messages => ActivePane::Messages,
                 View::MessagesAttachments => ActivePane::Attachments,
-                _ => ActivePane::List,
+                _ => ActivePane::Messages,
             }
         } else {
             match self {
                 View::FolderMessages => ActivePane::Folders,
-                View::MessagesContent => ActivePane::List,
+                View::MessagesContent => ActivePane::Messages,
                 View::Content => ActivePane::Content,
-                _ => ActivePane::List,
+                _ => ActivePane::Messages,
             }
         }
     }
@@ -102,7 +102,7 @@ impl View {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActivePane {
     Folders,     // Left pane
-    List,        // Center pane (messages)
+    Messages,    // Center pane (messages)
     Content,     // Right pane
     Attachments, // Attachment pane
 }
@@ -160,12 +160,12 @@ impl App {
                 self.should_quit = true;
             }
             AppState::EmailList => {
-                // When entering email list, ensure we're in the list pane
+                // When entering email list, ensure we're in the messages pane
                 let available_panes = self
                     .current_view
                     .get_available_panes(self.content_pane_hidden);
-                if available_panes.contains(&ActivePane::List) {
-                    self.active_pane = ActivePane::List;
+                if available_panes.contains(&ActivePane::Messages) {
+                    self.active_pane = ActivePane::Messages;
                 }
             }
             AppState::EmailContent => {
@@ -216,18 +216,18 @@ impl App {
         let old_pane = self.active_pane.clone();
         let new_pane = available_panes[new_index].clone();
 
-        // Handle selection memory when switching between Folders and List panes
+        // Handle selection memory when switching between Folders and Messages panes
         match (&old_pane, &new_pane) {
-            (ActivePane::List, ActivePane::Folders) => {
-                // Moving from List to Folders - remember current email selection
+            (ActivePane::Messages, ActivePane::Folders) => {
+                // Moving from Messages to Folders - remember current email selection
                 if self.email_store.selected_email.is_some() {
                     self.selection.remembered_email_index = Some(self.selection.email_index);
                 }
                 // Deselect the email to show welcome screen
                 self.email_store.selected_email = None;
             }
-            (ActivePane::Folders, ActivePane::List) => {
-                // Moving from Folders to List - restore remembered selection or select first email
+            (ActivePane::Folders, ActivePane::Messages) => {
+                // Moving from Folders to Messages - restore remembered selection or select first email
                 if let Some(remembered_index) = self.selection.remembered_email_index {
                     self.selection.email_index = remembered_index;
                     self.email_store.select_email(remembered_index);
@@ -390,7 +390,7 @@ impl App {
         // Only serve emails when focused on email-related panes
         match self.active_pane {
             ActivePane::Folders => None, // Show welcome screen when browsing folders
-            ActivePane::List | ActivePane::Content | ActivePane::Attachments => {
+            ActivePane::Messages | ActivePane::Content | ActivePane::Attachments => {
                 // Serve email when focused on email-related panes
                 // Use headers-only version for web serving (more efficient and reliable)
                 self.email_store.get_selected_email_headers()
@@ -528,10 +528,10 @@ mod tests {
         assert!(app.get_current_email_for_web().is_none(), 
                 "Should show welcome screen when active pane is Folders");
 
-        // Test: When active pane is List, should return selected email
-        app.active_pane = ActivePane::List;
+        // Test: When active pane is Messages, should return selected email
+        app.active_pane = ActivePane::Messages;
         assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email when active pane is List");
+                "Should serve email when active pane is Messages");
 
         // Test: When active pane is Content, should return selected email
         app.active_pane = ActivePane::Content;
@@ -553,12 +553,12 @@ mod tests {
         assert!(app.get_current_email_for_web().is_none(), 
                 "Should show welcome screen initially in Folders pane");
 
-        // Switch to List pane - email should be immediately available
+        // Switch to Messages pane - email should be immediately available
         app.switch_pane(PaneSwitchDirection::Right);
-        assert_eq!(app.active_pane, ActivePane::List, 
-                  "Should be in List pane after switching from Folders");
+        assert_eq!(app.active_pane, ActivePane::Messages, 
+                  "Should be in Messages pane after switching from Folders");
         assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email immediately when switching to List pane");
+                "Should serve email immediately when switching to Messages pane");
 
         // Switch back to Folders pane - should show welcome screen
         app.switch_pane(PaneSwitchDirection::Left);
@@ -579,9 +579,9 @@ mod tests {
         assert!(app.get_current_email_for_web().is_none(), 
                 "Should return None in Folders pane with no selected email");
 
-        app.active_pane = ActivePane::List;
+        app.active_pane = ActivePane::Messages;
         assert!(app.get_current_email_for_web().is_none(), 
-                "Should return None in List pane with no selected email");
+                "Should return None in Messages pane with no selected email");
 
         app.active_pane = ActivePane::Content;
         assert!(app.get_current_email_for_web().is_none(), 
@@ -602,16 +602,16 @@ mod tests {
         assert!(app.get_current_email_for_web().is_none(), 
                 "Should show welcome screen in FolderMessages view with Folders active");
 
-        // Switch to List pane in same view - should serve email
-        app.active_pane = ActivePane::List;
+        // Switch to Messages pane in same view - should serve email
+        app.active_pane = ActivePane::Messages;
         assert!(app.get_current_email_for_web().is_some(), 
-                "Should serve email in FolderMessages view with List active");
+                "Should serve email in FolderMessages view with Messages active");
 
         // Navigate to MessagesContent view - should still serve email
         app.next_view();
         assert_eq!(app.current_view, View::MessagesContent);
-        // Active pane should now be List (default for MessagesContent)
-        assert_eq!(app.active_pane, ActivePane::List);
+        // Active pane should now be Messages (default for MessagesContent)
+        assert_eq!(app.active_pane, ActivePane::Messages);
         assert!(app.get_current_email_for_web().is_some(), 
                 "Should serve email in MessagesContent view");
 

@@ -60,10 +60,10 @@ impl UI {
                     .split(area);
 
                 let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
-                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
 
                 self.draw_folder_pane(f, app, chunks[0], is_folders_active);
-                self.draw_email_list_pane(f, app, chunks[1], is_list_active);
+                self.draw_messages_pane(f, app, chunks[1], is_messages_active);
             }
             View::MessagesContent => {
                 // Two panes: messages and content
@@ -72,10 +72,10 @@ impl UI {
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
                 let is_content_active = matches!(app.active_pane, ActivePane::Content);
 
-                self.draw_email_list_pane(f, app, chunks[0], is_list_active);
+                self.draw_messages_pane(f, app, chunks[0], is_messages_active);
                 self.draw_content_pane(f, app, chunks[1], is_content_active);
             }
             View::Content => {
@@ -85,8 +85,8 @@ impl UI {
             }
             View::Messages => {
                 // Single pane: messages only (when content hidden)
-                let is_list_active = matches!(app.active_pane, ActivePane::List);
-                self.draw_email_list_pane(f, app, area, is_list_active);
+                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
+                self.draw_messages_pane(f, app, area, is_messages_active);
             }
             View::MessagesAttachments => {
                 // Two panes: messages and attachments
@@ -95,10 +95,10 @@ impl UI {
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_list_active = matches!(app.active_pane, ActivePane::List);
+                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
                 let is_attachments_active = matches!(app.active_pane, ActivePane::Attachments);
 
-                self.draw_email_list_pane(f, app, chunks[0], is_list_active);
+                self.draw_messages_pane(f, app, chunks[0], is_messages_active);
                 self.draw_attachments_pane(f, app, chunks[1], is_attachments_active);
             }
         }
@@ -146,7 +146,7 @@ impl UI {
         f.render_stateful_widget(list, area, &mut self.folder_list_state);
     }
 
-    fn draw_email_list_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
+    fn draw_messages_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
         // Calculate visible rows for dynamic loading (area height minus borders)
         let visible_rows = (area.height.saturating_sub(2)) as usize; // -2 for top and bottom borders
 

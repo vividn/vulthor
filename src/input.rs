@@ -197,7 +197,7 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
                 app.load_selected_folder_messages();
             }
         }
-        ActivePane::List => {
+        ActivePane::Messages => {
             let current_folder = app.email_store.get_current_folder();
             let total_emails = current_folder.emails.len();
 
@@ -295,7 +295,7 @@ fn handle_folder_selection_and_switch_view(app: &mut App) {
                 } else {
                     app.current_view = View::MessagesContent;
                 }
-                app.active_pane = ActivePane::List;
+                app.active_pane = ActivePane::Messages;
                 app.set_state(AppState::EmailList);
             }
             Err(e) => {
@@ -348,7 +348,7 @@ fn handle_selection(app: &mut App) {
                 }
             }
         }
-        ActivePane::List => {
+        ActivePane::Messages => {
             // Select email and switch to content view
             let current_folder = app.email_store.get_current_folder();
             if app.selection.email_index < current_folder.emails.len() {
@@ -359,7 +359,7 @@ fn handle_selection(app: &mut App) {
                 } else {
                     app.current_view = View::MessagesContent;
                 }
-                app.active_pane = ActivePane::List;
+                app.active_pane = ActivePane::Messages;
                 app.set_state(AppState::EmailContent);
             }
         }
@@ -375,7 +375,7 @@ fn handle_selection(app: &mut App) {
 
 fn handle_back_navigation(app: &mut App) {
     match app.active_pane {
-        ActivePane::Folders | ActivePane::List => {
+        ActivePane::Folders | ActivePane::Messages => {
             // Go back to parent folder
             app.email_store.exit_folder();
             app.selection.folder_index = 0;
@@ -390,7 +390,7 @@ fn handle_back_navigation(app: &mut App) {
         ActivePane::Attachments => {
             // Switch back to messages view
             app.current_view = View::MessagesContent;
-            app.active_pane = ActivePane::List;
+            app.active_pane = ActivePane::Messages;
             app.set_state(AppState::EmailList);
         }
     }
@@ -584,7 +584,7 @@ mod tests {
         // Navigate into INBOX folder
         app.email_store.current_folder = vec![0]; // Enter INBOX
         app.current_view = View::MessagesContent;
-        app.active_pane = ActivePane::List;
+        app.active_pane = ActivePane::Messages;
 
         // Select the third email (index 2)
         app.selection.email_index = 2;
@@ -605,8 +605,8 @@ mod tests {
         assert_eq!(app.email_store.selected_email, None);
         assert_eq!(app.current_view, View::FolderMessages);
 
-        // Switch back to message view using 'l' from List pane
-        app.active_pane = ActivePane::List; // Simulate being in List pane
+        // Switch back to message view using 'l' from Messages pane
+        app.active_pane = ActivePane::Messages; // Simulate being in Messages pane
         handle_key_event(
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
@@ -701,7 +701,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
         assert_eq!(app.current_view, View::MessagesContent);
-        assert_eq!(app.active_pane, ActivePane::List);
+        assert_eq!(app.active_pane, ActivePane::Messages);
 
         // Navigate to second email
         handle_key_event(
@@ -724,7 +724,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
         assert_eq!(app.current_view, View::MessagesContent);
-        assert_eq!(app.active_pane, ActivePane::List);
+        assert_eq!(app.active_pane, ActivePane::Messages);
         assert_eq!(app.selection.email_index, 1); // Should restore selection
 
         // Go back to folder view again using 'h'
@@ -741,7 +741,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
         assert_eq!(app.current_view, View::MessagesContent);
-        assert_eq!(app.active_pane, ActivePane::List);
+        assert_eq!(app.active_pane, ActivePane::Messages);
         assert_eq!(app.selection.email_index, 1); // Should still restore selection
     }
 
@@ -807,7 +807,7 @@ mod tests {
         // Enter INBOX folder and select an email
         app.email_store.current_folder = vec![0];
         app.current_view = View::MessagesContent;
-        app.active_pane = ActivePane::List;
+        app.active_pane = ActivePane::Messages;
         app.selection.email_index = 1;
         app.email_store.select_email(1);
 
@@ -827,8 +827,8 @@ mod tests {
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
 
-        // Should be in List pane, not Content pane
-        assert_eq!(app.active_pane, ActivePane::List);
+        // Should be in Messages pane, not Content pane
+        assert_eq!(app.active_pane, ActivePane::Messages);
 
         // Do it again to make sure it doesn't skip
         handle_key_event(
@@ -841,7 +841,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
-        assert_eq!(app.active_pane, ActivePane::List);
+        assert_eq!(app.active_pane, ActivePane::Messages);
 
         // And one more time
         handle_key_event(
@@ -854,6 +854,6 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         );
-        assert_eq!(app.active_pane, ActivePane::List);
+        assert_eq!(app.active_pane, ActivePane::Messages);
     }
 }
