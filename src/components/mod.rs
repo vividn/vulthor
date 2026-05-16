@@ -12,10 +12,12 @@
 #![allow(dead_code, unused_imports)]
 
 mod ctx;
+mod folders;
 mod msg;
 mod root;
 
 pub use ctx::Ctx;
+pub use folders::FoldersComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
 pub use root::AppRoot;
 

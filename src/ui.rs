@@ -1,8 +1,9 @@
 use crate::app::{ActivePane, App, AppState, View};
-use crate::email::{Email, Folder};
+use crate::components::{Component, Ctx, FoldersComponent};
+use crate::config::Config;
+use crate::email::Email;
 use crate::theme::VulthorTheme;
 use chrono::{DateTime, Local};
-use unicode_width::UnicodeWidthStr;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -13,9 +14,9 @@ use ratatui::{
         ScrollbarState, Wrap,
     },
 };
+use unicode_width::UnicodeWidthStr;
 
 pub struct UI {
-    folder_list_state: ListState,
     email_list_state: ListState,
     attachment_list_state: ListState,
 }
@@ -29,13 +30,12 @@ impl Default for UI {
 impl UI {
     pub fn new() -> Self {
         Self {
-            folder_list_state: ListState::default(),
             email_list_state: ListState::default(),
             attachment_list_state: ListState::default(),
         }
     }
 
-    pub fn draw(&mut self, f: &mut Frame, app: &mut App) {
+    pub fn draw(&mut self, f: &mut Frame, app: &mut App, folders: &FoldersComponent) {
         let size = f.area();
 
         match app.state {
@@ -43,12 +43,18 @@ impl UI {
                 self.draw_help_screen(f, size);
             }
             _ => {
-                self.draw_main_layout(f, app, size);
+                self.draw_main_layout(f, app, folders, size);
             }
         }
     }
 
-    fn draw_main_layout(&mut self, f: &mut Frame, app: &mut App, area: Rect) {
+    fn draw_main_layout(
+        &mut self,
+        f: &mut Frame,
+        app: &mut App,
+        folders: &FoldersComponent,
+        area: Rect,
+    ) {
         match app.current_view {
             View::FolderMessages => {
                 // Two panes: folders and messages
@@ -60,7 +66,15 @@ impl UI {
                 let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
                 let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
 
-                self.draw_folder_pane(f, app, chunks[0], is_folders_active);
+                // Folder pane now renders through `FoldersComponent`.
+                let theme = VulthorTheme;
+                let config = Config::default();
+                let ctx = Ctx {
+                    theme: &theme,
+                    config: &config,
+                    store: &app.email_store,
+                };
+                folders.render(f, chunks[0], is_folders_active, &ctx);
                 self.draw_messages_pane(f, app, chunks[1], is_messages_active);
             }
             View::MessagesContent => {
@@ -105,45 +119,6 @@ impl UI {
         self.draw_status_bar(f, app, area);
     }
 
-    fn draw_folder_pane(&mut self, f: &mut Frame, app: &App, area: Rect, is_active: bool) {
-        // Always show the root folder structure, not the current folder's subfolders
-        let root_folder = &app.email_store.root_folder;
-        let folder_items = Self::build_folder_list_static(root_folder, 0);
-
-        let style = if is_active {
-            Style::default().fg(VulthorTheme::ACCENT)
-        } else {
-            Style::default()
-        };
-
-        let border_style = if is_active {
-            Style::default().fg(VulthorTheme::ACCENT)
-        } else {
-            Style::default()
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .style(border_style)
-            .title("Folders");
-
-        let list = List::new(folder_items)
-            .block(block)
-            .style(style)
-            .highlight_style(
-                Style::default()
-                    .bg(VulthorTheme::SELECTION_BG)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        // Update selection state
-        self.folder_list_state
-            .select(Some(app.selection.folder_index));
-
-        f.render_stateful_widget(list, area, &mut self.folder_list_state);
-    }
-
     fn draw_messages_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
         // Calculate visible rows for dynamic loading (area height minus borders)
         let visible_rows = (area.height.saturating_sub(2)) as usize; // -2 for top and bottom borders
@@ -169,13 +144,13 @@ impl UI {
         };
 
         // Check if current folder is Sent to show To field instead of From
-        let is_sent_folder = folder_to_display.name == "Sent" || 
-                            folder_to_display.name.to_lowercase().contains("sent");
+        let is_sent_folder = folder_to_display.name == "Sent"
+            || folder_to_display.name.to_lowercase().contains("sent");
 
         let email_items = Self::build_email_list_with_truncation(
-            &folder_to_display.emails, 
+            &folder_to_display.emails,
             area.width.saturating_sub(2) as usize, // -2 for borders
-            is_sent_folder
+            is_sent_folder,
         );
 
         let style = if is_active {
@@ -499,31 +474,12 @@ impl UI {
         f.render_widget(paragraph, area);
     }
 
-    fn build_folder_list_static(folder: &Folder, depth: usize) -> Vec<ListItem> {
-        let mut items = Vec::new();
-
-        // Add current folder if not root
-        if depth > 0 {
-            let indent = "  ".repeat(depth - 1);
-            let display_name = folder.get_display_name();
-            let content = format!("{}{}", indent, display_name);
-            items.push(ListItem::new(content));
-        }
-
-        // Add subfolders in sorted order
-        for subfolder in folder.get_sorted_subfolders() {
-            items.extend(Self::build_folder_list_static(subfolder, depth + 1));
-        }
-
-        items
-    }
-
     fn format_email_date(date_str: &str) -> String {
         // Try to parse the RFC3339 date
         if let Ok(date_time) = DateTime::parse_from_rfc3339(date_str) {
             let local_time = date_time.with_timezone(&Local);
             let today = Local::now().date_naive();
-            
+
             if local_time.date_naive() == today {
                 // Today: show time in 24-hour format
                 local_time.format("%H:%M").to_string()
@@ -539,44 +495,44 @@ impl UI {
 
     fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
         let text_width = text.width();
-        
+
         if text_width <= max_width {
             text.to_string()
         } else if max_width > 3 {
             // We need to find the right truncation point by iterating through grapheme clusters
             let mut current_width = 0;
             let mut truncation_point = 0;
-            
+
             for (idx, ch) in text.char_indices() {
                 let ch_str = &text[idx..idx + ch.len_utf8()];
                 let ch_width = ch_str.width();
-                
+
                 if current_width + ch_width > max_width - 3 {
                     break;
                 }
-                
+
                 current_width += ch_width;
                 truncation_point = idx + ch.len_utf8();
             }
-            
+
             format!("{}...", &text[..truncation_point])
         } else {
             // For very small widths, just take what we can
             let mut current_width = 0;
             let mut truncation_point = 0;
-            
+
             for (idx, ch) in text.char_indices() {
                 let ch_str = &text[idx..idx + ch.len_utf8()];
                 let ch_width = ch_str.width();
-                
+
                 if current_width + ch_width > max_width {
                     break;
                 }
-                
+
                 current_width += ch_width;
                 truncation_point = idx + ch.len_utf8();
             }
-            
+
             text[..truncation_point].to_string()
         }
     }
@@ -608,23 +564,27 @@ impl UI {
         }
     }
 
-    fn build_email_list_with_truncation(emails: &[Email], available_width: usize, is_sent_folder: bool) -> Vec<ListItem> {
+    fn build_email_list_with_truncation(
+        emails: &[Email],
+        available_width: usize,
+        is_sent_folder: bool,
+    ) -> Vec<ListItem> {
         // Column widths:
         // - Unread indicator: 2 chars (• + space)
         // - From/To: 20 chars min, 30% of available space max
         // - Subject: flexible (remaining space)
         // - Attachment icon: 3 chars (📎 takes 2 + space) - always reserved for alignment
         // - Date: 10 chars (YYYY-MM-DD or HH:MM)
-        
+
         const UNREAD_WIDTH: usize = 2;
         const DATE_WIDTH: usize = 10;
         const ATTACHMENT_WIDTH: usize = 3; // emoji takes 2 columns + 1 space
         const SEPARATORS: usize = 8; // spaces between columns
-        
+
         let min_from_width = 15;
         let max_from_width = (available_width * 30) / 100; // 30% max
         let from_width = min_from_width.max(max_from_width).min(25); // Cap at 25 chars
-        
+
         emails
             .iter()
             .enumerate()
@@ -643,14 +603,11 @@ impl UI {
                     .saturating_sub(SEPARATORS);
 
                 let mut spans = vec![];
-                
+
                 // Column 1: Unread indicator
-                spans.push(Span::styled(
-                    if email.is_unread { "•" } else { " " },
-                    style,
-                ));
+                spans.push(Span::styled(if email.is_unread { "•" } else { " " }, style));
                 spans.push(Span::raw(" "));
-                
+
                 // Column 2: From/To field
                 let sender = if is_sent_folder {
                     Self::extract_email_address(&email.headers.to)
@@ -662,7 +619,7 @@ impl UI {
                 let padded_sender = Self::pad_to_width(&truncated_sender, from_width);
                 spans.push(Span::styled(padded_sender, style));
                 spans.push(Span::raw("  "));
-                
+
                 // Column 3: Subject
                 let subject = if email.headers.subject.is_empty() {
                     "(No Subject)"
@@ -673,14 +630,18 @@ impl UI {
                 let padded_subject = Self::pad_to_width(&truncated_subject, subject_width);
                 spans.push(Span::styled(padded_subject, style));
                 spans.push(Span::raw("  "));
-                
+
                 // Column 4: Status icons (always present for alignment)
                 spans.push(Span::styled(
-                    if email.has_attachments() { "📎" } else { "  " }, // Two spaces to match emoji width
+                    if email.has_attachments() {
+                        "📎"
+                    } else {
+                        "  "
+                    }, // Two spaces to match emoji width
                     style,
                 ));
                 spans.push(Span::raw(" "));
-                
+
                 // Column 5: Date
                 let date_str = Self::format_email_date(&email.headers.date);
                 spans.push(Span::styled(date_str, style));
@@ -689,7 +650,6 @@ impl UI {
             })
             .collect()
     }
-
 }
 
 #[cfg(test)]
@@ -703,9 +663,9 @@ mod tests {
         // Get current time and format as RFC3339
         let now = Local::now();
         let date_str = now.to_rfc3339();
-        
+
         let formatted = UI::format_email_date(&date_str);
-        
+
         // Should show time in HH:MM format
         assert_eq!(formatted.len(), 5);
         assert!(formatted.contains(':'));
@@ -715,9 +675,9 @@ mod tests {
     fn test_format_email_date_past() {
         // Create a date from 2024
         let date_str = "2024-01-15T10:30:00+00:00";
-        
+
         let formatted = UI::format_email_date(&date_str);
-        
+
         // Should show date in YYYY-MM-DD format
         assert_eq!(formatted, "2024-01-15");
     }
@@ -725,9 +685,9 @@ mod tests {
     #[test]
     fn test_format_email_date_invalid() {
         let date_str = "invalid date";
-        
+
         let formatted = UI::format_email_date(&date_str);
-        
+
         // Should return first 10 chars
         assert_eq!(formatted, "invalid da");
     }
@@ -737,19 +697,22 @@ mod tests {
         // Test no truncation needed
         let text = "Short text";
         assert_eq!(UI::truncate_with_ellipsis(text, 20), "Short text");
-        
+
         // Test truncation
         let text = "This is a very long subject line that needs truncation";
         assert_eq!(UI::truncate_with_ellipsis(text, 20), "This is a very lo...");
-        
+
         // Test edge case
         assert_eq!(UI::truncate_with_ellipsis(text, 3), "Thi");
-        
+
         // Test with emoji
         let text_emoji = "Hello 🌍 World 🚀 Test";
         // Each emoji takes 2 visual columns
-        assert_eq!(UI::truncate_with_ellipsis(text_emoji, 15), "Hello 🌍 Wor...");
-        
+        assert_eq!(
+            UI::truncate_with_ellipsis(text_emoji, 15),
+            "Hello 🌍 Wor..."
+        );
+
         // Test emoji at truncation boundary
         let text_emoji2 = "Test 🎉🎊🎈";
         assert_eq!(UI::truncate_with_ellipsis(text_emoji2, 8), "Test ...");
@@ -761,12 +724,12 @@ mod tests {
         let text = "Hello";
         assert_eq!(UI::pad_to_width(text, 10), "Hello     ");
         assert_eq!(UI::pad_to_width(text, 10).width(), 10);
-        
+
         // Test text with emoji
         let text_emoji = "Hi 🌍";
         // "Hi " = 3, emoji = 2, total = 5
         assert_eq!(UI::pad_to_width(text_emoji, 10).width(), 10);
-        
+
         // Test when text is already wider
         assert_eq!(UI::pad_to_width(text_emoji, 3), text_emoji);
     }
@@ -776,11 +739,11 @@ mod tests {
         // Test name with email format
         let from = "John Doe <john@example.com>";
         assert_eq!(UI::extract_email_address(from), "John Doe");
-        
+
         // Test plain email
         let from = "jane@example.com";
         assert_eq!(UI::extract_email_address(from), "jane");
-        
+
         // Test just name
         let from = "Bob Smith";
         assert_eq!(UI::extract_email_address(from), "Bob Smith");
@@ -792,18 +755,19 @@ mod tests {
         email.headers = EmailHeaders {
             from: "Alice Johnson <alice@example.com>".to_string(),
             to: "Bob Smith <bob@example.com>".to_string(),
-            subject: "This is a very long subject line that will need to be truncated for display".to_string(),
+            subject: "This is a very long subject line that will need to be truncated for display"
+                .to_string(),
             date: Local::now().to_rfc3339(),
             message_id: "123".to_string(),
         };
         email.is_unread = true;
-        
+
         let emails = vec![email];
-        
+
         // Test with various widths
         let items = UI::build_email_list_with_truncation(&emails, 80, false);
         assert_eq!(items.len(), 1);
-        
+
         // Test Sent folder (should use To field)
         let items_sent = UI::build_email_list_with_truncation(&emails, 80, true);
         assert_eq!(items_sent.len(), 1);
@@ -820,13 +784,13 @@ mod tests {
             message_id: "456".to_string(),
         };
         email.is_unread = false;
-        
+
         let emails = vec![email];
-        
+
         // Test that it handles emoji without crashing
         let items = UI::build_email_list_with_truncation(&emails, 60, false);
         assert_eq!(items.len(), 1);
-        
+
         // The item should be properly formatted despite emojis
         // This test mainly ensures no panic occurs
     }

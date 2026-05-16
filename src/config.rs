@@ -126,9 +126,12 @@ mod tests {
 
         let args = CliArgs::parse_from(&[
             "vulthor",
-            "-p", "9000",
-            "-c", "/config.toml",
-            "-m", "/maildir"
+            "-p",
+            "9000",
+            "-c",
+            "/config.toml",
+            "-m",
+            "/maildir",
         ]);
         assert_eq!(args.port, 9000);
         assert_eq!(args.config_path, Some(PathBuf::from("/config.toml")));

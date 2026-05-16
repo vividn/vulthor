@@ -81,11 +81,9 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
             if matches!(app.active_pane, ActivePane::Folders) {
                 // Get the currently selected folder path
                 let root_folder = &app.email_store.root_folder;
-                let selected_folder_path = get_folder_path_from_display_index(
-                    root_folder,
-                    app.selection.folder_index,
-                );
-                
+                let selected_folder_path =
+                    get_folder_path_from_display_index(root_folder, app.selection.folder_index);
+
                 // If we're already in the selected folder, just do view navigation
                 // Otherwise, enter the folder (like Enter key)
                 if let Some(path) = selected_folder_path {
@@ -144,7 +142,11 @@ fn handle_main_view_input(app: &mut App, key: KeyEvent) -> bool {
 fn handle_navigation(app: &mut App, direction: NavigationDirection) {
     match app.active_pane {
         ActivePane::Folders => {
-            // For folder navigation, always use the root folder structure (displayed in folder pane)
+            // FoldersComponent (Phase 0.2.2b, vu-sd6) owns folder-pane
+            // navigation. AppRoot routes Folders-pane keys to the
+            // component before falling through here, so this arm is a
+            // safety net for paths that bypass AppRoot (mainly tests
+            // that drive `handle_input` directly).
             let root_folder = &app.email_store.root_folder;
             let total_folders = count_visible_folders(root_folder);
 
@@ -162,7 +164,6 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
                 }
             }
 
-            // If folder selection changed, automatically load messages from the new folder
             if app.selection.folder_index != old_folder_index {
                 app.load_selected_folder_messages();
             }
@@ -228,7 +229,7 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
     }
 }
 
-fn handle_folder_selection_and_switch_view(app: &mut App) {
+pub fn handle_folder_selection_and_switch_view(app: &mut App) {
     // Navigate into selected folder and switch to message/content view
     let root_folder = &app.email_store.root_folder;
     let folder_path = get_folder_path_from_display_index(root_folder, app.selection.folder_index);

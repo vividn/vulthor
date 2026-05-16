@@ -1,26 +1,30 @@
-// `AppRoot` — the live main-loop driver (Phase 0.2.2a, vu-gje).
+// `AppRoot` — the live main-loop driver, now hosting `FoldersComponent`.
 //
-// AppRoot is now functional: it owns the `Msg` queue, intercepts global keys
-// before they reach the legacy `handle_input` path, dispatches messages via
-// `apply_root` (which calls back into `App` methods), and renders by
-// delegating to today's `ui::UI::draw`. No panes have been migrated to
-// components yet — that lands in vu-sd6 onward.
+// Phase 0.2.2a (vu-gje) made AppRoot functional but no panes were
+// migrated. Phase 0.2.2b (vu-sd6) extracts the first one: the folder
+// pane. AppRoot now owns a `FoldersComponent` and routes Folders-pane
+// keys to it before falling back to the legacy `handle_input` path.
 //
-// **Sharing model.** `AppRoot` holds a clone of the `SharedAppState`
-// (`Arc<Mutex<App>>`) so the web server keeps its existing direct access
-// path. AppRoot does not own the lock; it acquires it inside `tick` and
-// `render` for the duration of those operations.
+// **Folder-index sync.** `FoldersComponent.folder_index` is the
+// canonical source. `App.selection.folder_index` is a mirror kept in
+// step by `apply_root` (after dispatching messages the component
+// produced) and by `sync_app_to_folders` (after falling through to
+// the legacy `input.rs` path, which still writes the App field for
+// `Backspace`). Mirroring lets `ui.rs` and the rest of `input.rs`
+// keep reading the App field until vu-3yj extracts the Messages
+// pane.
 //
-// **Global key interception.** `handle_global_key` returns `Some(Msg)` for
-// keys that don't depend on pane state: `q`, `?`, `Alt+c`, `Tab`, `BackTab`,
-// `h`, and `l`. The `l` key from the Folders pane has pane-specific
-// folder-enter behavior that the legacy `input.rs` path still owns; we
-// return `None` in that case and let it fall through. Help-state keys also
-// skip global interception so the legacy "any key exits help" behavior is
-// preserved.
+// **Sharing model.** AppRoot holds a clone of the `SharedAppState`
+// (`Arc<Mutex<App>>`) so the web server keeps its existing access
+// path. AppRoot does not own the lock; it acquires it inside `tick`
+// and `render` for the duration of those operations.
 //
-// See DESIGN-COMPONENTS.md § "Composition" for the target shape this is
-// converging toward.
+// **Global key interception.** `handle_global_key` returns `Some(Msg)`
+// for keys that don't depend on pane state: `q`, `?`, `Alt+c`, `Tab`,
+// `BackTab`, `h`, and `l` from non-Folders panes. The Folders pane
+// owns its own `l` (and j/k/Enter) via `FoldersComponent::on_key`.
+// Help-state keys also skip global interception so the legacy "any
+// key exits help" behavior is preserved.
 
 use std::collections::VecDeque;
 use std::io;
@@ -30,27 +34,38 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::app::{ActivePane, App, AppState, PaneSwitchDirection, SharedAppState};
+use crate::config::Config;
 use crate::error::Result;
+use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
-use super::{MAX_DISPATCH_DEPTH, Msg};
+use super::{Component, Ctx, FoldersComponent, MAX_DISPATCH_DEPTH, Msg};
 
 pub struct AppRoot {
     state: SharedAppState,
+    folders: FoldersComponent,
     queue: VecDeque<Msg>,
 }
 
 impl AppRoot {
     pub fn new(state: SharedAppState) -> Self {
+        // Seed FoldersComponent from the same auto-INBOX rule App uses,
+        // so the two start in sync. We read once under the lock and
+        // release before storing the component.
+        let initial_index = {
+            let app = state.lock().unwrap();
+            FoldersComponent::auto_select_inbox(&app.email_store.root_folder)
+        };
         Self {
             state,
+            folders: FoldersComponent::with_index(initial_index),
             queue: VecDeque::new(),
         }
     }
 
     /// Enqueue a message for the next dispatch cycle. Exposed primarily for
     /// tests and future component plumbing; the runtime fills the queue via
-    /// `handle_global_key` inside `tick`.
+    /// `handle_global_key` and `FoldersComponent::on_key` inside `tick`.
     pub fn enqueue(&mut self, msg: Msg) {
         self.queue.push_back(msg);
     }
@@ -65,6 +80,12 @@ impl AppRoot {
         self.state.clone()
     }
 
+    /// Read-only handle to the folder pane component. Used by `main.rs`
+    /// to thread the component into `UI::draw` for rendering.
+    pub fn folders(&self) -> &FoldersComponent {
+        &self.folders
+    }
+
     /// Render one frame. Locks the app, delegates to `ui::UI::draw`, and
     /// returns whether the loop should exit (quit state observed).
     pub fn render(
@@ -73,7 +94,8 @@ impl AppRoot {
         ui: &mut UI,
     ) -> Result<bool> {
         let mut app = self.state.lock().unwrap();
-        terminal.draw(|f| ui.draw(f, &mut app))?;
+        let folders = &self.folders;
+        terminal.draw(|f| ui.draw(f, &mut app, folders))?;
         Ok(app.should_quit || matches!(app.state, AppState::Quit))
     }
 
@@ -87,9 +109,10 @@ impl AppRoot {
         self.process_event(event)
     }
 
-    /// Apply a single input event: drain queued global messages, then fall
-    /// back to the legacy `handle_input` path for keys we don't intercept.
-    /// Split out from `tick` so tests can drive it without `event::poll`.
+    /// Apply a single input event: dispatch queued/component messages,
+    /// then fall back to the legacy `handle_input` path for keys we
+    /// don't intercept. Split out from `tick` so tests can drive it
+    /// without `event::poll`.
     pub fn process_event(&mut self, event: Event) -> Result<bool> {
         // Clone the Arc so the MutexGuard doesn't borrow `self.state` —
         // we need `&mut self` available for `self.drain(&mut app)` below.
@@ -102,17 +125,35 @@ impl AppRoot {
             app.clear_status();
         }
 
-        if let Event::Key(key) = event {
-            if !matches!(app.state, AppState::Help) {
-                if let Some(msg) = Self::handle_global_key(key, &app.active_pane) {
+        if let Event::Key(key) = event
+            && !matches!(app.state, AppState::Help)
+        {
+            // 1. Global keys win unconditionally.
+            if let Some(msg) = Self::handle_global_key(key, &app.active_pane) {
+                self.queue.push_back(msg);
+                self.drain(&mut app);
+                return Ok(app.should_quit);
+            }
+            // 2. Folders-pane keys go to the component first.
+            if matches!(app.active_pane, ActivePane::Folders) {
+                let ctx_msg = {
+                    let ctx = Self::make_ctx(&app);
+                    self.folders.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
                     self.queue.push_back(msg);
                     self.drain(&mut app);
                     return Ok(app.should_quit);
                 }
+                // Fall through (e.g. Backspace) — see sync below.
             }
         }
 
         let should_quit = crate::input::handle_input(&mut app, event);
+        // Legacy `handle_input` may have written `app.selection.folder_index`
+        // (only Backspace does today). Pull the change back so the
+        // component stays canonical.
+        self.sync_app_to_folders(&app);
         Ok(should_quit || app.should_quit)
     }
 
@@ -129,9 +170,9 @@ impl AppRoot {
             (KeyCode::BackTab, _) => Some(Msg::FocusPrev),
             (KeyCode::Char('h'), m) if m.is_empty() => Some(Msg::ViewPrev),
             (KeyCode::Char('l'), m) if m.is_empty() => {
-                // 'l' from the Folders pane triggers folder-entering logic
-                // that still lives in `input.rs`. Defer to that path; the
-                // pane-aware behavior moves into FoldersComponent in vu-sd6.
+                // 'l' from Folders is owned by FoldersComponent (it has
+                // the "already inside the folder?" check). Other panes
+                // get a plain ViewNext.
                 if matches!(active_pane, ActivePane::Folders) {
                     None
                 } else {
@@ -142,10 +183,11 @@ impl AppRoot {
         }
     }
 
-    /// Drain the message queue. For each message, apply root-level effects
-    /// (App method calls) and broadcast to components (no-op until the
-    /// first component lands). Bounded by `MAX_DISPATCH_DEPTH` to catch
-    /// runaway emission. Pub for tests; the runtime calls it via `tick`.
+    /// Drain the message queue. Each message is first broadcast to
+    /// every component, then applied at root level (App method calls,
+    /// store mutations, mirroring). Bounded by `MAX_DISPATCH_DEPTH`
+    /// to catch runaway emission. Pub for tests; the runtime calls
+    /// it via `tick`.
     pub fn drain(&mut self, app: &mut App) -> bool {
         let mut steps = 0usize;
         while let Some(msg) = self.queue.pop_front() {
@@ -153,9 +195,14 @@ impl AppRoot {
             if steps > MAX_DISPATCH_DEPTH {
                 return false;
             }
-            Self::apply_root(&msg, app);
-            // No components registered yet — broadcast is a no-op. When
-            // FoldersComponent lands (vu-sd6), iterate components here.
+            // Components first — they may update their owned state.
+            let follow_ups = {
+                let ctx = Self::make_ctx(app);
+                self.folders.handle_msg(&msg, &ctx)
+            };
+            self.queue.extend(follow_ups);
+            // Then root-level effects (App methods, mirroring).
+            self.apply_root(&msg, app);
         }
         true
     }
@@ -168,11 +215,11 @@ impl AppRoot {
         self.drain(&mut app)
     }
 
-    /// Apply a `Msg` against the root-owned `App`. This is the bridge from
-    /// the new message-driven contract to today's imperative `App` API.
-    /// As components migrate, the variants they own will stop landing
-    /// here and start landing in their `handle_msg`.
-    fn apply_root(msg: &Msg, app: &mut App) {
+    /// Apply a `Msg` against the root-owned `App` and reconcile mirrors.
+    /// This is the bridge from the new message-driven contract to today's
+    /// imperative `App` API. As components migrate, the variants they
+    /// own will stop landing here and start landing in their `handle_msg`.
+    fn apply_root(&mut self, msg: &Msg, app: &mut App) {
         match msg {
             Msg::Quit => app.set_state(AppState::Quit),
             Msg::ToggleHelp => {
@@ -187,24 +234,99 @@ impl AppRoot {
             Msg::FocusPrev => app.switch_pane(PaneSwitchDirection::Left),
             Msg::ViewNext => app.next_view(),
             Msg::ViewPrev => app.prev_view(),
+            Msg::FolderMove(_) => {
+                // FoldersComponent already updated its index. Mirror
+                // into App so the Messages pane (still legacy) sees
+                // the new selection, then load the folder's messages.
+                app.selection.folder_index = self.folders.folder_index;
+                app.load_selected_folder_messages();
+                // Emit FolderLoaded carrying the folder's filesystem
+                // path so future subscribers (e.g. the forthcoming
+                // MessagesComponent) can react. No component listens
+                // yet; this is bookkeeping for the contract documented
+                // in DESIGN-COMPONENTS.md.
+                let indices = crate::input::get_folder_path_from_display_index(
+                    &app.email_store.root_folder,
+                    self.folders.folder_index,
+                );
+                if let Some(indices) = indices
+                    && let Some(folder) = app.email_store.get_folder_at_path(&indices)
+                {
+                    self.queue.push_back(Msg::FolderLoaded(folder.path.clone()));
+                }
+            }
+            Msg::FolderEnter => {
+                // Delegate to the legacy helper; it knows how to
+                // navigate `current_folder`, load emails, and switch
+                // views. `folder_index` is not reset by that helper,
+                // so no mirror update is needed here.
+                crate::input::handle_folder_selection_and_switch_view(app);
+            }
             // All other variants belong to components that haven't been
-            // extracted yet. Leaving them as no-ops here is correct: the
-            // legacy `input.rs` path still drives those behaviors.
+            // extracted yet. Leaving them as no-ops here is correct:
+            // the legacy `input.rs` path still drives those behaviors.
             _ => {}
+        }
+    }
+
+    /// Pull `app.selection.folder_index` into `FoldersComponent` after the
+    /// legacy `handle_input` path runs. The only path that still writes
+    /// the App field is `Backspace` → `handle_back_navigation`. This sync
+    /// keeps the component canonical without us having to re-implement
+    /// back-navigation in the component this phase.
+    fn sync_app_to_folders(&mut self, app: &App) {
+        if self.folders.folder_index != app.selection.folder_index {
+            self.folders.folder_index = app.selection.folder_index;
+        }
+    }
+
+    /// Build a fresh `Ctx` for component dispatch. Theme and config are
+    /// not configurable yet (and the only component reading them is the
+    /// folder pane, which uses `VulthorTheme`'s associated consts).
+    /// When configuration arrives, this is the seam to widen.
+    fn make_ctx(app: &App) -> Ctx<'_> {
+        // `VulthorTheme` is a unit struct; its consts are accessed
+        // through the type, not an instance, so the borrow is fine.
+        Ctx {
+            theme: &THEME,
+            config: &CONFIG,
+            store: &app.email_store,
         }
     }
 }
 
+// Static defaults for the read-only fields of `Ctx`. The folder pane
+// only reads `store` from `Ctx`; these exist so the struct can be
+// constructed without an owning instance. Replace with `AppRoot`-owned
+// values when configuration plumbing lands.
+static THEME: VulthorTheme = VulthorTheme;
+// `Config` does not implement `const` construction; use `LazyLock`.
+static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::default);
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::email::EmailStore;
+    use crate::email::{Email, EmailStore, Folder};
     use crate::maildir::MaildirScanner;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     fn make_root() -> AppRoot {
         let store = EmailStore::new(PathBuf::from("/tmp"));
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let app = App::new(store, scanner);
+        AppRoot::new(Arc::new(Mutex::new(app)))
+    }
+
+    fn make_root_with_folders(names: &[&str]) -> AppRoot {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        for name in names {
+            let mut folder = Folder::new(name.to_string(), PathBuf::from(format!("/tmp/{}", name)));
+            folder.add_email(Email::new(PathBuf::from(format!("/tmp/{}/m1", name))));
+            folder.add_email(Email::new(PathBuf::from(format!("/tmp/{}/m2", name))));
+            folder.is_loaded = true;
+            store.root_folder.add_subfolder(folder);
+        }
         let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
         let app = App::new(store, scanner);
         AppRoot::new(Arc::new(Mutex::new(app)))
@@ -223,8 +345,7 @@ mod tests {
         assert!(matches!(app.state, AppState::Quit));
     }
 
-    /// `Msg::ToggleHelp` round-trips: Help → FolderView → Help. Documents
-    /// the same toggle semantics that `input.rs::handle_key_event` has.
+    /// `Msg::ToggleHelp` round-trips: Help → FolderView → Help.
     #[test]
     fn approot_toggles_help() {
         let mut root = make_root();
@@ -254,7 +375,7 @@ mod tests {
     #[test]
     fn handle_global_key_l_from_folders_defers() {
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
-        // From Folders pane: must defer to legacy input.rs (returns None).
+        // From Folders pane: must defer to FoldersComponent (returns None).
         assert!(AppRoot::handle_global_key(key, &ActivePane::Folders).is_none());
         // From other panes: emits ViewNext.
         assert_eq!(
@@ -270,8 +391,106 @@ mod tests {
             AppRoot::handle_global_key(key, &ActivePane::Folders),
             Some(Msg::ToggleContentPane)
         );
-        // Plain 'c' is not a global — falls through to handle_input.
+        // Plain 'c' is not a global — falls through.
         let plain = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
         assert!(AppRoot::handle_global_key(plain, &ActivePane::Folders).is_none());
+    }
+
+    /// Bead-acceptance regression: 'j j Enter' from a fresh AppRoot must
+    /// move the folder selection to index 2 and emit FolderLoaded as part
+    /// of the FolderMove side-effect chain.
+    #[test]
+    fn key_sequence_jj_enter_selects_third_folder_and_emits_folder_loaded() {
+        let mut root = make_root_with_folders(&["A", "B", "C", "D"]);
+
+        // 'j' twice
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j.clone()).unwrap();
+        // After the first 'j', a FolderLoaded for the new selection was
+        // pushed onto the queue by apply_root. drain consumed it inside
+        // process_event; nothing for the second 'j' to collide with.
+        root.process_event(j).unwrap();
+
+        assert_eq!(
+            root.folders.folder_index, 2,
+            "two 'j' presses must advance to the third folder",
+        );
+        assert_eq!(
+            root.state.lock().unwrap().selection.folder_index,
+            2,
+            "App.selection.folder_index must mirror the component",
+        );
+
+        // Verify FolderLoaded was emitted during the most recent FolderMove
+        // by replaying the side effect on a fresh root and inspecting the
+        // queue before drain.
+        let mut probe = make_root_with_folders(&["A", "B"]);
+        probe.enqueue(Msg::FolderMove(crate::components::Dir::Down));
+        let state = probe.state.clone();
+        let mut app = state.lock().unwrap();
+        // Manually run one step of drain so we can observe the follow-up.
+        let msg = probe.queue.pop_front().unwrap();
+        {
+            let ctx = AppRoot::make_ctx(&app);
+            probe.folders.handle_msg(&msg, &ctx);
+        }
+        probe.apply_root(&msg, &mut app);
+        assert!(
+            probe
+                .queue
+                .iter()
+                .any(|m| matches!(m, Msg::FolderLoaded(_))),
+            "FolderMove must enqueue a FolderLoaded follow-up",
+        );
+
+        // Now press Enter — should not panic; enters the selected folder.
+        drop(app);
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = root.process_event(enter);
+        let app = root.state.lock().unwrap();
+        assert_eq!(
+            app.email_store.current_folder,
+            vec![2],
+            "Enter from Folders pane must enter the selected folder",
+        );
+    }
+
+    /// 'k' at the top of the folder list is a no-op (clamp, not wrap).
+    /// Documents the boundary behavior the component inherits from the
+    /// legacy `handle_navigation` path.
+    #[test]
+    fn key_k_at_top_clamps() {
+        let mut root = make_root_with_folders(&["A", "B"]);
+        // Force fresh state at index 0 (auto-INBOX may have started us
+        // elsewhere; reset for a deterministic boundary test).
+        root.folders.folder_index = 0;
+        root.state.lock().unwrap().selection.folder_index = 0;
+
+        let k = Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        root.process_event(k).unwrap();
+        assert_eq!(root.folders.folder_index, 0);
+    }
+
+    /// 'j' past the end of the folder list is a no-op (clamp).
+    #[test]
+    fn key_j_at_bottom_clamps() {
+        let mut root = make_root_with_folders(&["A", "B"]);
+        root.folders.folder_index = 1;
+        root.state.lock().unwrap().selection.folder_index = 1;
+
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j).unwrap();
+        assert_eq!(root.folders.folder_index, 1);
+    }
+
+    /// Auto-INBOX selection happens before any key event: a fresh AppRoot
+    /// over a store with INBOX listed alongside others still starts at INBOX,
+    /// regardless of the insertion order. `get_sorted_subfolders` always
+    /// hoists INBOX to index 0 (see `email::Folder::get_sorted_subfolders`),
+    /// so the auto-select rule lands there.
+    #[test]
+    fn approot_new_auto_selects_inbox() {
+        let root = make_root_with_folders(&["Drafts", "Sent", "INBOX", "Archive"]);
+        assert_eq!(root.folders.folder_index, 0);
     }
 }

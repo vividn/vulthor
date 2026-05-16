@@ -187,12 +187,12 @@ mod tests {
         store
     }
 
-    fn ctx<'a>(
-        theme: &'a VulthorTheme,
-        config: &'a Config,
-        store: &'a EmailStore,
-    ) -> Ctx<'a> {
-        Ctx { theme, config, store }
+    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+        Ctx {
+            theme,
+            config,
+            store,
+        }
     }
 
     #[test]
@@ -217,7 +217,10 @@ mod tests {
         let ctx = ctx(&theme, &config, &store);
 
         let mut comp = FoldersComponent::with_index(0);
-        assert!(comp.handle_msg(&Msg::FolderMove(Dir::Down), &ctx).is_empty());
+        assert!(
+            comp.handle_msg(&Msg::FolderMove(Dir::Down), &ctx)
+                .is_empty()
+        );
         assert_eq!(comp.folder_index, 1);
         comp.handle_msg(&Msg::FolderMove(Dir::Down), &ctx);
         assert_eq!(comp.folder_index, 2);
