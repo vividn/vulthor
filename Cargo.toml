@@ -2,6 +2,26 @@
 name = "vulthor"
 version = "1.0.0"
 edition = "2024"
+description = "Modern TUI email client with an integrated HTML viewer. MailDir-native; pairs with mbsync, notmuch, and msmtp."
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/vividn/vulthor"
+homepage = "https://github.com/vividn/vulthor"
+readme = "README.md"
+keywords = ["email", "tui", "maildir", "mail", "terminal"]
+categories = ["command-line-utilities", "email"]
+authors = ["vividn"]
+exclude = [
+    "fixture/",
+    "notes/",
+    "packaging/",
+    ".github/",
+    "AUDIT-*.md",
+    "DESIGN-*.md",
+    "CLAUDE.md",
+    "VISION.md",
+    "TODO.txt",
+    "run-test-maildir.sh",
+]
 
 [dependencies]
 ratatui = "0.29"
@@ -23,3 +43,18 @@ notify = "8.2"
 
 [dev-dependencies]
 serde_json = "1.0"
+
+[package.metadata.deb]
+maintainer = "vividn <vividn@users.noreply.github.com>"
+copyright = "2026, vividn"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Vulthor is a modern TUI email client with an integrated HTML viewer.
+MailDir-native; pairs with mbsync (sync), notmuch (search), and msmtp (send)."""
+depends = "$auto, notmuch, msmtp, isync"
+section = "mail"
+priority = "optional"
+assets = [
+    ["target/release/vulthor", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/vulthor/README", "644"],
+]

@@ -35,6 +35,9 @@ cargo build --release
 # binary at target/release/vulthor
 ```
 
+Downstream packaging templates (Arch AUR, Debian/Ubuntu via `cargo-deb`)
+live under `packaging/`. See [Packaging](#packaging) below.
+
 ### 3. Install the companion tools
 
 Vulthor is intentionally minimal — it doesn't sync, search, or send mail
@@ -232,6 +235,23 @@ accept the suggestion for the selected message.
   same key (typically after a `[keybindings]` override that doesn't
   free the original key), Vulthor refuses to start and names both
   actions in the error. Rebind the colliding default to a free key.
+
+## Packaging
+
+Templates for downstream packagers live under `packaging/`:
+
+- **Arch (AUR)** — `packaging/aur/PKGBUILD`. The `sha256sums` line is
+  `SKIP` until the first release tarball is cut; replace it with the
+  real sha before uploading to AUR.
+- **Debian / Ubuntu** — `packaging/build-deb.sh` drives `cargo-deb`:
+  ```bash
+  cargo install cargo-deb
+  cargo build --release
+  packaging/build-deb.sh
+  # .deb is written to target/debian/
+  ```
+  The `[package.metadata.deb]` block in `Cargo.toml` declares runtime
+  dependencies (notmuch, msmtp, isync) and the install layout.
 
 ## Links
 
