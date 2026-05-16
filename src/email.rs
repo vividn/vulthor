@@ -588,18 +588,36 @@ impl EmailStore {
         }
     }
 
-    /// Select an email by index in current folder
+    /// Select an email by index in the displayed folder. When a
+    /// search-results virtual folder is active, the cursor mutates
+    /// `search_selected` so the underlying MailDir selection is
+    /// preserved across the search round-trip.
     pub fn select_email(&mut self, email_index: usize) {
+        if let Some(results) = self.search_results.as_ref() {
+            if email_index < results.emails.len() {
+                self.search_selected = Some(email_index);
+            }
+            return;
+        }
         let current = self.get_current_folder();
         if email_index < current.emails.len() {
             self.selected_email = Some(email_index);
         }
     }
 
-    /// Get currently selected email (non-blocking — returns whatever state the email is in).
-    /// Body-loading happens off the render thread via the body-loader worker; callers that
-    /// need a guaranteed-loaded email use `get_selected_email_mut().ensure_fully_loaded()`.
+    /// Get the currently selected email (non-blocking — returns
+    /// whatever state the email is in). When a search-results virtual
+    /// folder is active, the selection comes from `search_selected`
+    /// instead of `selected_email`. Body-loading happens off the
+    /// render thread via the body-loader worker; callers that need a
+    /// guaranteed-loaded email use
+    /// `get_selected_email_mut().ensure_fully_loaded()`.
     pub fn get_selected_email(&self) -> Option<&Email> {
+        if let Some(results) = self.search_results.as_ref() {
+            return self
+                .search_selected
+                .and_then(|index| results.emails.get(index));
+        }
         let current = self.get_current_folder();
         self.selected_email
             .and_then(|index| current.emails.get(index))
