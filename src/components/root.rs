@@ -1896,6 +1896,30 @@ impl AppRoot {
         self.help_visible
     }
 
+    /// Resolved [`Keymap`] (defaults + `[keybindings]` overrides).
+    /// Integration tests inspect this to confirm config-time overrides
+    /// reach the dispatch table; runtime code reads the field directly.
+    #[cfg(test)]
+    pub(crate) fn keymap(&self) -> &Keymap {
+        &self.keymap
+    }
+
+    /// Runtime [`Theme`] installed by `main.rs` via [`Self::set_theme`].
+    /// Integration tests use this to verify `[theme]` resolution lands
+    /// on AppRoot.
+    #[cfg(test)]
+    pub(crate) fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Pump the inotify watcher once and dispatch any debounced
+    /// `Msg::MailDirChanged` it produces. Test seam — runtime code
+    /// reaches this via `tick`/`render`.
+    #[cfg(test)]
+    pub(crate) fn pump_maildir_watcher(&mut self) {
+        self.drain_maildir_watcher();
+    }
+
     fn make_ctx<'a>(config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme: &THEME,
