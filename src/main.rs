@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     let args = CliArgs::parse();
 
     // Load configuration
-    let mut config = match Config::load(args.config_path) {
+    let mut config = match Config::load(args.config_path).await {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {}", e);
@@ -151,12 +151,12 @@ mod tests {
         assert!(matches!(app.state, AppState::FolderView));
     }
 
-    #[test]
-    fn test_config_loading() {
+    #[tokio::test]
+    async fn test_config_loading() {
         let config = Config::default();
         assert!(config.maildir_path.to_string_lossy().contains("Mail"));
 
-        let result = Config::load(Some(PathBuf::from("/non/existent/path")));
+        let result = Config::load(Some(PathBuf::from("/non/existent/path"))).await;
         assert!(result.is_err());
     }
 }

@@ -37,11 +37,11 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration from file, falling back to default locations
-    pub fn load(config_path: Option<PathBuf>) -> Result<Self> {
+    pub async fn load(config_path: Option<PathBuf>) -> Result<Self> {
         // Try explicit config path first
         if let Some(path) = config_path {
             if path.exists() {
-                return Self::load_from_file(&path);
+                return Self::load_from_file(&path).await;
             } else {
                 return Err(VulthorError::ConfigNotFound(path));
             }
@@ -51,22 +51,22 @@ impl Config {
         if let Some(home) = dirs::home_dir() {
             let config_dir_path = home.join(".config/vulthor/config.toml");
             if config_dir_path.exists() {
-                return Self::load_from_file(&config_dir_path);
+                return Self::load_from_file(&config_dir_path).await;
             }
         }
 
         // Try ./vulthor.toml
         let local_config = PathBuf::from("./vulthor.toml");
         if local_config.exists() {
-            return Self::load_from_file(&local_config);
+            return Self::load_from_file(&local_config).await;
         }
 
         // Return default config if no config file found
         Ok(Self::default())
     }
 
-    fn load_from_file(path: &PathBuf) -> Result<Self> {
-        let contents = std::fs::read_to_string(path)?;
+    async fn load_from_file(path: &PathBuf) -> Result<Self> {
+        let contents = tokio::fs::read_to_string(path).await?;
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
@@ -163,8 +163,8 @@ mod tests {
         assert_eq!(deserialized.maildir_path, PathBuf::from("/test/maildir"));
     }
 
-    #[test]
-    fn test_config_load_with_explicit_path_exists() {
+    #[tokio::test]
+    async fn test_config_load_with_explicit_path_exists() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
 
@@ -177,27 +177,27 @@ mod tests {
         fs::write(&config_path, contents).unwrap();
 
         // Load it back
-        let loaded_config = Config::load(Some(config_path)).unwrap();
+        let loaded_config = Config::load(Some(config_path)).await.unwrap();
         assert_eq!(
             loaded_config.maildir_path,
             PathBuf::from("/custom/mail/path")
         );
     }
 
-    #[test]
-    fn test_config_load_with_explicit_path_not_exists() {
+    #[tokio::test]
+    async fn test_config_load_with_explicit_path_not_exists() {
         let non_existent_path = PathBuf::from("/definitely/does/not/exist/config.toml");
-        let result = Config::load(Some(non_existent_path));
+        let result = Config::load(Some(non_existent_path)).await;
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Config file not found"));
     }
 
-    #[test]
-    fn test_config_load_fallback_to_default() {
+    #[tokio::test]
+    async fn test_config_load_fallback_to_default() {
         // When no explicit path and no config files exist
-        let result = Config::load(None);
+        let result = Config::load(None).await;
         assert!(result.is_ok());
 
         let config = result.unwrap();
@@ -205,8 +205,8 @@ mod tests {
         assert!(config.maildir_path.to_string_lossy().contains("Mail"));
     }
 
-    #[test]
-    fn test_config_load_from_home_config_dir() {
+    #[tokio::test]
+    async fn test_config_load_from_home_config_dir() {
         // This test creates a config file in a temp directory and simulates
         // the ~/.config/vulthor/config.toml scenario
         let temp_dir = TempDir::new().unwrap();
@@ -216,15 +216,15 @@ mod tests {
         fs::write(&config_file, config_content).unwrap();
 
         // Load from the file directly (simulating home config scenario)
-        let result = Config::load_from_file(&config_file);
+        let result = Config::load_from_file(&config_file).await;
         assert!(result.is_ok());
 
         let config = result.unwrap();
         assert_eq!(config.maildir_path, PathBuf::from("/home/user/TestMail"));
     }
 
-    #[test]
-    fn test_config_load_from_local_config() {
+    #[tokio::test]
+    async fn test_config_load_from_local_config() {
         let temp_dir = TempDir::new().unwrap();
         let config_content = r#"maildir_path = "/project/local/mail""#;
 
@@ -232,39 +232,39 @@ mod tests {
         fs::write(&config_file, config_content).unwrap();
 
         // Load from the file directly (simulating local config scenario)
-        let result = Config::load_from_file(&config_file);
+        let result = Config::load_from_file(&config_file).await;
         assert!(result.is_ok());
 
         let config = result.unwrap();
         assert_eq!(config.maildir_path, PathBuf::from("/project/local/mail"));
     }
 
-    #[test]
-    fn test_config_load_from_file_invalid_toml() {
+    #[tokio::test]
+    async fn test_config_load_from_file_invalid_toml() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("invalid.toml");
 
         // Write invalid TOML content
         fs::write(&config_path, "invalid toml content [[[").unwrap();
 
-        let result = Config::load_from_file(&config_path);
+        let result = Config::load_from_file(&config_path).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_config_load_from_file_missing_fields() {
+    #[tokio::test]
+    async fn test_config_load_from_file_missing_fields() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("incomplete.toml");
 
         // Write TOML with missing required field
         fs::write(&config_path, r#"some_other_field = "value""#).unwrap();
 
-        let result = Config::load_from_file(&config_path);
+        let result = Config::load_from_file(&config_path).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_config_with_relative_path() {
+    #[tokio::test]
+    async fn test_config_with_relative_path() {
         let config = Config {
             maildir_path: PathBuf::from("./relative/mail/path"),
         };
@@ -275,7 +275,7 @@ mod tests {
         // Save and load relative path
         let contents = toml::to_string(&config).unwrap();
         fs::write(&config_path, contents).unwrap();
-        let loaded_config = Config::load(Some(config_path)).unwrap();
+        let loaded_config = Config::load(Some(config_path)).await.unwrap();
 
         assert_eq!(
             loaded_config.maildir_path,
@@ -283,8 +283,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_config_with_unicode_path() {
+    #[tokio::test]
+    async fn test_config_with_unicode_path() {
         let config = Config {
             maildir_path: PathBuf::from("/home/用户/邮件"),
         };
@@ -297,7 +297,7 @@ mod tests {
         let save_result = fs::write(&config_path, contents);
         assert!(save_result.is_ok());
 
-        let loaded_config = Config::load(Some(config_path)).unwrap();
+        let loaded_config = Config::load(Some(config_path)).await.unwrap();
         assert_eq!(loaded_config.maildir_path, PathBuf::from("/home/用户/邮件"));
     }
 
