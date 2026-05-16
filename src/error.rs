@@ -1,10 +1,9 @@
-// Second slice of the thiserror migration epic (vu-ri8).
+// Unified error type for the thiserror migration epic (vu-ri8).
 //
-// Covers what `config.rs`, `email.rs`, and `maildir.rs` produce today. Other
-// modules still return `Box<dyn Error>` and will migrate in follow-on tasks.
-// `VulthorError` implements `std::error::Error`, so the `?` operator coerces
-// it to `Box<dyn Error>` at module boundaries — no bridging code is needed at
-// callers.
+// Used across config, email, maildir, web, and main. `VulthorError` is
+// Send + Sync so it can flow across tokio task boundaries (e.g. the web
+// server). It implements `std::error::Error`, so the `?` operator coerces
+// it to `Box<dyn Error>` at any boundary that still wants a boxed error.
 
 use std::path::PathBuf;
 use thiserror::Error;
@@ -118,5 +117,13 @@ mod tests {
             Ok(())
         }
         assert!(returns_box().is_err());
+    }
+
+    #[test]
+    fn vulthor_error_is_send_and_sync() {
+        // Required so the async web server (which crosses thread boundaries
+        // under tokio) can return VulthorError without bespoke boxing.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VulthorError>();
     }
 }

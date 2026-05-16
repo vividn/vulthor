@@ -1,4 +1,5 @@
 use crate::app::SharedAppState;
+use crate::error::Result;
 use axum::{
     Router,
     extract::State,
@@ -42,7 +43,7 @@ impl WebServer {
         Self { port, app_state }
     }
 
-    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&self) -> Result<()> {
         let app = Router::new()
             .route("/", get(serve_email))
             .route("/health", get(health_check))
@@ -110,7 +111,7 @@ async fn serve_letters() -> Response {
 
 async fn email_events(
     State(app_state): State<SharedAppState>,
-) -> Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>> {
+) -> Sse<impl Stream<Item = std::result::Result<axum::response::sse::Event, Infallible>>> {
     let stream = stream::unfold(None, move |last_email_id| {
         let app_state = app_state.clone();
         async move {

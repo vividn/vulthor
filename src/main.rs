@@ -21,6 +21,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use email::EmailStore;
+use error::Result;
 use input::handle_input;
 use maildir::MaildirScanner;
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -33,7 +34,7 @@ use ui::UI;
 use web::WebServer;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     // Parse command line arguments
     let args = CliArgs::parse();
 
@@ -121,7 +122,7 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut UI,
     app_state: SharedAppState,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     loop {
         {
             let mut app = app_state.lock().unwrap();
