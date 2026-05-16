@@ -3110,8 +3110,8 @@ mod tests {
     fn multi_account_switch_preserves_per_account_disk_state() {
         let temp_a = tempfile::TempDir::new().unwrap();
         let temp_b = tempfile::TempDir::new().unwrap();
-        let path_a = write_account_inbox(&temp_a.path().to_path_buf(), &["a-msg1", "a-msg2"]);
-        let path_b = write_account_inbox(&temp_b.path().to_path_buf(), &["b-msg1"]);
+        let path_a = write_account_inbox(temp_a.path(), &["a-msg1", "a-msg2"]);
+        let path_b = write_account_inbox(temp_b.path(), &["b-msg1"]);
 
         let mut cfg = Config::default();
         cfg.accounts.insert(
