@@ -101,6 +101,23 @@ impl Default for AiConfig {
     }
 }
 
+/// `[theme]` block. Selects a user-loadable theme by name (resolved
+/// against `~/.config/vulthor/themes/<name>.toml`) and/or specifies a
+/// per-role color override map. Resolution order:
+/// built-in default → user theme file (if `name` set) →
+/// `overrides` → final [`crate::theme::Theme`].
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ThemeConfig {
+    /// Selects a theme file at `~/.config/vulthor/themes/<name>.toml`.
+    /// `None` means use the built-in default.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Role-name → color string (hex `#RRGGBB`/`#RGB` or a named
+    /// ratatui color). Empty by default.
+    #[serde(default)]
+    pub overrides: BTreeMap<String, String>,
+}
+
 /// A single configured account. One per `[accounts.<key>]` section in
 /// `vulthor.toml`. The TOML table key becomes the [`AccountId`]; `name`
 /// is the human-facing display label rendered in the Accounts pane.
@@ -149,6 +166,9 @@ pub struct Config {
     /// See [`AiConfig`].
     #[serde(default)]
     pub ai: AiConfig,
+    /// `[theme]` block. Empty by default → built-in palette.
+    #[serde(default)]
+    pub theme: ThemeConfig,
 }
 
 impl Default for Config {
@@ -161,6 +181,7 @@ impl Default for Config {
             accounts: BTreeMap::new(),
             web: WebConfig::default(),
             ai: AiConfig::default(),
+            theme: ThemeConfig::default(),
         }
     }
 }

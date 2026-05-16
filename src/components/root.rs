@@ -30,7 +30,7 @@ use crate::email::{EmailLoadState, EmailStore, MarkReadPlan};
 use crate::error::Result;
 use crate::layout::{self, ActivePane, Layout, PaneSwitchDirection, View};
 use crate::maildir::MaildirScanner;
-use crate::theme::VulthorTheme;
+use crate::theme::{Theme, VulthorTheme};
 use crate::ui::UI;
 use crate::undo::{Mutation, Reversed};
 
@@ -112,6 +112,14 @@ pub struct AppRoot {
     /// and the second `v` press (terminate). Owned here — not on the
     /// `html_viewer` module — so the AppRoot destructor reaps it.
     html_viewer_child: Option<std::process::Child>,
+    /// Resolved runtime color theme. Built in `main.rs` by
+    /// `theme::build_theme(&config)` and installed via
+    /// [`Self::set_theme`]; defaults to the built-in palette so tests
+    /// that skip the wiring still produce a valid theme. Adoption by
+    /// the render path is tracked separately — today render code still
+    /// reads `VulthorTheme::*` constants.
+    #[allow(dead_code)]
+    theme: Theme,
 }
 
 /// Reply-template editor invocation parked between AppRoot dispatch
@@ -169,6 +177,7 @@ impl AppRoot {
             pending_editor: None,
             web_port: 8080,
             html_viewer_child: None,
+            theme: Theme::default(),
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -204,6 +213,16 @@ impl AppRoot {
     /// so the `v`-key viewer launches against the right URL.
     pub fn set_web_port(&mut self, port: u16) {
         self.web_port = port;
+    }
+
+    /// Install the runtime [`Theme`] resolved by
+    /// `crate::theme::build_theme`. `main.rs` calls this after config
+    /// load so user themes / `[theme].overrides` reach the component
+    /// tree. Tests that skip the wiring keep the built-in default
+    /// installed by `with_config`.
+    #[allow(dead_code)]
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
     }
 
     /// Clone of the focused-pane signal the web server reads.

@@ -87,9 +87,22 @@ async fn main() -> Result<()> {
     let web_port = args.port.unwrap_or(config.web.port);
     let web_bind = config.web.bind.clone();
 
+    // Resolve the runtime theme before building AppRoot so a malformed
+    // user theme / override fails loud at startup instead of silently
+    // rendering the built-in palette.
+    let resolved_theme = match theme::build_theme(&config) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Theme configuration error: {}", e);
+            eprintln!("Falling back to built-in theme.");
+            theme::Theme::default()
+        }
+    };
+
     let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
     app_root.set_web_port(web_port);
+    app_root.set_theme(resolved_theme);
 
     let web_server = WebServer::new(
         web_bind.clone(),
