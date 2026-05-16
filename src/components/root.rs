@@ -465,16 +465,29 @@ impl AppRoot {
             //    [keybindings] table. Atomic-key lookups only;
             //    sequence keys (`gg`/`G`/`gj`/`gk`/`gr`) stay with the
             //    focused component for now.
-            if let Some(action) = self.keymap.lookup_single(key)
-                && let Some(msg) = Self::action_to_msg(
+            if let Some(action) = self.keymap.lookup_single(key) {
+                // Phase 5.a — `;` (AcceptSuggestion) resolves the
+                // cursor email's classifier suggestion into the
+                // underlying mutation Msg (Archive / ToggleStar / …).
+                // No-op under NoopClassifier (the default), under
+                // sub-threshold confidence, and outside the Messages
+                // pane — the chip only appears in the Messages list.
+                if matches!(action, Action::AcceptSuggestion) {
+                    if let Some(msg) = self.resolve_accept_suggestion() {
+                        self.queue.push_back(msg);
+                        self.drain();
+                    }
+                    return Ok(self.should_quit);
+                }
+                if let Some(msg) = Self::action_to_msg(
                     action,
                     &self.layout.active_pane,
                     self.search_results_active(),
-                )
-            {
-                self.queue.push_back(msg);
-                self.drain();
-                return Ok(self.should_quit);
+                ) {
+                    self.queue.push_back(msg);
+                    self.drain();
+                    return Ok(self.should_quit);
+                }
             }
             // 2. Folders-pane keys go to FoldersComponent.
             if matches!(self.layout.active_pane, ActivePane::Folders) {
@@ -1149,6 +1162,46 @@ impl AppRoot {
     /// before the global view-prev shortcut fires.
     fn search_results_active(&self) -> bool {
         self.email_store.lock().unwrap().search_results.is_some()
+    }
+
+    /// Phase 5.a — resolve the cursor-selected email's classifier
+    /// suggestion into the underlying mutation `Msg`. Returns `None`
+    /// when there is no selected email, when the classifier abstains,
+    /// when confidence is below the configured threshold, or when the
+    /// suggested action has no Messages-pane shortcut. The default
+    /// `NoopClassifier` always abstains so `;` is a no-op under
+    /// `[ai].enabled = false`.
+    pub fn resolve_accept_suggestion(&self) -> Option<Msg> {
+        // The chip / accept-key path is Messages-list scoped.
+        if !matches!(self.layout.active_pane, ActivePane::Messages) {
+            return None;
+        }
+        let store = self.email_store.lock().unwrap();
+        let email = store.get_selected_email()?;
+        let suggestion = self.messages.classifier().suggest(email)?;
+        if suggestion.confidence < self.messages.confidence_threshold() {
+            return None;
+        }
+        Self::suggestion_to_msg(suggestion.action)
+    }
+
+    /// Map a classifier-suggested [`Action`] to the underlying mutation
+    /// `Msg` that the chip's keystroke would have produced. Returns
+    /// `None` for actions outside the chip-eligible set
+    /// ([`crate::classifier::suggestion_glyph`] is the authoritative
+    /// list).
+    fn suggestion_to_msg(action: Action) -> Option<Msg> {
+        match action {
+            Action::Archive => Some(Msg::Archive(String::new())),
+            Action::Star => Some(Msg::ToggleStar(String::new())),
+            Action::Delete => Some(Msg::Delete(String::new())),
+            Action::MarkUnread => Some(Msg::MarkUnread(String::new())),
+            Action::Reply => Some(Msg::DraftStart(ReplyKind::Reply, String::new())),
+            Action::ReplyAll => Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new())),
+            Action::ReplyLater => Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
+            Action::Forward => Some(Msg::DraftStart(ReplyKind::Forward, String::new())),
+            _ => None,
+        }
     }
 
     /// Probe `notmuch` and either open the modal or surface a

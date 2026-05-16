@@ -10,6 +10,7 @@
 //! See `VISION.md` for product scope and `CLAUDE.md` for architectural notes.
 #![deny(missing_docs)]
 
+mod classifier;
 mod components;
 mod compose;
 mod config;

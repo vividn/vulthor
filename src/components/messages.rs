@@ -15,6 +15,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -27,6 +28,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::classifier::{Classifier, NoopClassifier, suggestion_glyph};
+use crate::config::AiConfig;
 use crate::email::{DraftInfo, Email, Folder};
 use crate::theme::VulthorTheme;
 
@@ -62,6 +65,16 @@ pub struct MessagesComponent {
     /// can't poison subsequent keystrokes. See `on_key` for the table.
     pending_g: bool,
     list_state: RefCell<ListState>,
+    /// Phase 5.a AI classifier. Defaults to [`NoopClassifier`] so
+    /// `[ai].enabled = false` runs render the chip slot as blank and
+    /// `;` is a no-op. AppRoot swaps this via [`Self::set_classifier`]
+    /// at startup once the runtime classifier is built from `[ai]`.
+    classifier: Arc<dyn Classifier>,
+    /// Confidence cutoff for surfacing a suggestion chip. Seeded from
+    /// `AiConfig::default().threshold` (0.6) so tests that skip the
+    /// wiring still produce sensible behavior; AppRoot installs the
+    /// runtime value via [`Self::set_classifier`].
+    confidence_threshold: f32,
 }
 
 impl MessagesComponent {
@@ -75,7 +88,32 @@ impl MessagesComponent {
             visible_rows: Cell::new(20),
             pending_g: false,
             list_state: RefCell::new(ListState::default()),
+            classifier: Arc::new(NoopClassifier),
+            confidence_threshold: AiConfig::default().threshold,
         }
+    }
+
+    /// Install the runtime classifier and confidence cutoff. AppRoot
+    /// calls this once at startup after [`crate::classifier::build_classifier`].
+    /// Tests that exercise the chip rendering / accept-key path swap in
+    /// a stub classifier here.
+    pub fn set_classifier(&mut self, classifier: Arc<dyn Classifier>, threshold: f32) {
+        self.classifier = classifier;
+        self.confidence_threshold = threshold;
+    }
+
+    /// Read-only access to the installed classifier — AppRoot calls
+    /// `self.messages.classifier()` when resolving `Action::AcceptSuggestion`
+    /// so both the chip and the accept-key dispatch use the same instance.
+    pub fn classifier(&self) -> &Arc<dyn Classifier> {
+        &self.classifier
+    }
+
+    /// Read-only access to the installed confidence cutoff. Used by
+    /// AppRoot's `Action::AcceptSuggestion` handler to filter out
+    /// low-confidence suggestions the chip already hides.
+    pub fn confidence_threshold(&self) -> f32 {
+        self.confidence_threshold
     }
 
     /// Render the pane against an explicit folder reference. `AppRoot`
@@ -105,6 +143,8 @@ impl MessagesComponent {
             area.width.saturating_sub(2) as usize,
             is_sent_folder,
             drafts,
+            self.classifier.as_ref(),
+            self.confidence_threshold,
         );
 
         let style = if focused {
@@ -238,11 +278,30 @@ impl MessagesComponent {
         Some(if info.body_empty { '⏰' } else { '✏' })
     }
 
+    /// Phase 5.a — derive the suggestion chip glyph for `email` by
+    /// querying `classifier` and gating on `threshold`. Returns the
+    /// keymap-default character (`a`/`s`/`d`/`r`/…) when a confident
+    /// suggestion lands, or `None` otherwise. Extracted so tests can
+    /// drive the chip selection without a full Frame.
+    pub fn suggestion_chip_for(
+        classifier: &dyn Classifier,
+        threshold: f32,
+        email: &Email,
+    ) -> Option<char> {
+        let s = classifier.suggest(email)?;
+        if s.confidence < threshold {
+            return None;
+        }
+        suggestion_glyph(s.action)
+    }
+
     fn build_email_list_with_truncation(
         emails: &[Email],
         available_width: usize,
         is_sent_folder: bool,
         drafts: &HashMap<String, DraftInfo>,
+        classifier: &dyn Classifier,
+        threshold: f32,
     ) -> Vec<ListItem<'static>> {
         emails
             .iter()
@@ -252,6 +311,8 @@ impl MessagesComponent {
                     available_width,
                     is_sent_folder,
                     drafts,
+                    classifier,
+                    threshold,
                 )))
             })
             .collect()
@@ -266,11 +327,17 @@ impl MessagesComponent {
         available_width: usize,
         is_sent_folder: bool,
         drafts: &HashMap<String, DraftInfo>,
+        classifier: &dyn Classifier,
+        threshold: f32,
     ) -> Vec<Span<'static>> {
         const UNREAD_WIDTH: usize = 2;
         // `✏`/`⏰` plus trailing space — reserved even when no chip
         // present so the From column stays vertically aligned.
         const CHIP_WIDTH: usize = 2;
+        // AI suggestion chip — reserved beside the draft chip so an
+        // email with a classifier suggestion and an in-flight draft
+        // can show both without nudging the From column.
+        const AI_CHIP_WIDTH: usize = 2;
         const DATE_WIDTH: usize = 10;
         const ATTACHMENT_WIDTH: usize = 3;
         const SEPARATORS: usize = 8;
@@ -287,6 +354,7 @@ impl MessagesComponent {
         let subject_width = available_width
             .saturating_sub(UNREAD_WIDTH)
             .saturating_sub(CHIP_WIDTH)
+            .saturating_sub(AI_CHIP_WIDTH)
             .saturating_sub(from_width)
             .saturating_sub(DATE_WIDTH)
             .saturating_sub(ATTACHMENT_WIDTH)
@@ -296,13 +364,27 @@ impl MessagesComponent {
         spans.push(Span::styled(if email.is_unread { "•" } else { " " }, style));
         spans.push(Span::raw(" "));
 
-        // Chip slot. Always emits CHIP_WIDTH wide so absent chips don't
-        // shift the From column off by one.
+        // Draft chip slot. Always emits CHIP_WIDTH wide so absent chips
+        // don't shift the From column off by one.
         let chip_text = match Self::chip_for_message_id(drafts, &email.headers.message_id) {
             Some(c) => Self::pad_to_width(&c.to_string(), CHIP_WIDTH),
             None => " ".repeat(CHIP_WIDTH),
         };
         spans.push(Span::styled(chip_text, style));
+
+        // AI suggestion chip slot. Phase 5.a: NoopClassifier returns
+        // None so this stays blank; Phase 6 will start surfacing
+        // single-char glyphs (a/s/d/r/…) when the model is confident
+        // enough per `[ai].threshold`. Reserved-width keeps the From
+        // column aligned whether a chip is present or not.
+        let ai_chip_text = match Self::suggestion_chip_for(classifier, threshold, email) {
+            Some(c) => Self::pad_to_width(&c.to_string(), AI_CHIP_WIDTH),
+            None => " ".repeat(AI_CHIP_WIDTH),
+        };
+        spans.push(Span::styled(
+            ai_chip_text,
+            style.fg(VulthorTheme::CYAN),
+        ));
 
         let sender = if is_sent_folder {
             Self::extract_email_address(&email.headers.to)
@@ -1013,13 +1095,20 @@ mod tests {
         email.is_unread = true;
         let emails = vec![email];
         let drafts = HashMap::new();
+        let noop = NoopClassifier;
 
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 80, false, &drafts).len(),
+            MessagesComponent::build_email_list_with_truncation(
+                &emails, 80, false, &drafts, &noop, 0.6,
+            )
+            .len(),
             1
         );
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 80, true, &drafts).len(),
+            MessagesComponent::build_email_list_with_truncation(
+                &emails, 80, true, &drafts, &noop, 0.6,
+            )
+            .len(),
             1
         );
     }
@@ -1037,8 +1126,12 @@ mod tests {
         email.is_unread = false;
         let emails = vec![email];
         let drafts = HashMap::new();
+        let noop = NoopClassifier;
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 60, false, &drafts).len(),
+            MessagesComponent::build_email_list_with_truncation(
+                &emails, 60, false, &drafts, &noop, 0.6,
+            )
+            .len(),
             1
         );
     }
@@ -1112,8 +1205,17 @@ mod tests {
         let mut drafts = HashMap::new();
         drafts.insert("orig-1@x".to_string(), draft(false));
 
-        let with_spans = MessagesComponent::build_email_row_spans(&with_match, 80, false, &drafts);
-        let without_spans = MessagesComponent::build_email_row_spans(&without, 80, false, &drafts);
+        let noop = NoopClassifier;
+        let with_spans = MessagesComponent::build_email_row_spans(
+            &with_match,
+            80,
+            false,
+            &drafts,
+            &noop,
+            0.6,
+        );
+        let without_spans =
+            MessagesComponent::build_email_row_spans(&without, 80, false, &drafts, &noop, 0.6);
 
         let width = |spans: &[Span<'static>]| -> usize {
             spans.iter().map(|s| s.content.as_ref().width()).sum()
@@ -1149,8 +1251,9 @@ mod tests {
         drafts.insert("orig-1@x".to_string(), draft(false));
         drafts.insert("orig-2@x".to_string(), draft(true));
 
+        let noop = NoopClassifier;
         let row_text = |email: &Email| -> String {
-            MessagesComponent::build_email_row_spans(email, 80, false, &drafts)
+            MessagesComponent::build_email_row_spans(email, 80, false, &drafts, &noop, 0.6)
                 .into_iter()
                 .map(|s| s.content.into_owned())
                 .collect::<String>()
@@ -1167,5 +1270,96 @@ mod tests {
             "reply-later draft must render ⏰ chip, row was {:?}",
             later_row,
         );
+    }
+
+    // --- Phase 5.a: AI classifier chip rendering. ---
+
+    use crate::classifier::Suggestion;
+    use crate::keymap::Action;
+
+    /// Stub classifier returning a fixed Suggestion for every email.
+    /// Lets tests exercise the chip path without standing up a real
+    /// backend (Phase 6 will).
+    struct FixedClassifier(Suggestion);
+    impl Classifier for FixedClassifier {
+        fn suggest(&self, _: &Email) -> Option<Suggestion> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn email_for(id: &str) -> Email {
+        let mut e = Email::new(PathBuf::from(format!("/tmp/{}", id)));
+        e.headers = EmailHeaders {
+            from: "a@b.test".to_string(),
+            to: "c@d.test".to_string(),
+            subject: "subject".to_string(),
+            date: "2024-01-15T10:30:00+00:00".to_string(),
+            message_id: id.to_string(),
+        };
+        e
+    }
+
+    /// VISION.md acceptance: chip rendering shows the action character
+    /// when confidence >= threshold. Confidence 0.9, threshold 0.6 →
+    /// row contains 'a' (the default Archive keybinding).
+    #[test]
+    fn ai_chip_renders_when_confidence_meets_threshold() {
+        let email = email_for("e1");
+        let drafts: HashMap<String, DraftInfo> = HashMap::new();
+        let clf = FixedClassifier(Suggestion {
+            action: Action::Archive,
+            confidence: 0.9,
+        });
+        let spans = MessagesComponent::build_email_row_spans(
+            &email, 80, false, &drafts, &clf, 0.6,
+        );
+        let row: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            row.contains('a'),
+            "Archive suggestion must render 'a' glyph at >= threshold, row was {:?}",
+            row,
+        );
+    }
+
+    /// Suggestions below the configured threshold must NOT render —
+    /// the chip slot stays blank so the user only sees confident
+    /// signals.
+    #[test]
+    fn ai_chip_hidden_when_confidence_below_threshold() {
+        let email = email_for("e1");
+        let clf = FixedClassifier(Suggestion {
+            action: Action::Archive,
+            confidence: 0.4,
+        });
+        // Threshold 0.6 — confidence 0.4 is below → no chip.
+        let chip = MessagesComponent::suggestion_chip_for(&clf, 0.6, &email);
+        assert_eq!(chip, None);
+    }
+
+    /// NoopClassifier (the default when `[ai].enabled = false`) leaves
+    /// the chip slot empty for every email — the runtime stays dormant
+    /// in disabled-by-default mode.
+    #[test]
+    fn ai_chip_hidden_for_noop_classifier() {
+        let email = email_for("e1");
+        let chip = MessagesComponent::suggestion_chip_for(&NoopClassifier, 0.6, &email);
+        assert_eq!(chip, None);
+    }
+
+    /// `set_classifier` swaps in the runtime classifier and threshold
+    /// so AppRoot can wire `[ai]` config without recreating the component.
+    #[test]
+    fn set_classifier_installs_runtime_classifier_and_threshold() {
+        let mut m = MessagesComponent::new();
+        let clf: Arc<dyn Classifier> = Arc::new(FixedClassifier(Suggestion {
+            action: Action::Star,
+            confidence: 0.75,
+        }));
+        m.set_classifier(clf, 0.5);
+        assert_eq!(m.confidence_threshold(), 0.5);
+        // The stored classifier hands back the wired Suggestion.
+        let email = email_for("e1");
+        let s = m.classifier().suggest(&email).expect("Some");
+        assert_eq!(s.action, Action::Star);
     }
 }
