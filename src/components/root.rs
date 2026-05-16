@@ -28,6 +28,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use crate::config::Config;
 use crate::email::{EmailLoadState, EmailStore, MarkReadPlan};
 use crate::error::Result;
+use crate::keymap::{Action, Keymap, resolve_keymap};
 use crate::layout::{self, ActivePane, Layout, PaneSwitchDirection, View};
 use crate::maildir::MaildirScanner;
 use crate::theme::VulthorTheme;
@@ -112,6 +113,13 @@ pub struct AppRoot {
     /// and the second `v` press (terminate). Owned here — not on the
     /// `html_viewer` module — so the AppRoot destructor reaps it.
     html_viewer_child: Option<std::process::Child>,
+    /// Resolved `KeyEvent → Action` table for global / pane-action key
+    /// dispatch (VISION.md §Action Keybindings + `[keybindings]`
+    /// overrides). Built once at construction from
+    /// `config.keybindings.inner`. In-pane navigation (j/k/h/l, sequences
+    /// like `gg`/`G`) is still handled by each component; AppRoot only
+    /// consults this map for global and Draft-pane action keys.
+    keymap: Keymap,
 }
 
 /// Reply-template editor invocation parked between AppRoot dispatch
@@ -142,6 +150,15 @@ impl AppRoot {
         let mut layout = Layout::new();
         layout.selection.folder_index = initial_index;
 
+        // Keymap resolution is infallible here: `Config::validate`
+        // (called from every `Config::load*` path) already runs
+        // `resolve_keymap` and rejects conflicts/typos with a structured
+        // error before AppRoot is constructed. Tests that hand AppRoot a
+        // hand-rolled `Config` skip validation but only ever use defaults
+        // (empty overrides), which always resolve.
+        let keymap = resolve_keymap(&config.keybindings.inner)
+            .expect("keybindings already validated by Config::validate");
+
         let mut root = Self {
             email_store: email_store.clone(),
             focused_pane: Arc::new(AtomicU8::new(ActivePane::Folders.to_u8())),
@@ -169,6 +186,7 @@ impl AppRoot {
             pending_editor: None,
             web_port: 8080,
             html_viewer_child: None,
+            keymap,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -358,30 +376,33 @@ impl AppRoot {
                 return Ok(self.should_quit);
             }
             // 0c. While a search-results virtual folder is on display
-            //     (modal already closed), `h` / `Esc` exit the search
-            //     and return to the prior folder view. We intercept
-            //     here so the global `h` (ViewPrev) doesn't fire first.
+            //     (modal already closed), bare `Esc` exits the search
+            //     and returns to the prior folder view. Bare `h`
+            //     resolves to `Action::ViewPrev` below, which the
+            //     keymap-driven dispatcher also turns into
+            //     `Msg::SearchCancel` when results are active. `Esc`
+            //     is hard-coded here because the keymap binds `Esc` to
+            //     `DraftDiscard` (Draft pane only), so without this
+            //     intercept `Esc` would be a no-op outside Draft.
             if self.search_results_active()
                 && key.modifiers.is_empty()
-                && matches!(key.code, KeyCode::Char('h') | KeyCode::Esc)
+                && matches!(key.code, KeyCode::Esc)
             {
                 self.queue.push_back(Msg::SearchCancel);
                 self.drain();
                 return Ok(self.should_quit);
             }
-            // 0d. `/` opens the notmuch search input modal (Phase 3.a).
-            //     Available everywhere except the Draft pane, where
-            //     `/` types into the in-flight reply via $EDITOR.
-            if key.modifiers.is_empty()
-                && matches!(key.code, KeyCode::Char('/'))
-                && !matches!(self.layout.active_pane, ActivePane::Draft)
+            // 1. Global / pane-action keys flow through the resolved
+            //    [keybindings] table. Atomic-key lookups only;
+            //    sequence keys (`gg`/`G`/`gj`/`gk`/`gr`) stay with the
+            //    focused component for now.
+            if let Some(action) = self.keymap.lookup_single(key)
+                && let Some(msg) = Self::action_to_msg(
+                    action,
+                    &self.layout.active_pane,
+                    self.search_results_active(),
+                )
             {
-                self.queue.push_back(Msg::OpenSearchInput);
-                self.drain();
-                return Ok(self.should_quit);
-            }
-            // 1. Global keys win unconditionally.
-            if let Some(msg) = Self::handle_global_key(key, &self.layout.active_pane) {
                 self.queue.push_back(msg);
                 self.drain();
                 return Ok(self.should_quit);
@@ -438,17 +459,10 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
-            // 5b. Draft-pane action keys (S send, e edit, q/Esc discard).
-            //     Resolved inline rather than via a `DraftComponent::on_key`
-            //     because each action needs AppRoot context (the parked
-            //     editor launch, compose::send, view navigation).
-            if matches!(self.layout.active_pane, ActivePane::Draft)
-                && let Some(msg) = Self::handle_draft_pane_key(key)
-            {
-                self.queue.push_back(msg);
-                self.drain();
-                return Ok(self.should_quit);
-            }
+            // 5b. Draft-pane action keys (S send, e edit, q/Esc discard)
+            //     resolve through the keymap dispatch at step 1. Nothing
+            //     extra to do here — kept as a numbered comment so future
+            //     readers don't search for the old `handle_draft_pane_key`.
             // 6. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
             self.handle_residual_key(key);
             self.drain();
@@ -661,52 +675,71 @@ impl AppRoot {
         }
     }
 
-    /// Map a key event in the Draft pane to a `Msg`. Only consumes
-    /// the three action keys the pre-send footer documents: `S` sends,
-    /// `e` relaunches the editor, `q`/`Esc` discards. Everything else
-    /// (Tab, h/l view nav, etc.) falls through to the global handler.
-    fn handle_draft_pane_key(key: KeyEvent) -> Option<Msg> {
-        if !key.modifiers.is_empty() && !matches!(key.modifiers, KeyModifiers::SHIFT) {
-            return None;
-        }
-        match key.code {
-            KeyCode::Char('S') => Some(Msg::DraftSend),
-            KeyCode::Char('e') => Some(Msg::DraftEditRelaunch),
-            KeyCode::Char('q') | KeyCode::Esc => Some(Msg::DraftDiscard),
-            _ => None,
-        }
-    }
-
-    fn handle_global_key(key: KeyEvent, active_pane: &ActivePane) -> Option<Msg> {
-        match (key.code, key.modifiers) {
-            // `q` is the global quit key in every pane *except* Draft,
-            // where it discards the in-flight reply. Defer to the per-
-            // pane handler so the draft-discard path wins.
-            (KeyCode::Char('q'), m)
-                if m.is_empty() && !matches!(active_pane, ActivePane::Draft) =>
-            {
-                Some(Msg::Quit)
-            }
-            (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
-            (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
-            // 'v' toggles the chromeless HTML viewer. Routed through
-            // `apply_root` because the child PID lives on AppRoot.
-            (KeyCode::Char('v'), m) if m.is_empty() => Some(Msg::ToggleHtmlViewer),
-            (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
-            (KeyCode::Tab, _) => Some(Msg::FocusNext),
-            (KeyCode::BackTab, _) => Some(Msg::FocusPrev),
-            (KeyCode::Char('h'), m) if m.is_empty() => Some(Msg::ViewPrev),
-            (KeyCode::Char('l'), m) if m.is_empty() => {
-                // Defer to per-pane handlers for panes whose 'l' has
-                // select semantics (Folders: enter folder; Accounts:
-                // switch account). Other panes use 'l' as the view-right
-                // shortcut.
+    /// Translate a resolved [`Action`] into the matching `Msg`,
+    /// applying the pane-sensitive routing the legacy
+    /// `handle_global_key` / `handle_draft_pane_key` used to do inline.
+    ///
+    /// Returns `None` for actions handled inside a component
+    /// (`Archive`, `Star`, `Delete`, `Confirm`, etc.) or when the
+    /// action is intentionally a no-op in the current context (e.g.
+    /// `Search` in the Draft pane, `ViewNext` in the Folders pane).
+    fn action_to_msg(
+        action: Action,
+        active_pane: &ActivePane,
+        search_results_active: bool,
+    ) -> Option<Msg> {
+        match action {
+            // `q` quits everywhere except the Draft pane, where it
+            // discards the in-flight reply (VISION.md §Pre-Send Flow).
+            Action::Quit => Some(if matches!(active_pane, ActivePane::Draft) {
+                Msg::DraftDiscard
+            } else {
+                Msg::Quit
+            }),
+            Action::ToggleHelp => Some(Msg::ToggleHelp),
+            Action::Undo => Some(Msg::Undo),
+            Action::ToggleViewer => Some(Msg::ToggleHtmlViewer),
+            Action::ToggleContentPane => Some(Msg::ToggleContentPane),
+            Action::FocusNext => Some(Msg::FocusNext),
+            Action::FocusPrev => Some(Msg::FocusPrev),
+            // `h` (ViewPrev) also exits a search-results virtual folder
+            // — the dual binding matches VISION.md §Search expectations
+            // without requiring a second Action variant.
+            Action::ViewPrev => Some(if search_results_active {
+                Msg::SearchCancel
+            } else {
+                Msg::ViewPrev
+            }),
+            // Folders / Accounts use `l` for select-into semantics; the
+            // component on_key handler claims it. Other panes fire the
+            // view-right shortcut.
+            Action::ViewNext => {
                 if matches!(active_pane, ActivePane::Folders | ActivePane::Accounts) {
                     None
                 } else {
                     Some(Msg::ViewNext)
                 }
             }
+            // `/` opens the notmuch search modal everywhere except the
+            // Draft pane, where `/` types into the in-flight reply via
+            // `$EDITOR`.
+            Action::Search => {
+                if matches!(active_pane, ActivePane::Draft) {
+                    None
+                } else {
+                    Some(Msg::OpenSearchInput)
+                }
+            }
+            Action::DraftSend if matches!(active_pane, ActivePane::Draft) => Some(Msg::DraftSend),
+            Action::DraftEdit if matches!(active_pane, ActivePane::Draft) => {
+                Some(Msg::DraftEditRelaunch)
+            }
+            Action::DraftDiscard if matches!(active_pane, ActivePane::Draft) => {
+                Some(Msg::DraftDiscard)
+            }
+            // Everything else — j/k navigation, gg/G sequences,
+            // archive/star/delete, reply, mark-unread, etc. — is the
+            // focused component's responsibility.
             _ => None,
         }
     }
@@ -1874,38 +1907,60 @@ mod tests {
         assert!(!root.help_visible);
     }
 
+    /// The `q` key resolves to `Action::Quit` via the keymap; in any
+    /// non-Draft pane that translates to `Msg::Quit`. In the Draft
+    /// pane it discards the in-flight reply instead (VISION.md
+    /// §Pre-Send Flow).
     #[test]
-    fn handle_global_key_maps_q_to_quit() {
+    fn keymap_q_quits_in_non_draft_pane() {
+        let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let action = map.lookup_single(key).expect("q is bound");
+        assert_eq!(action, Action::Quit);
         assert_eq!(
-            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            AppRoot::action_to_msg(action, &ActivePane::Messages, false),
             Some(Msg::Quit)
+        );
+        assert_eq!(
+            AppRoot::action_to_msg(action, &ActivePane::Draft, false),
+            Some(Msg::DraftDiscard)
         );
     }
 
+    /// `l` is `Action::ViewNext`. Folders/Accounts panes use it for
+    /// select-into (component on_key claims the key), so AppRoot must
+    /// hand it back via `None`. Other panes get the view-right Msg.
     #[test]
-    fn handle_global_key_l_from_folders_defers() {
+    fn keymap_l_defers_in_folders_and_accounts() {
+        let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
-        assert!(AppRoot::handle_global_key(key, &ActivePane::Folders).is_none());
-        // Accounts pane also defers so AccountSelect can fire.
-        assert!(AppRoot::handle_global_key(key, &ActivePane::Accounts).is_none());
+        let action = map.lookup_single(key).expect("l is bound");
+        assert_eq!(action, Action::ViewNext);
+        assert!(AppRoot::action_to_msg(action, &ActivePane::Folders, false).is_none());
+        assert!(AppRoot::action_to_msg(action, &ActivePane::Accounts, false).is_none());
         assert_eq!(
-            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            AppRoot::action_to_msg(action, &ActivePane::Messages, false),
             Some(Msg::ViewNext)
         );
     }
 
+    /// Bare `v` toggles the HTML viewer; `Ctrl+v` must not match
+    /// because the keymap binds the unmodified char only.
     #[test]
-    fn handle_global_key_v_toggles_html_viewer() {
+    fn keymap_v_toggles_html_viewer() {
+        let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        let action = map.lookup_single(key).expect("v is bound");
+        assert_eq!(action, Action::ToggleViewer);
         assert_eq!(
-            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            AppRoot::action_to_msg(action, &ActivePane::Messages, false),
             Some(Msg::ToggleHtmlViewer)
         );
-        // Modifiers must NOT trigger the viewer — leaves keys like
-        // Ctrl-V free for future bindings without surprise behavior.
         let with_ctrl = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
-        assert!(AppRoot::handle_global_key(with_ctrl, &ActivePane::Messages).is_none());
+        assert!(
+            map.lookup_single(with_ctrl).is_none(),
+            "Ctrl+v must not collide with the bare-v binding",
+        );
     }
 
     /// Toggling the viewer when no browser is on `PATH` must surface
@@ -1979,15 +2034,20 @@ mod tests {
         );
     }
 
+    /// `Alt+c` is `Action::ToggleContentPane` per VISION.md §View
+    /// Control. Bare `c` is intentionally unbound.
     #[test]
-    fn handle_global_key_alt_c_toggles_content_pane() {
+    fn keymap_alt_c_toggles_content_pane() {
+        let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT);
+        let action = map.lookup_single(key).expect("Alt+c is bound");
+        assert_eq!(action, Action::ToggleContentPane);
         assert_eq!(
-            AppRoot::handle_global_key(key, &ActivePane::Folders),
+            AppRoot::action_to_msg(action, &ActivePane::Folders, false),
             Some(Msg::ToggleContentPane)
         );
         let plain = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
-        assert!(AppRoot::handle_global_key(plain, &ActivePane::Folders).is_none());
+        assert!(map.lookup_single(plain).is_none());
     }
 
     #[test]
@@ -2373,9 +2433,12 @@ mod tests {
 
     #[test]
     fn u_key_dispatches_undo_msg() {
+        let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        let action = map.lookup_single(key).expect("u is bound");
+        assert_eq!(action, Action::Undo);
         assert_eq!(
-            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            AppRoot::action_to_msg(action, &ActivePane::Messages, false),
             Some(Msg::Undo)
         );
     }

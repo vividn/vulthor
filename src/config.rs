@@ -283,6 +283,11 @@ impl Config {
                 message: format!("unknown [ai].backend {:?}", self.ai.backend),
             });
         }
+        // Resolve the keymap so [keybindings] typos, unknown actions,
+        // and key-string conflicts surface at config-load time rather
+        // than at first keypress. The resolved table is rebuilt by
+        // AppRoot; this is purely a structural-validity check.
+        crate::keymap::resolve_keymap(&self.keybindings.inner)?;
         Ok(())
     }
 }
@@ -770,5 +775,93 @@ backend = "not-a-backend"
         if !std::env::var("USER").unwrap_or_default().eq("root") {
             assert!(result.is_err());
         }
+    }
+
+    /// Empty `[keybindings]` table — every action keeps its VISION.md
+    /// default and `validate` accepts the config.
+    #[test]
+    fn keybindings_block_defaults_when_absent() {
+        let toml_str = r#"maildir_path = "/legacy/Mail""#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert!(cfg.keybindings.inner.is_empty());
+        cfg.validate().expect("defaults always validate");
+    }
+
+    /// `[keybindings] archive = "e"` rebinds `Action::Archive` to `e`
+    /// — but the default `e` (draft_edit) is still bound, so resolve
+    /// detects the conflict and `validate` returns a structured error
+    /// naming both action keys (acceptance criterion: "Conflicts: if
+    /// override maps two actions to the same key, return …").
+    #[test]
+    fn keybindings_conflict_is_rejected_at_validate() {
+        let toml_str = r#"
+maildir_path = "/legacy/Mail"
+
+[keybindings]
+archive = "e"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        let err = cfg.validate().expect_err("conflict rejected");
+        match err {
+            VulthorError::KeybindingConflict {
+                key,
+                action_a,
+                action_b,
+            } => {
+                assert_eq!(key, "e");
+                let mut names = [action_a, action_b];
+                names.sort();
+                assert_eq!(names, ["archive".to_string(), "draft_edit".to_string()]);
+            }
+            other => panic!("expected KeybindingConflict, got {other:?}"),
+        }
+    }
+
+    /// Override that frees the colliding default resolves cleanly.
+    /// Rebinds `archive` to `e` AND moves `draft_edit` to `E`. The
+    /// config validates and the resolved keymap reflects both
+    /// overrides — the exact scenario VISION.md §Configuration
+    /// Schema calls out.
+    #[test]
+    fn keybindings_overrides_resolve_when_conflict_freed() {
+        let toml_str = r#"
+maildir_path = "/legacy/Mail"
+
+[keybindings]
+archive = "e"
+draft_edit = "E"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        cfg.validate().expect("overrides resolve");
+        let map =
+            crate::keymap::resolve_keymap(&cfg.keybindings.inner).expect("resolve mirrors validate");
+        let e_event = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('e'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert_eq!(
+            map.lookup_single(e_event),
+            Some(crate::keymap::Action::Archive),
+            "override rebinds 'e' to Archive",
+        );
+    }
+
+    /// Unknown action name in `[keybindings]` surfaces as a structured
+    /// error rather than silently being ignored — typos must not
+    /// rebind anything.
+    #[test]
+    fn keybindings_unknown_action_is_rejected_at_validate() {
+        let toml_str = r#"
+maildir_path = "/legacy/Mail"
+
+[keybindings]
+teleport = "t"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        let err = cfg.validate().expect_err("unknown action rejected");
+        assert!(matches!(
+            err,
+            VulthorError::KeybindingUnknownAction { ref action } if action == "teleport"
+        ));
     }
 }
