@@ -58,6 +58,10 @@ pub enum VulthorError {
         source: std::io::Error,
     },
 
+    // Phase 4.c — user themes & color overrides.
+    #[error("Config error: {message}")]
+    Config { message: String },
+
     // Phase 3.a — notmuch search.
     #[error("notmuch not found on PATH")]
     NotmuchNotFound,

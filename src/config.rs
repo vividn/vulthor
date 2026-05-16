@@ -47,6 +47,23 @@ pub struct AccountConfig {
     pub signature: Option<String>,
 }
 
+/// `[theme]` block. Selects a user-loadable theme by name (resolved
+/// against `~/.config/vulthor/themes/<name>.toml`) and/or specifies a
+/// per-role color override map. Resolution order:
+/// built-in default → user theme file (if `name` set) →
+/// `overrides` → final [`crate::theme::Theme`].
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ThemeConfig {
+    /// Selects a theme file at `~/.config/vulthor/themes/<name>.toml`.
+    /// `None` means use the built-in default.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Role-name → color string (hex `#RRGGBB`/`#RGB` or a named
+    /// ratatui color). Empty by default.
+    #[serde(default)]
+    pub overrides: BTreeMap<String, String>,
+}
+
 /// Top-level configuration loaded from `vulthor.toml`. Search order is
 /// `-c <path>` → `~/.config/vulthor/config.toml` → `./vulthor.toml` →
 /// [`Config::default`]. Holds the global maildir fallback plus the
@@ -65,6 +82,9 @@ pub struct Config {
     /// (alphabetical) iteration order for the Accounts pane.
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountConfig>,
+    /// `[theme]` block. Empty by default → built-in palette.
+    #[serde(default)]
+    pub theme: ThemeConfig,
 }
 
 impl Default for Config {
@@ -75,6 +95,7 @@ impl Default for Config {
                 .unwrap_or_else(|| PathBuf::from("./Mail")),
             default_account: None,
             accounts: BTreeMap::new(),
+            theme: ThemeConfig::default(),
         }
     }
 }
