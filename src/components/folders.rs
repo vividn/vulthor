@@ -209,6 +209,8 @@ mod tests {
             theme,
             config,
             store,
+            view: crate::app::View::FolderMessages,
+            folder_index: 0,
         }
     }
 

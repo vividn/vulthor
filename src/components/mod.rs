@@ -12,16 +12,20 @@
 #![allow(dead_code, unused_imports)]
 
 mod body_loader;
+mod content;
 mod ctx;
 mod folder_scanner;
 mod folders;
+mod messages;
 mod msg;
 mod root;
 
 pub use body_loader::{BodyLoader, LoadedBody, ParsedBody};
+pub use content::ContentComponent;
 pub use ctx::Ctx;
 pub use folder_scanner::FolderScannerHandle;
 pub use folders::FoldersComponent;
+pub use messages::MessagesComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
 pub use root::AppRoot;
 
@@ -120,6 +124,8 @@ mod tests {
             theme: &theme,
             config: &config,
             store: &store,
+            view: crate::app::View::FolderMessages,
+            folder_index: 0,
         };
         let mut c = EmptyComponent;
         assert!(c.handle_msg(&Msg::Quit, &ctx).is_empty());
@@ -138,6 +144,8 @@ mod tests {
             theme: &theme,
             config: &config,
             store: &store,
+            view: crate::app::View::FolderMessages,
+            folder_index: 0,
         };
         let mut echo = EchoComponent;
         let mut queue: VecDeque<Msg> = VecDeque::new();
@@ -154,6 +162,8 @@ mod tests {
             theme: &theme,
             config: &config,
             store: &store,
+            view: crate::app::View::FolderMessages,
+            folder_index: 0,
         };
         let mut empty = EmptyComponent;
         let mut queue: VecDeque<Msg> = VecDeque::new();

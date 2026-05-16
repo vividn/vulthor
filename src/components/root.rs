@@ -42,12 +42,15 @@ use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
 use super::{
-    BodyLoader, Component, Ctx, FolderScannerHandle, FoldersComponent, MAX_DISPATCH_DEPTH, Msg,
+    BodyLoader, Component, ContentComponent, Ctx, FolderScannerHandle, FoldersComponent,
+    MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
 };
 
 pub struct AppRoot {
     state: SharedAppState,
     folders: FoldersComponent,
+    messages: MessagesComponent,
+    content: ContentComponent,
     queue: VecDeque<Msg>,
     /// Off-thread email body parser (Phase 0.3.2, vu-6td). The render path
     /// reads only in-memory state; selection changes enqueue a request here,
@@ -76,6 +79,8 @@ impl AppRoot {
         Self {
             state,
             folders: FoldersComponent::with_index(initial_index),
+            messages: MessagesComponent::new(),
+            content: ContentComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -114,6 +119,18 @@ impl AppRoot {
         &self.folders
     }
 
+    /// Read-only handle to the messages pane component. Used by `ui.rs`
+    /// to delegate the messages and attachments panes' rendering.
+    pub fn messages(&self) -> &MessagesComponent {
+        &self.messages
+    }
+
+    /// Read-only handle to the content pane component. Used by `ui.rs`
+    /// to delegate the content pane's rendering.
+    pub fn content(&self) -> &ContentComponent {
+        &self.content
+    }
+
     /// Render one frame. Locks the app, drains any body-load responses that
     /// have arrived (so the next draw shows them), delegates to `ui::UI::draw`,
     /// and returns whether the loop should exit (quit state observed).
@@ -130,7 +147,9 @@ impl AppRoot {
         self.drain_loaded_bodies(&mut app);
         self.request_body_if_needed(&app);
         let folders = &self.folders;
-        terminal.draw(|f| ui.draw(f, &mut app, folders))?;
+        let messages = &self.messages;
+        let content = &self.content;
+        terminal.draw(|f| ui.draw(f, &mut app, folders, messages, content))?;
         Ok(app.should_quit || matches!(app.state, AppState::Quit))
     }
 
@@ -177,26 +196,35 @@ impl AppRoot {
                 self.drain(&mut app);
                 return Ok(app.should_quit);
             }
-            // 2. Folders-pane keys go to the component first.
-            if matches!(app.active_pane, ActivePane::Folders) {
-                let ctx_msg = {
-                    let ctx = Self::make_ctx(&app);
-                    self.folders.on_key(key, &ctx)
-                };
-                if let Some(msg) = ctx_msg {
-                    self.queue.push_back(msg);
-                    self.drain(&mut app);
-                    return Ok(app.should_quit);
+            // 2. Pane-specific keys go to the focused component first.
+            let active = app.active_pane.clone();
+            let ctx_msg = {
+                let ctx = Self::make_ctx(&app, &self.folders);
+                match active {
+                    ActivePane::Folders => self.folders.on_key(key, &ctx),
+                    ActivePane::Messages => self.messages.on_key(key, &ctx),
+                    ActivePane::Content => self.content.on_key(key, &ctx),
+                    ActivePane::Attachments => None,
                 }
-                // Fall through (e.g. Backspace) — see sync below.
+            };
+            if let Some(msg) = ctx_msg {
+                self.queue.push_back(msg);
+                self.drain(&mut app);
+                self.request_body_if_needed(&app);
+                return Ok(app.should_quit);
             }
+            // Fall through (e.g. Backspace, Enter from Messages,
+            // Tab, etc.) — see sync below.
         }
 
         let should_quit = crate::input::handle_input(&mut app, event);
-        // Legacy `handle_input` may have written `app.selection.folder_index`
-        // (only Backspace does today). Pull the change back so the
-        // component stays canonical.
+        // Legacy `handle_input` may have written `app.selection.*`
+        // (Backspace resets folder/email/scroll; Enter selects
+        // emails; Tab switches panes and uses remembered_email_index).
+        // Pull the changes back so the components stay canonical.
         self.sync_app_to_folders(&app);
+        self.sync_app_to_messages(&app);
+        self.sync_app_to_content(&app);
         // Any input that changed the selection is a chance to fire off a
         // body-load request. Cheap when the email is already loaded or
         // already in flight.
@@ -319,8 +347,11 @@ impl AppRoot {
             }
             // Components first — they may update their owned state.
             let follow_ups = {
-                let ctx = Self::make_ctx(app);
-                self.folders.handle_msg(&msg, &ctx)
+                let ctx = Self::make_ctx(app, &self.folders);
+                let mut out = self.folders.handle_msg(&msg, &ctx);
+                out.extend(self.messages.handle_msg(&msg, &ctx));
+                out.extend(self.content.handle_msg(&msg, &ctx));
+                out
             };
             self.queue.extend(follow_ups);
             // Then root-level effects (App methods, mirroring).
@@ -351,17 +382,52 @@ impl AppRoot {
                     app.set_state(AppState::Help);
                 }
             }
-            Msg::ToggleContentPane => app.toggle_content_pane(),
-            Msg::FocusNext => app.switch_pane(PaneSwitchDirection::Right),
-            Msg::FocusPrev => app.switch_pane(PaneSwitchDirection::Left),
-            Msg::ViewNext => app.next_view(),
-            Msg::ViewPrev => app.prev_view(),
+            Msg::ToggleContentPane => {
+                app.toggle_content_pane();
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
+            Msg::FocusNext => {
+                // Pane switching has cross-pane hand-off logic
+                // (remembered_email_index when leaving/entering
+                // Messages). Mirror component state into App so
+                // `App::switch_pane` reads the canonical values,
+                // then sync back so the component reflects the
+                // post-transition hand-off.
+                self.sync_messages_to_app(app);
+                app.switch_pane(PaneSwitchDirection::Right);
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
+            Msg::FocusPrev => {
+                self.sync_messages_to_app(app);
+                app.switch_pane(PaneSwitchDirection::Left);
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
+            Msg::ViewNext => {
+                // The h/l view transitions stash/restore the
+                // remembered_email_index. That state is canonical
+                // in `MessagesComponent`; mirror in before, sync
+                // out after.
+                self.sync_messages_to_app(app);
+                app.next_view();
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
+            Msg::ViewPrev => {
+                self.sync_messages_to_app(app);
+                app.prev_view();
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
             Msg::FolderMove(_) => {
                 // FoldersComponent already updated its index. Mirror
                 // into App so the Messages pane (still legacy) sees
                 // the new selection, then load the folder's messages.
                 app.selection.folder_index = self.folders.folder_index;
                 app.load_selected_folder_messages();
+                self.sync_app_to_messages(app);
                 // Emit FolderLoaded carrying the folder's filesystem
                 // path so future subscribers (e.g. the forthcoming
                 // MessagesComponent) can react. No component listens
@@ -383,11 +449,73 @@ impl AppRoot {
                 // views. `folder_index` is not reset by that helper,
                 // so no mirror update is needed here.
                 crate::input::handle_folder_selection_and_switch_view(app);
+                // `handle_folder_selection_and_switch_view` resets
+                // email selection + remembered_email_index for the
+                // new folder; pull those back into the component.
+                self.sync_app_to_messages(app);
+                self.sync_app_to_content(app);
+            }
+            Msg::MessageMove(_) => {
+                // MessagesComponent already advanced its index.
+                // Mirror into App, select the email in the store
+                // (so the content pane + web see it), and run the
+                // legacy load-more-on-scroll trigger.
+                app.selection.email_index = self.messages.email_index;
+                app.email_store.select_email(self.messages.email_index);
+                if let Err(e) = app
+                    .email_store
+                    .load_more_messages_if_needed(&app.scanner, self.messages.email_index)
+                {
+                    app.set_status(format!("Error loading more messages: {}", e));
+                }
+                app.set_state(AppState::EmailList);
+            }
+            Msg::ContentScroll(_, _) => {
+                // ContentComponent already updated its offset. Mirror
+                // into App so legacy readers (ui.rs scrollbar) see it.
+                app.selection.scroll_offset = self.content.scroll_offset;
             }
             // All other variants belong to components that haven't been
             // extracted yet. Leaving them as no-ops here is correct:
             // the legacy `input.rs` path still drives those behaviors.
             _ => {}
+        }
+    }
+
+    /// Push canonical Messages-pane state into `App.selection` so the
+    /// legacy `App` methods (which read from `selection`) operate on
+    /// the values the component owns. Called before any `App` mutation
+    /// that branches on those fields (e.g. `switch_pane`, `next_view`).
+    fn sync_messages_to_app(&self, app: &mut App) {
+        app.selection.email_index = self.messages.email_index;
+        app.selection.remembered_email_index = self.messages.remembered_email_index;
+        app.selection.attachment_index = self.messages.attachment_index;
+        app.message_pane_visible_rows = self.messages.message_pane_visible_rows.get();
+    }
+
+    /// Pull `App.selection`'s Messages-pane state back into the
+    /// component after any legacy path that may have mutated it
+    /// (Tab/Backtab, Backspace, h/l view transitions, FolderEnter).
+    fn sync_app_to_messages(&mut self, app: &App) {
+        if self.messages.email_index != app.selection.email_index {
+            self.messages.email_index = app.selection.email_index;
+        }
+        if self.messages.remembered_email_index != app.selection.remembered_email_index {
+            self.messages.remembered_email_index = app.selection.remembered_email_index;
+        }
+        if self.messages.attachment_index != app.selection.attachment_index {
+            self.messages.attachment_index = app.selection.attachment_index;
+        }
+        // `message_pane_visible_rows` only flows component→app
+        // (render writes the component, sync_messages_to_app pushes
+        // the value into `App`). No reverse direction needed.
+    }
+
+    /// Pull `App.selection.scroll_offset` back into the content
+    /// component after legacy paths that reset it (Backspace).
+    fn sync_app_to_content(&mut self, app: &App) {
+        if self.content.scroll_offset != app.selection.scroll_offset {
+            self.content.scroll_offset = app.selection.scroll_offset;
         }
     }
 
@@ -406,13 +534,15 @@ impl AppRoot {
     /// not configurable yet (and the only component reading them is the
     /// folder pane, which uses `VulthorTheme`'s associated consts).
     /// When configuration arrives, this is the seam to widen.
-    fn make_ctx(app: &App) -> Ctx<'_> {
+    fn make_ctx<'a>(app: &'a App, folders: &FoldersComponent) -> Ctx<'a> {
         // `VulthorTheme` is a unit struct; its consts are accessed
         // through the type, not an instance, so the borrow is fine.
         Ctx {
             theme: &THEME,
             config: &CONFIG,
             store: &app.email_store,
+            view: app.current_view.clone(),
+            folder_index: folders.folder_index,
         }
     }
 }
@@ -553,7 +683,7 @@ mod tests {
         // Manually run one step of drain so we can observe the follow-up.
         let msg = probe.queue.pop_front().unwrap();
         {
-            let ctx = AppRoot::make_ctx(&app);
+            let ctx = AppRoot::make_ctx(&app, &probe.folders);
             probe.folders.handle_msg(&msg, &ctx);
         }
         probe.apply_root(&msg, &mut app);
@@ -784,5 +914,175 @@ mod tests {
             .expect("INBOX is in the fixture");
         assert_eq!(approot.folders.folder_index, inbox_idx);
         assert_eq!(app.selection.folder_index, inbox_idx);
+    }
+
+    /// vu-3yj acceptance: the h/l view transitions must hand the
+    /// `remembered_email_index` through `MessagesComponent`, not
+    /// directly through `App.selection`. Drive a realistic flow
+    /// (`l` from Folders → `j` advances email → `h` back → `l`
+    /// forward) and verify the component carries the stash/restore
+    /// across each step.
+    #[test]
+    fn remembered_email_index_handoff_round_trips_through_messages_component() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        for i in 0..3 {
+            inbox.add_email(Email::new(PathBuf::from(format!("/tmp/INBOX/m{}", i))));
+        }
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let app = App::new(store, scanner);
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        // From Folders pane: 'l' enters INBOX and switches to the
+        // MessagesContent view. After this, we are in the Messages
+        // pane with email 0 auto-selected.
+        let l = Event::Key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        root.process_event(l.clone()).unwrap();
+        {
+            let app = root.state.lock().unwrap();
+            assert_eq!(
+                app.active_pane,
+                crate::app::ActivePane::Messages,
+                "'l' from Folders must land in Messages pane",
+            );
+            assert_eq!(root.messages.email_index, 0);
+        }
+
+        // 'j' from Messages pane: advances email_index in the
+        // component. App.selection.email_index mirrors.
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j).unwrap();
+        assert_eq!(
+            root.messages.email_index, 1,
+            "MessagesComponent must advance to email 1 on 'j'",
+        );
+        assert_eq!(
+            root.state.lock().unwrap().selection.email_index,
+            1,
+            "App.selection.email_index must mirror the component",
+        );
+
+        // 'h' back to FolderMessages — must STASH 1 into the
+        // component's remembered_email_index.
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+        assert_eq!(
+            root.messages.remembered_email_index,
+            Some(1),
+            "h transition must stash the current email_index into the component",
+        );
+        assert_eq!(
+            root.state.lock().unwrap().email_store.selected_email,
+            None,
+            "h transition must deselect so welcome screen shows",
+        );
+
+        // 'l' forward to MessagesContent — must RESTORE 1 from the
+        // component's remembered_email_index. The component is the
+        // source of truth; App.selection must mirror.
+        root.process_event(l).unwrap();
+        assert_eq!(
+            root.messages.email_index, 1,
+            "l transition must restore email_index from remembered slot",
+        );
+        let app = root.state.lock().unwrap();
+        assert_eq!(
+            app.selection.email_index, 1,
+            "App.selection.email_index must mirror the restored value",
+        );
+        assert_eq!(
+            app.email_store.selected_email,
+            Some(1),
+            "restoring must re-select the email in the store",
+        );
+    }
+
+    /// vu-3yj acceptance: the `App::switch_pane` cross-pane hand-off
+    /// (Messages↔Folders) must operate on `MessagesComponent`'s
+    /// remembered_email_index, not just `App.selection`. Drive it
+    /// after a real h/l round-trip so the test exercises both the
+    /// view-transition stash AND the pane-switch restore.
+    #[test]
+    fn tab_pane_switch_restores_component_remembered_email_index() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        for i in 0..3 {
+            inbox.add_email(Email::new(PathBuf::from(format!("/tmp/INBOX/m{}", i))));
+        }
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let app = App::new(store, scanner);
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        // Step 1: 'l' to enter INBOX (Messages pane, email 0).
+        let l = Event::Key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        root.process_event(l).unwrap();
+        // Step 2: 'j' to advance to email 1.
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j).unwrap();
+        // Step 3: 'h' back — view-transition stash through component.
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+        assert_eq!(root.messages.remembered_email_index, Some(1));
+        assert_eq!(
+            root.state.lock().unwrap().active_pane,
+            crate::app::ActivePane::Folders,
+            "h to FolderMessages defaults to Folders pane",
+        );
+
+        // Step 4: Tab Folders→Messages — pane-switch restore must
+        // read the component's remembered slot, mirrored into App
+        // by `sync_messages_to_app` before `switch_pane` runs, and
+        // synced back out after.
+        let tab = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        root.process_event(tab).unwrap();
+        assert_eq!(
+            root.state.lock().unwrap().active_pane,
+            crate::app::ActivePane::Messages,
+        );
+        assert_eq!(
+            root.messages.email_index, 1,
+            "Tab Folders→Messages must restore email_index from MessagesComponent's remembered slot",
+        );
+    }
+
+    /// vu-3yj: ContentScroll messages are owned by ContentComponent.
+    /// j/k from the Content pane must update `content.scroll_offset`
+    /// and mirror into `App.selection.scroll_offset`.
+    #[test]
+    fn content_scroll_is_owned_by_content_component() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/INBOX/m0")));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(store, scanner);
+        app.active_pane = crate::app::ActivePane::Content;
+        app.current_view = crate::app::View::Content;
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j.clone()).unwrap();
+        root.process_event(j).unwrap();
+        assert_eq!(
+            root.content.scroll_offset, 2,
+            "two 'j' presses in Content pane must advance scroll by 2",
+        );
+        assert_eq!(
+            root.state.lock().unwrap().selection.scroll_offset,
+            2,
+            "App.selection.scroll_offset must mirror the component",
+        );
+
+        // PageDown adds 10.
+        let pd = Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        root.process_event(pd).unwrap();
+        assert_eq!(root.content.scroll_offset, 12);
     }
 }
