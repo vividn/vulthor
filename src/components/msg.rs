@@ -121,6 +121,19 @@ pub enum Msg {
     /// mutation onto the undo stack.
     Delete(MessageId),
 
+    /// Open the folder-picker modal (Phase 1.d, vu-rr6). The
+    /// `FolderPickerComponent` populates itself from the live store
+    /// when it sees this message; AppRoot routes subsequent key events
+    /// to the picker until it closes.
+    OpenFolderPicker,
+    /// Move the cursor-selected email into the folder at the given
+    /// path. Carries a [`MessageId`] for forward compatibility — until
+    /// the store grows a real index, AppRoot resolves the target from
+    /// the cursor (same convention as `Msg::Archive` / `Msg::Delete`).
+    /// The path is the folder's filesystem path; AppRoot appends
+    /// `cur/<filename>` to produce the destination.
+    MoveTo(MessageId, FolderPath),
+
     // Content
     ContentScroll(Dir, usize),
 
