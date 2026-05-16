@@ -30,7 +30,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::email::{DraftInfo, Email, Folder};
 use crate::theme::VulthorTheme;
 
-use super::{Component, Ctx, Dir, Msg};
+use super::{Component, Ctx, Dir, Msg, ReplyKind};
 
 /// How many rows past the visible tail we look ahead before asking the
 /// store for more headers. Matches the legacy `index + 5 >= len` test
@@ -56,6 +56,11 @@ pub struct MessagesComponent {
     /// rendered still gives a sensible answer — important for tests
     /// that drive `handle_msg` directly.
     pub visible_rows: Cell<usize>,
+    /// Set when the user pressed `g` and we're waiting for the second
+    /// key of a two-key sequence (`gr`, future `gg`/`gj`/`gk`). Cleared
+    /// after the next key — successful match or not — so a stray `g`
+    /// can't poison subsequent keystrokes. See `on_key` for the table.
+    pending_g: bool,
     list_state: RefCell<ListState>,
 }
 
@@ -68,6 +73,7 @@ impl MessagesComponent {
             email_index: 0,
             remembered_email_index: None,
             visible_rows: Cell::new(20),
+            pending_g: false,
             list_state: RefCell::new(ListState::default()),
         }
     }
@@ -395,6 +401,10 @@ impl Component for MessagesComponent {
                 // meaningful, `FoldersBlur` clamps to 0 on restore anyway.
                 let _ = ctx;
                 self.remembered_email_index = Some(self.email_index);
+                // Don't carry a half-typed `g` across pane changes —
+                // otherwise a later `r` in this pane would trigger
+                // reply-sender on a stale prefix.
+                self.pending_g = false;
             }
             _ => {}
         }
@@ -409,15 +419,28 @@ impl Component for MessagesComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // SHIFT is allowed (capital-letter bindings like `F`/`U`); other
-        // modifiers (ALT, CTRL) still bail out so Alt-pane shortcuts and
-        // friends don't double-fire. Arrow keys keep their legacy
-        // any-modifier pass-through.
+        // SHIFT is allowed (capital-letter bindings like `F`/`U`/`R`);
+        // other modifiers (ALT, CTRL) still bail out so Alt-pane
+        // shortcuts and friends don't double-fire. Arrow keys keep
+        // their legacy any-modifier pass-through.
         use crossterm::event::KeyModifiers;
         let mods_ok = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         if !mods_ok && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
             return None;
         }
+
+        // Two-key `g`-prefix sequences (`gr` for reply-sender, future
+        // `gg`/`gj`/`gk`). When `pending_g` is set we branch on the
+        // second key; any non-match falls through to the single-key
+        // table below with `pending_g` cleared.
+        if self.pending_g {
+            self.pending_g = false;
+            if let KeyCode::Char('r') = key.code {
+                return Some(Msg::DraftStart(ReplyKind::Reply, String::new()));
+            }
+            // Fall through: treat the second key as a plain keystroke.
+        }
+
         match key.code {
             KeyCode::Char('j') => Some(Msg::MessageMove(Dir::Down)),
             KeyCode::Char('k') => Some(Msg::MessageMove(Dir::Up)),
@@ -442,6 +465,20 @@ impl Component for MessagesComponent {
             KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
             // Mark the cursor email unread.
             KeyCode::Char('U') => Some(Msg::MarkUnread(String::new())),
+            // Reply variants (VISION.md § "Email Actions").
+            //   r  → reply-all
+            //   gr → reply (sender only)         [two-key sequence]
+            //   f  → forward
+            //   R  → reply-later (empty draft, no editor launch)
+            KeyCode::Char('r') => Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new())),
+            KeyCode::Char('R') => Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
+            KeyCode::Char('f') => Some(Msg::DraftStart(ReplyKind::Forward, String::new())),
+            KeyCode::Char('g') => {
+                // Start a g-prefix sequence; absorb the keystroke without
+                // emitting a message. The next key is interpreted above.
+                self.pending_g = true;
+                None
+            }
             _ => None,
         }
     }
@@ -763,6 +800,114 @@ mod tests {
 
         let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
         assert_eq!(m.on_key(backspace, &ctx), Some(Msg::FolderExitParent));
+    }
+
+    // --- Phase 2.d: reply key bindings. ---
+
+    #[test]
+    fn on_key_r_emits_reply_all_draft_start() {
+        // Bare 'r' (no preceding 'g') is the default reply-all binding.
+        let store = store_with_one_folder(1);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(
+            m.on_key(r, &ctx),
+            Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new())),
+        );
+    }
+
+    #[test]
+    fn on_key_gr_two_key_sequence_emits_reply_sender_draft_start() {
+        // 'gr' = reply to sender only. The first 'g' must absorb its
+        // keystroke (no message emitted) and arm the prefix; the next
+        // 'r' must yield the sender-only reply variant.
+        let store = store_with_one_folder(1);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(m.on_key(g, &ctx), None, "first 'g' must not emit a message");
+        assert!(m.pending_g, "'g' must arm the prefix state");
+
+        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(
+            m.on_key(r, &ctx),
+            Some(Msg::DraftStart(ReplyKind::Reply, String::new())),
+            "'gr' must produce reply-sender-only, not reply-all",
+        );
+        assert!(!m.pending_g, "prefix must clear after the second key");
+    }
+
+    #[test]
+    fn on_key_g_then_other_key_clears_prefix_and_falls_through() {
+        // The prefix must not poison subsequent keystrokes. After a
+        // stray `g`, a different key (here `j`) must work normally and
+        // pending_g must be cleared.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        m.on_key(g, &ctx);
+        assert!(m.pending_g);
+
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(m.on_key(j, &ctx), Some(Msg::MessageMove(Dir::Down)));
+        assert!(!m.pending_g);
+    }
+
+    #[test]
+    fn on_key_capital_r_emits_reply_later_draft_start() {
+        // 'R' (capital) creates an empty-body reply-later placeholder.
+        let store = store_with_one_folder(1);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let r_bare = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE);
+        assert_eq!(
+            m.on_key(r_bare, &ctx),
+            Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
+        );
+        let r_shift = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT);
+        assert_eq!(
+            m.on_key(r_shift, &ctx),
+            Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
+        );
+    }
+
+    #[test]
+    fn on_key_f_emits_forward_draft_start() {
+        let store = store_with_one_folder(1);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+        assert_eq!(
+            m.on_key(f, &ctx),
+            Some(Msg::DraftStart(ReplyKind::Forward, String::new())),
+        );
+    }
+
+    #[test]
+    fn messages_blur_clears_pending_g_prefix() {
+        // Pane switches must not carry the prefix across; otherwise a
+        // later `r` in this pane would unintentionally trigger
+        // reply-sender on a stale prefix typed before the blur.
+        let store = store_with_one_folder(1);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        m.pending_g = true;
+        m.handle_msg(&Msg::MessagesBlur, &ctx);
+        assert!(!m.pending_g);
     }
 
     #[test]

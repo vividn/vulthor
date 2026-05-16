@@ -22,7 +22,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::components::ReplyKind;
 use crate::config::AccountConfig;
+use crate::email::Email;
 use crate::error::{Result, VulthorError};
 
 /// Trailing newline appended to bodies when serializing, so the file
@@ -325,6 +327,204 @@ fn new_message_id() -> String {
     let counter = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
     format!("{}.{}.{}@{}", micros, pid, counter, MESSAGE_ID_DOMAIN)
+}
+
+/// Build a fresh [`Compose`] for replying to or forwarding `original`.
+///
+/// Phase 2.d wires four reply variants to this builder:
+///
+/// | Kind         | To                                  | Cc            | Subject     | Body            |
+/// |--------------|-------------------------------------|---------------|-------------|-----------------|
+/// | `Reply`      | original From                       | (empty)       | `Re: <s>`   | quoted          |
+/// | `ReplyAll`   | original From + original To (minus our own address) | original Cc | `Re: <s>` | quoted          |
+/// | `Forward`    | (empty — user fills in)             | (empty)       | `Fwd: <s>`  | forwarded block |
+/// | `ReplyLater` | original From                       | (empty)       | `Re: <s>`   | (empty)         |
+///
+/// `In-Reply-To` is set to the original `Message-ID` (with surrounding
+/// angle brackets) for every reply variant; forwards leave it `None`.
+/// `from` and `signature` come from `account`.
+pub fn build_reply_template(
+    original: &Email,
+    kind: ReplyKind,
+    account: &AccountConfig,
+) -> Compose {
+    let from = format_account_from(account);
+    let signature = account.signature.clone();
+    let in_reply_to = if matches!(kind, ReplyKind::Forward) {
+        None
+    } else {
+        wrap_message_id(&original.headers.message_id)
+    };
+
+    let (to, cc, subject, body) = match kind {
+        ReplyKind::Reply => (
+            original.headers.from.clone(),
+            String::new(),
+            re_subject(&original.headers.subject),
+            quoted_body(original),
+        ),
+        ReplyKind::ReplyAll => (
+            reply_all_to(original, &account.email),
+            String::new(),
+            re_subject(&original.headers.subject),
+            quoted_body(original),
+        ),
+        ReplyKind::Forward => (
+            String::new(),
+            String::new(),
+            fwd_subject(&original.headers.subject),
+            forwarded_body(original),
+        ),
+        ReplyKind::ReplyLater => (
+            original.headers.from.clone(),
+            String::new(),
+            re_subject(&original.headers.subject),
+            String::new(),
+        ),
+    };
+
+    Compose {
+        from,
+        to,
+        cc,
+        bcc: String::new(),
+        subject,
+        body,
+        in_reply_to,
+        attachments: Vec::new(),
+        signature,
+    }
+}
+
+/// Format the From header line for `account`. Uses `"Name <email>"` when
+/// the account has a non-empty name distinct from the email, otherwise
+/// just the email address.
+fn format_account_from(account: &AccountConfig) -> String {
+    if account.name.is_empty() || account.name == account.email {
+        account.email.clone()
+    } else {
+        format!("{} <{}>", account.name, account.email)
+    }
+}
+
+/// Wrap a bare `Message-ID` in angle brackets so it can be emitted as
+/// an `In-Reply-To` header value. Returns `None` for an empty id (no
+/// parent to thread against).
+fn wrap_message_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('<') && trimmed.ends_with('>') {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("<{}>", trimmed))
+    }
+}
+
+/// `Re: <subject>` — but don't double up if the subject is already
+/// prefixed (case-insensitive match on `re:`).
+fn re_subject(subject: &str) -> String {
+    let trimmed = subject.trim_start();
+    if trimmed.to_ascii_lowercase().starts_with("re:") {
+        subject.to_string()
+    } else if subject.is_empty() {
+        "Re:".to_string()
+    } else {
+        format!("Re: {}", subject)
+    }
+}
+
+/// `Fwd: <subject>` — don't double up if already `fwd:`/`fw:` (either
+/// the RFC-standard `Fwd:` or the very common `Fw:` shorthand).
+fn fwd_subject(subject: &str) -> String {
+    let lower = subject.trim_start().to_ascii_lowercase();
+    if lower.starts_with("fwd:") || lower.starts_with("fw:") {
+        subject.to_string()
+    } else if subject.is_empty() {
+        "Fwd:".to_string()
+    } else {
+        format!("Fwd: {}", subject)
+    }
+}
+
+/// Build the To: line for reply-all: the original sender plus every
+/// other recipient on the original To: line, minus addresses matching
+/// `our_email`. Address matching is a case-insensitive substring check
+/// against the `local@domain` core — robust enough for `"Name <a@b>"`
+/// vs bare `a@b` mixes without parsing RFC 5322 properly.
+fn reply_all_to(original: &Email, our_email: &str) -> String {
+    let mut recipients: Vec<String> = Vec::new();
+    if !original.headers.from.is_empty() {
+        recipients.push(original.headers.from.clone());
+    }
+    for part in original.headers.to.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if address_matches(trimmed, our_email) {
+            continue;
+        }
+        recipients.push(trimmed.to_string());
+    }
+    recipients.join(", ")
+}
+
+/// Case-insensitive "does this address line refer to `our_email`?"
+/// Strips an optional `"Name <…>"` wrapper before comparing.
+fn address_matches(line: &str, our_email: &str) -> bool {
+    if our_email.is_empty() {
+        return false;
+    }
+    let core = if let (Some(open), Some(close)) = (line.rfind('<'), line.rfind('>')) {
+        if open < close {
+            &line[open + 1..close]
+        } else {
+            line
+        }
+    } else {
+        line
+    };
+    core.trim().eq_ignore_ascii_case(our_email.trim())
+}
+
+/// Build the quoted-original body for `Reply` / `ReplyAll`. Two blank
+/// lines reserve a cursor landing spot above the attribution.
+fn quoted_body(original: &Email) -> String {
+    let attribution = format!(
+        "On {}, {} wrote:",
+        original.headers.date, original.headers.from
+    );
+    let quoted = original
+        .body_text
+        .lines()
+        .map(|l| format!("> {}", l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if quoted.is_empty() {
+        format!("\n\n{}\n", attribution)
+    } else {
+        format!("\n\n{}\n{}\n", attribution, quoted)
+    }
+}
+
+/// Build the forwarded-original body for `Forward`. Includes the
+/// standard "Forwarded message" header preview block above the
+/// verbatim original body.
+fn forwarded_body(original: &Email) -> String {
+    let mut out = String::new();
+    out.push_str("\n\n---------- Forwarded message ----------\n");
+    out.push_str(&format!("From: {}\n", original.headers.from));
+    out.push_str(&format!("Date: {}\n", original.headers.date));
+    out.push_str(&format!("Subject: {}\n", original.headers.subject));
+    out.push_str(&format!("To: {}\n", original.headers.to));
+    out.push('\n');
+    out.push_str(&original.body_text);
+    if !original.body_text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 fn maildir_filename() -> String {
@@ -675,5 +875,166 @@ mod tests {
         let b = new_message_id();
         assert_ne!(a, b);
         assert!(a.ends_with(&format!("@{}", MESSAGE_ID_DOMAIN)));
+    }
+
+    // ---- build_reply_template ----
+
+    use crate::email::{Email, EmailHeaders};
+
+    fn original_email() -> Email {
+        let mut e = Email::new(PathBuf::from("/tmp/orig"));
+        e.headers = EmailHeaders {
+            from: "Alice <alice@example.com>".to_string(),
+            to: "Tester <tester@example.com>, Bob <bob@example.com>".to_string(),
+            subject: "Lunch tomorrow?".to_string(),
+            date: "2026-05-16T12:00:00+00:00".to_string(),
+            message_id: "orig-1@example.com".to_string(),
+        };
+        e.body_text = "Hey,\nWant to grab lunch?\n".to_string();
+        e
+    }
+
+    fn signed_account() -> AccountConfig {
+        AccountConfig {
+            name: "Tester".to_string(),
+            email: "tester@example.com".to_string(),
+            maildir_path: PathBuf::from("/tmp"),
+            smtp_command: None,
+            signature: Some("— Tester".to_string()),
+        }
+    }
+
+    #[test]
+    fn build_reply_sender_only_uses_original_from_and_clears_cc() {
+        // 'gr' = reply to sender only. Cc must be empty even when the
+        // original had multiple recipients.
+        let original = original_email();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::Reply, &account);
+        assert_eq!(c.to, "Alice <alice@example.com>");
+        assert_eq!(c.cc, "");
+        assert_eq!(c.subject, "Re: Lunch tomorrow?");
+        assert_eq!(c.in_reply_to.as_deref(), Some("<orig-1@example.com>"));
+        assert!(c.body.contains("On 2026-05-16T12:00:00+00:00, Alice"));
+        assert!(c.body.contains("> Hey,"));
+        assert!(c.body.contains("> Want to grab lunch?"));
+        assert_eq!(c.from, "Tester <tester@example.com>");
+        assert_eq!(c.signature.as_deref(), Some("— Tester"));
+    }
+
+    #[test]
+    fn build_reply_all_includes_other_recipients_minus_our_address() {
+        // 'r' = reply-all. Our own address must be filtered out so we
+        // don't end up CC'ing ourselves on the reply.
+        let original = original_email();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::ReplyAll, &account);
+        // Alice (the sender) first, then every original-To except us.
+        assert!(c.to.starts_with("Alice <alice@example.com>"));
+        assert!(c.to.contains("Bob <bob@example.com>"));
+        assert!(
+            !c.to.to_ascii_lowercase().contains("tester@example.com"),
+            "our own address must not appear in the reply-all To: line, got {:?}",
+            c.to,
+        );
+        assert_eq!(c.subject, "Re: Lunch tomorrow?");
+        assert_eq!(c.in_reply_to.as_deref(), Some("<orig-1@example.com>"));
+    }
+
+    #[test]
+    fn build_reply_all_preserves_original_cc_when_present() {
+        // Per VISION.md: reply-all Cc carries through the original Cc.
+        // The Email struct doesn't surface Cc separately (yet), so the
+        // common case — empty original Cc — must still produce an
+        // empty reply Cc, not duplicate the To: line into it.
+        let original = original_email();
+        let account = signed_account();
+        let c = build_reply_template(&original, ReplyKind::ReplyAll, &account);
+        assert_eq!(c.cc, "", "no Cc fanout when original Cc is unknown");
+    }
+
+    #[test]
+    fn build_forward_clears_to_and_prefixes_subject() {
+        let original = original_email();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::Forward, &account);
+        assert_eq!(c.to, "", "forward leaves To: blank for user to fill");
+        assert_eq!(c.cc, "");
+        assert_eq!(c.subject, "Fwd: Lunch tomorrow?");
+        assert!(
+            c.in_reply_to.is_none(),
+            "forwards must not set In-Reply-To",
+        );
+        assert!(c.body.contains("---------- Forwarded message ----------"));
+        assert!(c.body.contains("From: Alice <alice@example.com>"));
+        assert!(c.body.contains("Hey,\nWant to grab lunch?"));
+    }
+
+    #[test]
+    fn build_reply_later_leaves_body_empty() {
+        // 'R' creates a reply-later placeholder. Same recipient/subject
+        // shape as `gr`, but the body must be empty — that's what the
+        // ⏰ chip is keyed off in the Messages list (DraftInfo.body_empty).
+        let original = original_email();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::ReplyLater, &account);
+        assert_eq!(c.to, "Alice <alice@example.com>");
+        assert_eq!(c.cc, "");
+        assert_eq!(c.subject, "Re: Lunch tomorrow?");
+        assert_eq!(c.in_reply_to.as_deref(), Some("<orig-1@example.com>"));
+        assert_eq!(c.body, "");
+    }
+
+    #[test]
+    fn build_reply_does_not_double_prefix_re_subject() {
+        let mut original = original_email();
+        original.headers.subject = "Re: Lunch tomorrow?".to_string();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::Reply, &account);
+        assert_eq!(c.subject, "Re: Lunch tomorrow?");
+    }
+
+    #[test]
+    fn build_forward_does_not_double_prefix_fwd_subject() {
+        let mut original = original_email();
+        original.headers.subject = "Fwd: Lunch tomorrow?".to_string();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::Forward, &account);
+        assert_eq!(c.subject, "Fwd: Lunch tomorrow?");
+    }
+
+    #[test]
+    fn build_reply_handles_empty_message_id() {
+        // No Message-ID on the parent (rare but possible for synthetic
+        // emails) must skip In-Reply-To rather than emit `<>`.
+        let mut original = original_email();
+        original.headers.message_id = String::new();
+        let account = signed_account();
+
+        let c = build_reply_template(&original, ReplyKind::Reply, &account);
+        assert!(c.in_reply_to.is_none());
+    }
+
+    #[test]
+    fn build_reply_serializes_with_quoted_body_and_in_reply_to() {
+        // End-to-end: the Compose we hand the user must round-trip
+        // through serialize_rfc822 with the headers a real reply needs.
+        let original = original_email();
+        let account = signed_account();
+        let c = build_reply_template(&original, ReplyKind::Reply, &account);
+
+        let wire = c.serialize_rfc822();
+        assert!(wire.contains("From: Tester <tester@example.com>"));
+        assert!(wire.contains("To: Alice <alice@example.com>"));
+        assert!(wire.contains("Subject: Re: Lunch tomorrow?"));
+        assert!(wire.contains("In-Reply-To: <orig-1@example.com>"));
+        assert!(wire.contains("References: <orig-1@example.com>"));
+        assert!(wire.contains("> Hey,"));
     }
 }

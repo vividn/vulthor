@@ -139,7 +139,51 @@ async fn run_app(
         if app_root.tick()? {
             break;
         }
+        // Phase 2.d: drain any reply/forward editor launch parked by
+        // `Msg::DraftStart`. The editor inherits stdio, so we must
+        // suspend the TUI around the call. Errors get surfaced via
+        // `apply_editor_failure` so the user sees them in the status
+        // bar; we never propagate them up — the rest of the session
+        // is still useful.
+        if let Some(launch) = app_root.take_pending_editor() {
+            suspend_terminal(terminal)?;
+            let result = compose::launch_editor(&launch.template);
+            restore_terminal(terminal)?;
+            match result {
+                Ok(parsed) => app_root.apply_editor_result(parsed),
+                Err(e) => app_root.apply_editor_failure(e.to_string()),
+            }
+        }
     }
+    Ok(())
+}
+
+/// Drop the alt-screen, raw mode, and mouse capture so `$EDITOR` can
+/// take over stdio. The inverse of [`restore_terminal`]; the two are
+/// always paired around an external program invocation.
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+/// Re-enter the alt-screen and raw mode after a suspend. Repaints
+/// from scratch because the editor has left arbitrary text on the
+/// terminal.
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.clear()?;
+    terminal.hide_cursor()?;
     Ok(())
 }
 

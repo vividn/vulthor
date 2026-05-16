@@ -89,6 +89,34 @@ impl DraftComponent {
     pub fn state(&self) -> Option<&DraftState> {
         self.state.as_ref()
     }
+
+    /// Replace the live draft's [`Compose`] payload. AppRoot uses this
+    /// after building a reply / forward template (Phase 2.d) so the
+    /// editor sees a populated `To` / `Subject` / quoted body, and
+    /// again after the editor exits to install the parsed result.
+    /// No-op when there is no draft in flight.
+    pub fn set_compose(&mut self, compose: Compose) {
+        if let Some(state) = self.state.as_mut() {
+            state.compose = compose;
+        }
+    }
+
+    /// Force a particular status on the current draft. AppRoot uses
+    /// this to flip a ReplyLater draft straight to `ReadyToSend` (it
+    /// skips the editor) and to surface send failures via
+    /// `DraftStatus::Failed`. No-op when there is no draft in flight.
+    pub fn set_status(&mut self, status: DraftStatus) {
+        if let Some(state) = self.state.as_mut() {
+            state.status = status;
+        }
+    }
+
+    /// Discard the in-flight draft. Used when the editor launch fails
+    /// before any body could be captured — leaving a phantom Editing
+    /// state would lock the user out of starting a new reply.
+    pub fn clear(&mut self) {
+        self.state = None;
+    }
 }
 
 impl Component for DraftComponent {

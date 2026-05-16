@@ -37,8 +37,11 @@ use crate::undo::{Mutation, Reversed};
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
     FolderPickerComponent, FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest,
-    MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
+    MAX_DISPATCH_DEPTH, MessagesComponent, Msg, ReplyKind,
 };
+
+use crate::compose::{Compose, build_reply_template, default_template};
+use crate::config::AccountConfig;
 
 pub struct AppRoot {
     /// The single shared resource. The web server reads it; the TUI
@@ -81,6 +84,26 @@ pub struct AppRoot {
     /// after a successful filesystem op; `Msg::Undo` pops and reverses.
     /// Lost on quit by design (VISION.md "Undo").
     undo_stack: Vec<Mutation>,
+    /// Editor invocation deferred to the main loop (Phase 2.d).
+    /// `Msg::DraftStart` for `Reply`/`ReplyAll`/`Forward` builds the
+    /// template and parks it here; the run loop suspends the TUI,
+    /// shells out to `$EDITOR`, then calls
+    /// [`Self::apply_editor_result`] to resume dispatch. AppRoot
+    /// cannot launch the editor inline because it doesn't own the
+    /// terminal — `main.rs` does — and we need the TUI suspended
+    /// around the call so the editor takes over stdio.
+    pending_editor: Option<PendingEditorLaunch>,
+}
+
+/// Reply-template editor invocation parked between AppRoot dispatch
+/// and the run loop. `template` is the pre-populated editor buffer
+/// produced by [`crate::compose::default_template`]; the run loop
+/// invokes [`crate::compose::launch_editor`] with it, then calls
+/// `AppRoot::apply_editor_result` with the parsed `Compose`.
+#[derive(Debug, Clone)]
+pub struct PendingEditorLaunch {
+    /// Text written into the temp file before `$EDITOR` opens it.
+    pub template: String,
 }
 
 impl AppRoot {
@@ -123,6 +146,7 @@ impl AppRoot {
             headers_loader: HeadersLoader::spawn(scanner),
             loading_folder_paths: HashSet::new(),
             undo_stack: Vec::new(),
+            pending_editor: None,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -782,8 +806,139 @@ impl AppRoot {
             Msg::Undo => {
                 self.apply_undo();
             }
+            Msg::DraftStart(kind, _) => {
+                self.apply_draft_start(*kind);
+            }
             _ => {}
         }
+    }
+
+    /// Build the reply template for the cursor email, install it on
+    /// the live draft, and either:
+    ///   - park an editor launch for the run loop (Reply/ReplyAll/Forward), or
+    ///   - write an empty-body draft file to `Drafts/` and flip the
+    ///     status straight to `ReadyToSend` (ReplyLater).
+    ///
+    /// In both cases the view switches to `ContentDraft` so the
+    /// pre-send pane is visible when the user returns from the editor
+    /// (or immediately, for reply-later).
+    ///
+    /// DraftComponent has already initialised `state` with an empty
+    /// `Compose` via its own handle_msg pass; we only overwrite the
+    /// payload here. The DraftStart `MessageId` field is the empty
+    /// sentinel (Phase 1.x convention) — we resolve the target from
+    /// the cursor.
+    fn apply_draft_start(&mut self, kind: ReplyKind) {
+        // 1. Snapshot the cursor email and active account under the
+        //    store lock so we don't hold it across the editor launch.
+        let original = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => e.clone(),
+                None => {
+                    drop(store);
+                    self.status_message = Some("No message selected to reply to".into());
+                    self.draft.clear();
+                    return;
+                }
+            }
+        };
+        let account = self.resolve_active_account();
+
+        // 2. Build the template and populate the draft.
+        let compose = build_reply_template(&original, kind, &account);
+        self.draft.set_compose(compose.clone());
+
+        // 3. View progression: hop to the Draft pane via ContentDraft
+        //    so the user sees the pre-send surface on return.
+        self.layout.current_view = View::ContentDraft;
+        self.layout.active_pane = ActivePane::Draft;
+        self.publish_focus();
+
+        match kind {
+            ReplyKind::ReplyLater => {
+                // No editor. Write the empty-body draft straight to
+                // disk so the ⏰ chip surfaces on the original.
+                match self.write_reply_later_draft(&compose, &account) {
+                    Ok(path) => {
+                        self.register_reply_later_draft(&compose, &path);
+                        self.draft.set_status(crate::components::draft::DraftStatus::ReadyToSend);
+                        self.status_message = Some("Reply-later saved to Drafts/".into());
+                    }
+                    Err(e) => {
+                        self.draft.clear();
+                        self.status_message = Some(format!("Reply-later failed: {}", e));
+                    }
+                }
+            }
+            ReplyKind::Reply | ReplyKind::ReplyAll | ReplyKind::Forward => {
+                // Park the editor launch for the run loop.
+                let template = default_template(&compose);
+                self.pending_editor = Some(PendingEditorLaunch { template });
+            }
+        }
+    }
+
+    /// Resolve the active account config the compose flow should
+    /// templatize against. Prefers the Accounts pane's current
+    /// selection; falls back to a synthetic single-account record
+    /// built from the top-level `maildir_path` when no `[accounts.*]`
+    /// tables are configured (single-account installs).
+    fn resolve_active_account(&self) -> AccountConfig {
+        if let Some(id) = self.accounts.current_account_id()
+            && let Some(account) = self.accounts.account_by_id(&id)
+        {
+            return account.clone();
+        }
+        AccountConfig {
+            name: String::new(),
+            email: String::new(),
+            maildir_path: self.config.maildir_path.clone(),
+            smtp_command: None,
+            signature: None,
+        }
+    }
+
+    /// Write a reply-later draft to `<maildir>/Drafts/cur/<filename>`.
+    /// Returns the on-disk path on success. Body stays empty by design
+    /// — the file exists only to surface a `⏰` chip on the original.
+    fn write_reply_later_draft(
+        &self,
+        compose: &Compose,
+        account: &AccountConfig,
+    ) -> std::io::Result<PathBuf> {
+        let dir = account.maildir_path.join("Drafts").join("cur");
+        std::fs::create_dir_all(&dir)?;
+        let filename = reply_later_filename();
+        let path = dir.join(filename);
+        std::fs::write(&path, compose.serialize_rfc822())?;
+        Ok(path)
+    }
+
+    /// Register a freshly-written reply-later draft in the store's
+    /// `drafts` index so the Messages pane paints the `⏰` chip
+    /// immediately, without waiting for the next folder scan.
+    fn register_reply_later_draft(&self, compose: &Compose, path: &std::path::Path) {
+        let Some(parent_id) = compose
+            .in_reply_to
+            .as_deref()
+            .map(strip_angle_brackets)
+        else {
+            return;
+        };
+        if parent_id.is_empty() {
+            return;
+        }
+        let mut store = self.email_store.lock().unwrap();
+        store.drafts.insert(
+            parent_id.to_string(),
+            crate::email::DraftInfo {
+                path: path.to_path_buf(),
+                body_empty: compose.body.trim().is_empty(),
+            },
+        );
     }
 
     /// Perform an Archive-/Delete-/Move-style relocation on the cursor
@@ -1072,6 +1227,46 @@ impl AppRoot {
         self.undo_stack.push(mutation);
     }
 
+    /// Pull the parked editor request set by the last
+    /// `Msg::DraftStart` dispatch. The run loop suspends the TUI
+    /// before calling and resumes after. Returns `None` when no
+    /// editor launch is queued.
+    pub fn take_pending_editor(&mut self) -> Option<PendingEditorLaunch> {
+        self.pending_editor.take()
+    }
+
+    /// Resume after the editor returned cleanly: install the parsed
+    /// `Compose` on the live draft and advance its status to
+    /// `ReadyToSend` so the pre-send footer renders. The run loop
+    /// calls this from outside the dispatch loop, so we enqueue
+    /// `Msg::DraftEditorExited` for the next drain to pick up
+    /// (mirrors the contract DraftComponent already implements).
+    pub fn apply_editor_result(&mut self, compose: crate::compose::Compose) {
+        self.draft.set_compose(compose);
+        self.queue.push_back(Msg::DraftEditorExited);
+        self.drain();
+    }
+
+    /// The editor failed (non-zero exit, missing binary, parse error,
+    /// etc). Discard the placeholder draft so the user can try again
+    /// and surface the failure in the status bar.
+    pub fn apply_editor_failure(&mut self, message: String) {
+        self.draft.clear();
+        // Drop back to the pre-compose view; sitting on `Draft` with
+        // no state would just paint the tombstone.
+        if matches!(self.layout.current_view, View::ContentDraft) {
+            self.layout.current_view = View::MessagesContent;
+            self.layout.active_pane = ActivePane::Messages;
+            self.publish_focus();
+        }
+        self.status_message = Some(format!("Editor failed: {}", message));
+    }
+
+    /// True iff there is an editor launch parked for the run loop.
+    pub fn has_pending_editor(&self) -> bool {
+        self.pending_editor.is_some()
+    }
+
     #[cfg(test)]
     pub(crate) fn undo_stack_len(&self) -> usize {
         self.undo_stack.len()
@@ -1163,6 +1358,31 @@ impl AppRoot {
 }
 
 static THEME: VulthorTheme = VulthorTheme;
+
+/// Build a unique MailDir filename for a new Drafts/ entry. Matches the
+/// `<secs>.M<usec>P<pid>Q<counter>` shape `compose::send` uses for the
+/// Sent folder, with a `D` (Draft) info flag instead of `S` (Seen).
+/// Two calls in the same microsecond stay distinct via a process-wide
+/// counter inside `compose`.
+fn reply_later_filename() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = now.as_secs();
+    let micros = now.subsec_micros();
+    let pid = std::process::id();
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}.M{}P{}Q{}.vulthor:2,D", secs, micros, pid, counter)
+}
+
+/// Strip surrounding angle brackets from a Message-ID-style string so
+/// it matches the bare-id keys used in `EmailStore::drafts`.
+fn strip_angle_brackets(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+        .unwrap_or(s)
+}
 
 /// The MailDir-move action keys (`a`, `d`, `m`) share every step except
 /// the destination directory and the recorded mutation variant; this
@@ -3048,5 +3268,168 @@ mod tests {
             let inbox = &store.root_folder.subfolders[0];
             assert_eq!(inbox.emails[0].file_path, src);
         }
+    }
+
+    // --- Phase 2.d: reply variant DraftStart end-to-end. ---
+
+    /// Seed a Messages-pane root with a single real email file at
+    /// `<root>/INBOX/cur/`. Returns the root and the path to the file.
+    /// Mirrors `make_root_with_disk_tree` but writes a richer header
+    /// block so the reply builder has something to quote.
+    fn make_root_with_one_real_email(root_path: PathBuf) -> AppRoot {
+        let inbox = root_path.join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let msg_path = inbox.join("orig.eml");
+        std::fs::write(
+            &msg_path,
+            "From: Alice <alice@example.com>\r\n\
+             To: Tester <tester@example.com>, Bob <bob@example.com>\r\n\
+             Subject: Lunch tomorrow?\r\n\
+             Message-ID: <orig-1@example.com>\r\n\
+             Date: Sat, 16 May 2026 12:00:00 +0000\r\n\
+             \r\n\
+             Hey,\r\nWant to grab lunch?\r\n",
+        )
+        .unwrap();
+
+        let mut store = EmailStore::new(root_path.clone());
+        let mut folder = Folder::new("INBOX".into(), root_path.join("INBOX"));
+        let mut email = Email::new(msg_path);
+        email.parse_headers_only().unwrap();
+        folder.add_email(email);
+        folder.is_loaded = true;
+        store.root_folder.add_subfolder(folder);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path);
+        AppRoot::new(Arc::new(Mutex::new(store)), scanner)
+    }
+
+    /// `r` (reply-all) on the cursor email must:
+    ///   - install a populated `Compose` on the live draft,
+    ///   - park an editor launch (the run loop will pick it up),
+    ///   - flip the view to ContentDraft with focus on Draft.
+    #[test]
+    fn r_key_dispatches_reply_all_template_and_parks_editor() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+        root.layout.active_pane = ActivePane::Messages;
+
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+
+        // Editor launch is queued, not yet run.
+        assert!(
+            root.has_pending_editor(),
+            "pressing r must park an editor launch",
+        );
+        // Draft pane has the populated compose.
+        let state = root.draft().state().expect("draft started");
+        assert_eq!(state.reply_kind, ReplyKind::ReplyAll);
+        assert_eq!(state.status, crate::components::draft::DraftStatus::Editing);
+        assert!(state.compose.to.contains("Alice <alice@example.com>"));
+        assert!(state.compose.to.contains("Bob <bob@example.com>"));
+        assert_eq!(state.compose.subject, "Re: Lunch tomorrow?");
+        assert_eq!(
+            state.compose.in_reply_to.as_deref(),
+            Some("<orig-1@example.com>")
+        );
+        // View progression hopped to the pre-send surface.
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+    }
+
+    /// `gr` (two-key) must dispatch a sender-only reply, not reply-all.
+    #[test]
+    fn gr_two_key_dispatches_reply_sender_template() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+        root.layout.active_pane = ActivePane::Messages;
+
+        let g = Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        root.process_event(g).unwrap();
+        // 'g' alone must not launch anything; just arm the prefix.
+        assert!(!root.has_pending_editor());
+        assert!(root.draft().state().is_none());
+
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+
+        assert!(root.has_pending_editor(), "gr must park an editor launch");
+        let state = root.draft().state().expect("draft started");
+        assert_eq!(state.reply_kind, ReplyKind::Reply);
+        // Reply-sender — Bob (the original other recipient) must NOT be on
+        // the To: line.
+        assert!(!state.compose.to.contains("Bob"));
+        assert!(state.compose.to.contains("Alice <alice@example.com>"));
+    }
+
+    /// `f` (forward) must dispatch a forward template with an empty To
+    /// line, no In-Reply-To, and a `Fwd:` subject.
+    #[test]
+    fn f_key_dispatches_forward_template_with_empty_to() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+        root.layout.active_pane = ActivePane::Messages;
+
+        let f = Event::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        root.process_event(f).unwrap();
+
+        assert!(root.has_pending_editor());
+        let state = root.draft().state().expect("draft started");
+        assert_eq!(state.reply_kind, ReplyKind::Forward);
+        assert_eq!(state.compose.to, "");
+        assert_eq!(state.compose.subject, "Fwd: Lunch tomorrow?");
+        assert!(state.compose.in_reply_to.is_none());
+        assert!(state.compose.body.contains("Forwarded message"));
+    }
+
+    /// `R` (reply-later) must NOT launch the editor. Instead it writes
+    /// an empty-body draft straight to `<maildir>/Drafts/cur/` and
+    /// registers it in the store's drafts index so the ⏰ chip shows up
+    /// on the original next render.
+    #[test]
+    fn capital_r_writes_empty_draft_file_and_updates_drafts_index() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+        root.layout.active_pane = ActivePane::Messages;
+
+        let big_r = Event::Key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        root.process_event(big_r).unwrap();
+
+        // No editor launch — reply-later is purely a placeholder.
+        assert!(
+            !root.has_pending_editor(),
+            "R (reply-later) must not launch the editor",
+        );
+
+        // Draft state advanced to ReadyToSend (skips Editing).
+        let state = root.draft().state().expect("draft started");
+        assert_eq!(state.reply_kind, ReplyKind::ReplyLater);
+        assert_eq!(state.status, crate::components::draft::DraftStatus::ReadyToSend);
+        assert_eq!(state.compose.body, "");
+
+        // The file exists under Drafts/cur/.
+        let drafts_dir = temp.path().join("Drafts").join("cur");
+        let entries: Vec<_> = std::fs::read_dir(&drafts_dir)
+            .expect("Drafts/cur/ created")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one draft file written");
+        let written = std::fs::read_to_string(entries[0].path()).unwrap();
+        assert!(written.contains("In-Reply-To: <orig-1@example.com>"));
+        assert!(written.contains("Subject: Re: Lunch tomorrow?"));
+
+        // Store's drafts index gained a body_empty=true entry for the
+        // original message id — that's what `chip_for_message_id`
+        // reads to paint the ⏰ glyph.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let entry = store
+            .drafts
+            .get("orig-1@example.com")
+            .expect("drafts index gained an entry for the original");
+        assert!(entry.body_empty);
     }
 }
