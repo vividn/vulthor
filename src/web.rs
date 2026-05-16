@@ -85,6 +85,7 @@ struct AttachmentData {
 /// The server is render-only (VISION.md): it never sends mail and
 /// never mutates the store.
 pub struct WebServer {
+    bind: String,
     port: u16,
     state: WebState,
 }
@@ -93,14 +94,17 @@ impl WebServer {
     /// Construct (but do not start) the server. `email_store` and
     /// `focused_pane` are shared with the TUI; `body_request_tx` is
     /// the request side of the same `BodyLoader` worker the TUI feeds,
-    /// so the web handlers never do `fs::read` themselves.
+    /// so the web handlers never do `fs::read` themselves. `bind` is
+    /// the IP literal validated by `Config::validate`.
     pub fn new(
+        bind: String,
         port: u16,
         email_store: Arc<Mutex<EmailStore>>,
         focused_pane: Arc<AtomicU8>,
         body_request_tx: Sender<PathBuf>,
     ) -> Self {
         Self {
+            bind,
             port,
             state: WebState {
                 email_store,
@@ -110,7 +114,7 @@ impl WebServer {
         }
     }
 
-    /// Bind to `127.0.0.1:<port>` and serve until the listener errors.
+    /// Bind to `<bind>:<port>` and serve until the listener errors.
     /// Returns the underlying I/O error wrapped in [`crate::error::VulthorError`] on
     /// bind / serve failure. Designed to be spawned onto a tokio
     /// runtime; the call blocks the current task for the lifetime of
@@ -129,7 +133,7 @@ impl WebServer {
             .route("/api/current-email", get(get_current_email_json))
             .with_state(self.state.clone());
 
-        let addr = format!("127.0.0.1:{}", self.port);
+        let addr = format!("{}:{}", self.bind, self.port);
         println!("Web server starting on http://{}", addr);
 
         let listener = TcpListener::bind(&addr).await?;

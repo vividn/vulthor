@@ -7,13 +7,14 @@ use std::path::PathBuf;
 /// Command-line arguments parsed by `clap` at startup. Each option may
 /// override the corresponding value from the resolved [`Config`] —
 /// `maildir_path` in particular wins over both the config file and
-/// `default_account`'s maildir.
+/// `default_account`'s maildir. `port` is optional: when omitted, the
+/// effective port falls back to `[web].port` (default 8080).
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliArgs {
-    /// Port to serve HTML email content on
-    #[arg(short = 'p', long = "port", default_value = "8080")]
-    pub port: u16,
+    /// Port to serve HTML email content on. Overrides `[web].port`.
+    #[arg(short = 'p', long = "port")]
+    pub port: Option<u16>,
 
     /// Override config file path
     #[arg(short = 'c', long = "config")]
@@ -22,6 +23,82 @@ pub struct CliArgs {
     /// Override MailDir path (takes precedence over config file)
     #[arg(short = 'm', long = "maildir")]
     pub maildir_path: Option<PathBuf>,
+}
+
+/// `[web]` configuration block. Controls the embedded HTML viewer's
+/// bind address and port. `bind` must parse as an `IpAddr`; hostnames
+/// are rejected at load time (see [`Config::validate`]).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WebConfig {
+    /// TCP port. CLI `--port` overrides this.
+    #[serde(default = "WebConfig::default_port")]
+    pub port: u16,
+    /// Bind address. Must parse as an `IpAddr` (IPv4 or IPv6 literal).
+    #[serde(default = "WebConfig::default_bind")]
+    pub bind: String,
+}
+
+impl WebConfig {
+    fn default_port() -> u16 {
+        8080
+    }
+    fn default_bind() -> String {
+        "127.0.0.1".to_string()
+    }
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            port: Self::default_port(),
+            bind: Self::default_bind(),
+        }
+    }
+}
+
+/// `[ai]` configuration block — Phase 4.a scaffolding. The runtime AI
+/// classifier lands in Phase 6; today these fields are parsed and
+/// validated but otherwise inert.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct AiConfig {
+    /// Master switch. Default `false` — opt-in.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Classifier backend name. Validated against a closed set at load
+    /// time; today only `"embeddings"` is recognized.
+    #[serde(default = "AiConfig::default_backend")]
+    pub backend: String,
+    /// Confidence cutoff for surfacing suggestions.
+    #[serde(default = "AiConfig::default_threshold")]
+    pub threshold: f32,
+    /// Optional override for the on-disk model location.
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
+}
+
+impl AiConfig {
+    fn default_backend() -> String {
+        "embeddings".to_string()
+    }
+    fn default_threshold() -> f32 {
+        0.6
+    }
+
+    /// Closed set of recognized backends. Phase 6 will extend this.
+    fn is_known_backend(name: &str) -> bool {
+        matches!(name, "embeddings")
+    }
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: Self::default_backend(),
+            threshold: Self::default_threshold(),
+            model_path: None,
+        }
+    }
 }
 
 /// A single configured account. One per `[accounts.<key>]` section in
@@ -65,6 +142,13 @@ pub struct Config {
     /// (alphabetical) iteration order for the Accounts pane.
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountConfig>,
+    /// `[web]` block — viewer bind/port. See [`WebConfig`].
+    #[serde(default)]
+    pub web: WebConfig,
+    /// `[ai]` block — Phase 4.a scaffolding for the future classifier.
+    /// See [`AiConfig`].
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 impl Default for Config {
@@ -75,6 +159,8 @@ impl Default for Config {
                 .unwrap_or_else(|| PathBuf::from("./Mail")),
             default_account: None,
             accounts: BTreeMap::new(),
+            web: WebConfig::default(),
+            ai: AiConfig::default(),
         }
     }
 }
@@ -158,7 +244,27 @@ impl Config {
     async fn load_from_file(path: &PathBuf) -> Result<Self> {
         let contents = tokio::fs::read_to_string(path).await?;
         let config: Config = toml::from_str(&contents)?;
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Reject malformed `[web].bind` (non-IP literal) and unknown
+    /// `[ai].backend`. Centralizing here means every loader path —
+    /// explicit `-c`, `~/.config/vulthor/config.toml`, `./vulthor.toml`
+    /// — gets the same rejection contract.
+    fn validate(&self) -> Result<()> {
+        use std::net::IpAddr;
+        if self.web.bind.parse::<IpAddr>().is_err() {
+            return Err(VulthorError::Config {
+                message: format!("[web].bind must be an IP literal (got {:?})", self.web.bind),
+            });
+        }
+        if !AiConfig::is_known_backend(&self.ai.backend) {
+            return Err(VulthorError::Config {
+                message: format!("unknown [ai].backend {:?}", self.ai.backend),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -172,8 +278,10 @@ mod tests {
     fn test_cli_args_default_values() {
         use clap::Parser;
 
+        // `--port` is now optional; absence means "fall back to
+        // [web].port from config (default 8080)".
         let args = CliArgs::parse_from(["vulthor"]);
-        assert_eq!(args.port, 8080);
+        assert_eq!(args.port, None);
         assert!(args.config_path.is_none());
     }
 
@@ -182,10 +290,10 @@ mod tests {
         use clap::Parser;
 
         let args = CliArgs::parse_from(["vulthor", "-p", "3000"]);
-        assert_eq!(args.port, 3000);
+        assert_eq!(args.port, Some(3000));
 
         let args = CliArgs::parse_from(["vulthor", "--port", "9090"]);
-        assert_eq!(args.port, 9090);
+        assert_eq!(args.port, Some(9090));
     }
 
     #[test]
@@ -223,7 +331,7 @@ mod tests {
             "-m",
             "/maildir",
         ]);
-        assert_eq!(args.port, 9000);
+        assert_eq!(args.port, Some(9000));
         assert_eq!(args.config_path, Some(PathBuf::from("/config.toml")));
         assert_eq!(args.maildir_path, Some(PathBuf::from("/maildir")));
     }
@@ -486,6 +594,144 @@ maildir_path = "/Mail/work"
         let cfg: Config = toml::from_str(toml_str).expect("parses");
         assert_eq!(cfg.default_account_index(), Some(0));
         assert_eq!(cfg.active_maildir(), PathBuf::from("/Mail/work"));
+    }
+
+    #[test]
+    fn web_defaults_when_block_missing() {
+        // No [web] table → built-in defaults (127.0.0.1:8080). This
+        // mirrors how single-account configs that pre-date Phase 4.a
+        // continue to work.
+        let toml_str = r#"maildir_path = "/legacy/Mail""#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.web.port, 8080);
+        assert_eq!(cfg.web.bind, "127.0.0.1");
+        cfg.validate().expect("defaults pass validation");
+    }
+
+    #[test]
+    fn web_overrides_round_trip() {
+        // [web] overrides serialize and deserialize back unchanged.
+        let toml_str = r#"
+maildir_path = "/legacy/Mail"
+
+[web]
+port = 9090
+bind = "0.0.0.0"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.web.port, 9090);
+        assert_eq!(cfg.web.bind, "0.0.0.0");
+        cfg.validate().expect("0.0.0.0 is a valid IP literal");
+
+        // Round-trip: serialize and parse again.
+        let serialized = toml::to_string(&cfg).expect("serializes");
+        let reparsed: Config = toml::from_str(&serialized).expect("re-parses");
+        assert_eq!(reparsed.web.port, 9090);
+        assert_eq!(reparsed.web.bind, "0.0.0.0");
+    }
+
+    #[test]
+    fn ai_defaults_when_block_missing() {
+        // No [ai] table → scaffolding defaults (disabled, embeddings
+        // backend, 0.6 threshold, no model_path). Phase 6 will start
+        // honoring `enabled`.
+        let toml_str = r#"maildir_path = "/legacy/Mail""#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert!(!cfg.ai.enabled);
+        assert_eq!(cfg.ai.backend, "embeddings");
+        assert!((cfg.ai.threshold - 0.6).abs() < f32::EPSILON);
+        assert!(cfg.ai.model_path.is_none());
+        cfg.validate().expect("defaults pass validation");
+    }
+
+    #[test]
+    fn ai_overrides_round_trip() {
+        // [ai] overrides parse and serialize cleanly. We use a known
+        // backend so validation still passes.
+        let toml_str = r#"
+maildir_path = "/legacy/Mail"
+
+[ai]
+enabled = true
+backend = "embeddings"
+threshold = 0.85
+model_path = "/models/clf.bin"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert!(cfg.ai.enabled);
+        assert!((cfg.ai.threshold - 0.85).abs() < f32::EPSILON);
+        assert_eq!(cfg.ai.model_path, Some(PathBuf::from("/models/clf.bin")));
+        cfg.validate().expect("known backend");
+    }
+
+    #[tokio::test]
+    async fn malformed_bind_rejects_via_load() {
+        // load_from_file must funnel through validate() so every loader
+        // path enforces the rejection contract.
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("bad-bind.toml");
+        let contents = r#"
+maildir_path = "/legacy/Mail"
+
+[web]
+bind = "not-an-ip"
+"#;
+        fs::write(&config_path, contents).unwrap();
+
+        let err = Config::load(Some(config_path))
+            .await
+            .expect_err("non-IP bind must reject");
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid configuration"), "got: {msg}");
+        assert!(msg.contains("[web].bind"), "got: {msg}");
+    }
+
+    #[test]
+    fn malformed_bind_rejects_via_validate() {
+        // Hostnames are rejected — bind is strictly an IP literal.
+        let cfg = Config {
+            web: WebConfig {
+                port: 8080,
+                bind: "localhost".to_string(),
+            },
+            ..Config::default()
+        };
+        let err = cfg.validate().expect_err("hostname must reject");
+        assert!(matches!(err, VulthorError::Config { .. }));
+    }
+
+    #[tokio::test]
+    async fn malformed_backend_rejects_via_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("bad-backend.toml");
+        let contents = r#"
+maildir_path = "/legacy/Mail"
+
+[ai]
+backend = "not-a-backend"
+"#;
+        fs::write(&config_path, contents).unwrap();
+
+        let err = Config::load(Some(config_path))
+            .await
+            .expect_err("unknown backend must reject");
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid configuration"), "got: {msg}");
+        assert!(msg.contains("[ai].backend"), "got: {msg}");
+    }
+
+    #[test]
+    fn ipv6_bind_is_accepted() {
+        // IPv6 literals must pass validation so `[::1]:8080`-style
+        // deployments are supported.
+        let cfg = Config {
+            web: WebConfig {
+                port: 8080,
+                bind: "::1".to_string(),
+            },
+            ..Config::default()
+        };
+        cfg.validate().expect("IPv6 literal accepted");
     }
 
     #[test]

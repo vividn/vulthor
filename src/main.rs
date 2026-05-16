@@ -83,12 +83,17 @@ async fn main() -> Result<()> {
     email_store.scanning_folders = true;
     let email_store: Arc<Mutex<EmailStore>> = Arc::new(Mutex::new(email_store));
 
+    // CLI `--port` wins over `[web].port`; both default to 8080.
+    let web_port = args.port.unwrap_or(config.web.port);
+    let web_bind = config.web.bind.clone();
+
     let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
-    app_root.set_web_port(args.port);
+    app_root.set_web_port(web_port);
 
     let web_server = WebServer::new(
-        args.port,
+        web_bind.clone(),
+        web_port,
         email_store.clone(),
         app_root.focused_pane(),
         app_root.body_request_sender(),
@@ -108,8 +113,8 @@ async fn main() -> Result<()> {
     let mut ui = UI::new();
 
     println!(
-        "Vulthor started! Web interface available at http://127.0.0.1:{}",
-        args.port
+        "Vulthor started! Web interface available at http://{}:{}",
+        web_bind, web_port
     );
     println!("Press 'q' to quit, '?' for help");
 

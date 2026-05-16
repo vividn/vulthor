@@ -64,6 +64,10 @@ pub enum VulthorError {
 
     #[error("notmuch query failed: {stderr}")]
     NotmuchQueryFailed { stderr: String },
+
+    // Phase 4.a — config validation (web/ai blocks).
+    #[error("Invalid configuration: {message}")]
+    Config { message: String },
 }
 
 /// Crate-wide result alias: every fallible Vulthor API returns
