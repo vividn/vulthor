@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod email;
+mod error;
 mod input;
 mod maildir;
 mod theme;

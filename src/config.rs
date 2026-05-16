@@ -1,3 +1,4 @@
+use crate::error::{Result, VulthorError};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -36,13 +37,13 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration from file, falling back to default locations
-    pub fn load(config_path: Option<PathBuf>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(config_path: Option<PathBuf>) -> Result<Self> {
         // Try explicit config path first
         if let Some(path) = config_path {
             if path.exists() {
                 return Self::load_from_file(&path);
             } else {
-                return Err(format!("Config file not found: {}", path.display()).into());
+                return Err(VulthorError::ConfigNotFound(path));
             }
         }
 
@@ -64,7 +65,7 @@ impl Config {
         Ok(Self::default())
     }
 
-    fn load_from_file(path: &PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    fn load_from_file(path: &PathBuf) -> Result<Self> {
         let contents = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&contents)?;
         Ok(config)

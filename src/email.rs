@@ -1,3 +1,4 @@
+use crate::error::{Result, VulthorError};
 use mail_parser::{Message, MessageParser, MimeHeaders};
 use std::fs;
 use std::path::PathBuf;
@@ -55,11 +56,11 @@ impl Email {
     }
 
     /// Parse only headers from file (fast for folder loading)
-    pub fn parse_headers_only(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn parse_headers_only(&mut self) -> Result<()> {
         let content = fs::read(&self.file_path)?;
         let message = MessageParser::default()
             .parse(&content)
-            .ok_or("Failed to parse email headers")?;
+            .ok_or(VulthorError::MailParser)?;
 
         self.parse_headers(&message)?;
         self.load_state = EmailLoadState::HeadersOnly;
@@ -68,11 +69,11 @@ impl Email {
     }
 
     /// Parse email from file (full parsing for reading)
-    pub fn parse_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn parse_from_file(&mut self) -> Result<()> {
         let content = fs::read(&self.file_path)?;
         let message = MessageParser::default()
             .parse(&content)
-            .ok_or("Failed to parse email")?;
+            .ok_or(VulthorError::MailParser)?;
 
         self.parse_headers(&message)?;
         self.parse_body(&message)?;
@@ -82,7 +83,7 @@ impl Email {
     }
 
     /// Ensure email is fully loaded
-    pub fn ensure_fully_loaded(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn ensure_fully_loaded(&mut self) -> Result<()> {
         match self.load_state {
             EmailLoadState::HeadersOnly => self.parse_from_file(),
             EmailLoadState::FullyLoaded => Ok(()),
@@ -90,7 +91,7 @@ impl Email {
     }
 
     /// Parse email headers elegantly using mail-parser
-    fn parse_headers(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+    fn parse_headers(&mut self, message: &Message) -> Result<()> {
         // Extract from address with elegant formatting
         self.headers.from = message
             .from()
@@ -124,7 +125,7 @@ impl Email {
     }
 
     /// Parse email body elegantly using mail-parser's built-in text conversion
-    fn parse_body(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+    fn parse_body(&mut self, message: &Message) -> Result<()> {
         // mail-parser automatically converts HTML to plain text when needed
         // Try to get plain text first (index 0 = first text part)
         if let Some(text_body) = message.body_text(0) {
@@ -143,7 +144,7 @@ impl Email {
     }
 
     /// Extract attachments elegantly using mail-parser
-    fn extract_attachments(&mut self, message: &Message) -> Result<(), Box<dyn std::error::Error>> {
+    fn extract_attachments(&mut self, message: &Message) -> Result<()> {
         // Iterate through all attachments using mail-parser's clean API
         let mut index = 0;
         while let Some(attachment_part) = message.attachment(index) {
@@ -295,20 +296,22 @@ impl EmailStore {
         path: &[usize],
         scanner: &crate::maildir::MaildirScanner,
         visible_rows: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let mut folder = &mut self.root_folder;
         for &index in path {
             if index < folder.subfolders.len() {
                 folder = &mut folder.subfolders[index];
             } else {
-                return Err("Invalid folder path".into());
+                return Err(VulthorError::InvalidFolderPath);
             }
         }
 
         // Only load if the folder has no emails or is not loaded
         if !folder.is_loaded && folder.emails.is_empty() {
             let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
-            scanner.load_folder_emails_with_limit(folder, Some(load_count))?;
+            scanner
+                .load_folder_emails_with_limit(folder, Some(load_count))
+                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
         }
         Ok(())
     }
@@ -331,11 +334,13 @@ impl EmailStore {
         &mut self,
         scanner: &crate::maildir::MaildirScanner,
         limit: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let folder = self.get_current_folder_mut();
         // Only load if the folder has no emails or is not loaded
         if !folder.is_loaded && folder.emails.is_empty() {
-            scanner.load_folder_emails_with_limit(folder, Some(limit))?;
+            scanner
+                .load_folder_emails_with_limit(folder, Some(limit))
+                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
         }
         Ok(())
     }
@@ -345,12 +350,14 @@ impl EmailStore {
         &mut self,
         scanner: &crate::maildir::MaildirScanner,
         index: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let folder = self.get_current_folder_mut();
         // If user is near the end of loaded messages and folder is not fully loaded, load more
         if !folder.is_loaded && index + 5 >= folder.emails.len() {
             // Load the full folder
-            scanner.load_folder_emails(folder)?;
+            scanner
+                .load_folder_emails(folder)
+                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
         }
         Ok(())
     }

@@ -17,6 +17,7 @@ clap = { version = "4.0", features = ["derive"] }
 dirs = "5.0"
 chrono = "0.4"
 unicode-width = "0.2"
+thiserror = "2.0"
 
 [dev-dependencies]
 tempfile = "3.0"
