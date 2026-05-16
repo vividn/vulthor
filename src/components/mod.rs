@@ -19,6 +19,7 @@ mod html_viewer;
 mod messages;
 mod msg;
 mod root;
+mod search;
 
 /// Re-exported: [`AccountsComponent`].
 pub use accounts::AccountsComponent;
@@ -49,6 +50,8 @@ pub use messages::MessagesComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
 /// Re-exported: main-loop driver [`AppRoot`].
 pub use root::AppRoot;
+/// Re-exported: [`SearchComponent`] modal and notmuch helpers.
+pub use search::{SearchComponent, notmuch_available, parse_notmuch_files_output};
 
 use std::collections::VecDeque;
 

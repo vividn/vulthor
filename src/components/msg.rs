@@ -166,4 +166,28 @@ pub enum Msg {
     /// Bound to `v` globally. Components do not observe this message;
     /// only AppRoot reacts.
     ToggleHtmlViewer,
+
+    // Search (Phase 3.a — notmuch). The query input modal opens at the
+    // bottom of the screen; on Enter the typed query is shelled out via
+    // `notmuch search --output=files`. Resulting paths are rendered as
+    // a virtual folder in the Messages pane.
+    /// Open the search input modal. AppRoot first probes for `notmuch`
+    /// on `PATH`; when missing, it sets a status message and drops the
+    /// open request on the floor (the modal never appears).
+    OpenSearchInput,
+    /// User submitted a query (`Enter` in the modal). AppRoot shells
+    /// out to `notmuch search --output=files <query>` and converts
+    /// the stdout paths into a `SearchResults` follow-up.
+    SearchExecute(String),
+    /// Result of a `SearchExecute` shell-out: filesystem paths to the
+    /// matching MailDir files. AppRoot resolves these into `Email`
+    /// structs (header-only parse) and stores them as a virtual folder
+    /// on the `EmailStore`; the Messages pane renders this folder in
+    /// place of the current MailDir folder while results are active.
+    SearchResults(Vec<std::path::PathBuf>),
+    /// Cancel out of search: closes the modal if visible, otherwise
+    /// clears the active search-results virtual folder. Emitted by the
+    /// modal's `Esc` key, and (when the virtual folder is active) by
+    /// `h` / `Esc` from the Messages pane.
+    SearchCancel,
 }

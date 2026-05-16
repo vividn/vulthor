@@ -422,6 +422,18 @@ pub struct EmailStore {
     /// `In-Reply-To` / `References` headers. Re-populated wholesale each
     /// time the scanner replies; never partially mutated by the TUI.
     pub drafts: HashMap<String, DraftInfo>,
+    /// Active search-results virtual folder (Phase 3.a). When `Some`,
+    /// the Messages pane renders this folder in place of
+    /// `get_current_folder()`. The TUI's underlying navigation state
+    /// (`current_folder`, `selected_email`) is preserved so
+    /// `SearchCancel` returns to the prior view. The virtual folder's
+    /// `name` is the query string (rendered as `"Search: <query>"` in
+    /// the breadcrumb).
+    pub search_results: Option<Folder>,
+    /// Cursor into `search_results.emails` while the virtual folder is
+    /// active. Kept separate from `selected_email` so the prior-folder
+    /// selection survives the search round-trip.
+    pub search_selected: Option<usize>,
 }
 
 impl EmailStore {
@@ -436,7 +448,30 @@ impl EmailStore {
             selected_email: None,
             scanning_folders: false,
             drafts: HashMap::new(),
+            search_results: None,
+            search_selected: None,
         }
+    }
+
+    /// Install a virtual search-results folder. The Messages pane
+    /// renders this folder while it is `Some` (see
+    /// [`Self::displayed_folder`]). Selection resets to the first
+    /// matching email when results are non-empty.
+    pub fn set_search_results(&mut self, folder: Folder) {
+        self.search_selected = if folder.emails.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.search_results = Some(folder);
+    }
+
+    /// Clear the active search-results virtual folder, dropping the
+    /// search cursor back to the prior MailDir folder + email
+    /// selection. No-op when no search is active.
+    pub fn clear_search_results(&mut self) {
+        self.search_results = None;
+        self.search_selected = None;
     }
 
     /// Get reference to current folder based on current_folder path
