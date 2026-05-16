@@ -724,11 +724,126 @@ impl AppRoot {
             Msg::StatusClear => {
                 self.status_message = None;
             }
+            Msg::Archive(_) => {
+                self.apply_move_action(MoveKind::Archive);
+            }
+            Msg::Delete(_) => {
+                self.apply_move_action(MoveKind::Delete);
+            }
+            Msg::ToggleStar(_) => {
+                self.apply_toggle_star();
+            }
             Msg::Undo => {
                 self.apply_undo();
             }
             _ => {}
         }
+    }
+
+    /// Perform an Archive- or Delete-style move on the cursor email.
+    /// Both share the same filesystem shape — `<maildir>/<Target>/cur/`,
+    /// create-on-demand — and only differ in the destination directory
+    /// and the `Mutation` variant they record. Phase 1.c (vu-bti).
+    fn apply_move_action(&mut self, kind: MoveKind) {
+        let (src_path, subject) = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => (e.file_path.clone(), e.headers.subject.clone()),
+                None => return,
+            }
+        };
+
+        let Some(filename) = src_path.file_name() else {
+            self.status_message = Some(format!(
+                "Cannot {}: invalid email path",
+                kind.verb_present()
+            ));
+            return;
+        };
+        let maildir_root = self.email_store.lock().unwrap().root_folder.path.clone();
+        let dst_dir = maildir_root.join(kind.folder_name()).join("cur");
+        let dst_path = dst_dir.join(filename);
+
+        if let Err(e) = std::fs::create_dir_all(&dst_dir) {
+            self.status_message = Some(format!("Failed to {} (mkdir): {}", kind.verb_present(), e));
+            return;
+        }
+        if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+            self.status_message = Some(format!("Failed to {}: {}", kind.verb_present(), e));
+            return;
+        }
+
+        self.email_store
+            .lock()
+            .unwrap()
+            .swap_email_path(&src_path, &dst_path);
+
+        let mutation = match kind {
+            MoveKind::Archive => Mutation::Archive {
+                msg: dst_path.clone(),
+                from: src_path,
+                to: dst_path,
+            },
+            MoveKind::Delete => Mutation::Delete {
+                msg: dst_path.clone(),
+                from: src_path,
+                to: dst_path,
+            },
+        };
+        self.undo_stack.push(mutation);
+
+        let label = if subject.is_empty() {
+            "(no subject)".to_string()
+        } else {
+            subject
+        };
+        self.status_message = Some(format!("{}: {}", kind.verb_past(), label));
+    }
+
+    /// Toggle the MailDir `F` flag on the cursor email. Phase 1.c
+    /// (vu-bti). Captures the *previous* flag state in the recorded
+    /// `Mutation::ToggleStar` so undo restores it directly.
+    fn apply_toggle_star(&mut self) {
+        let (src_path, subject, prev_flag) = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => (e.file_path.clone(), e.headers.subject.clone(), e.is_flagged),
+                None => return,
+            }
+        };
+
+        let want = !prev_flag;
+        let new_path = match crate::undo::set_maildir_flag(&src_path, 'F', want) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status_message = Some(format!("Failed to toggle star: {}", e));
+                return;
+            }
+        };
+
+        if new_path != src_path {
+            self.email_store
+                .lock()
+                .unwrap()
+                .swap_email_path(&src_path, &new_path);
+        }
+
+        self.undo_stack.push(Mutation::ToggleStar {
+            msg: new_path,
+            prev_flag,
+        });
+
+        let label = if subject.is_empty() {
+            "(no subject)".to_string()
+        } else {
+            subject
+        };
+        let verb = if want { "Starred" } else { "Unstarred" };
+        self.status_message = Some(format!("{}: {}", verb, label));
     }
 
     /// Pop one mutation off the undo stack and reverse it. No-op when
@@ -859,6 +974,36 @@ impl AppRoot {
 }
 
 static THEME: VulthorTheme = VulthorTheme;
+
+/// Phase 1.c (vu-bti). The two MailDir-move action keys (`a`, `d`) share
+/// every step except the destination folder and the recorded mutation
+/// variant; this enum carries that delta.
+#[derive(Debug, Clone, Copy)]
+enum MoveKind {
+    Archive,
+    Delete,
+}
+
+impl MoveKind {
+    fn folder_name(self) -> &'static str {
+        match self {
+            MoveKind::Archive => "Archive",
+            MoveKind::Delete => "Trash",
+        }
+    }
+    fn verb_present(self) -> &'static str {
+        match self {
+            MoveKind::Archive => "archive",
+            MoveKind::Delete => "delete",
+        }
+    }
+    fn verb_past(self) -> &'static str {
+        match self {
+            MoveKind::Archive => "Archived",
+            MoveKind::Delete => "Deleted",
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1646,6 +1791,224 @@ mod tests {
         root.drain();
 
         assert_eq!(store_handle.lock().unwrap().root_folder.path, prior_path);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.c (vu-bti): direct action keys a/s/d for archive/star/delete.
+    // -----------------------------------------------------------------
+
+    /// Build an AppRoot pointed at `root_path` with a single INBOX
+    /// containing one real file on disk. Used by the Phase 1.c action
+    /// tests so they can verify both the filesystem move AND the
+    /// in-memory store state after the operation.
+    fn make_root_with_disk_inbox(root_path: PathBuf, filename: &str) -> (AppRoot, PathBuf) {
+        let inbox_cur = root_path.join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_cur.join(filename);
+        std::fs::write(&src, "body").unwrap();
+
+        let mut store = EmailStore::new(root_path.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        inbox.add_email(Email::new(src.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path.clone());
+        let root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        (root, src)
+    }
+
+    #[test]
+    fn archive_action_moves_file_and_pushes_mutation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg1");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let a = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        root.process_event(a).unwrap();
+
+        let archive = temp.path().join("Archive").join("cur").join("msg1");
+        assert!(archive.exists(), "file must be in Archive/cur");
+        assert!(!src.exists(), "file must no longer be in INBOX/cur");
+        assert_eq!(root.undo_stack_len(), 1);
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Archived"),
+            "status: {:?}",
+            root.status_message,
+        );
+
+        // Store side-effect: file_path on the in-memory email points
+        // at the new location.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, archive);
+    }
+
+    #[test]
+    fn delete_action_moves_file_to_trash_and_pushes_mutation() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg2");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let d = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        root.process_event(d).unwrap();
+
+        let trash = temp.path().join("Trash").join("cur").join("msg2");
+        assert!(trash.exists());
+        assert!(!src.exists());
+        assert_eq!(root.undo_stack_len(), 1);
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Deleted"),
+        );
+    }
+
+    #[test]
+    fn archive_creates_target_folder_when_missing() {
+        // Acceptance: "Tests cover the create-folder-if-missing path."
+        // No Archive/ exists before the action; AppRoot must mkdir -p.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg3");
+        root.layout.active_pane = ActivePane::Messages;
+        assert!(!temp.path().join("Archive").exists());
+
+        let a = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        root.process_event(a).unwrap();
+        assert!(
+            temp.path()
+                .join("Archive")
+                .join("cur")
+                .join("msg3")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn delete_creates_trash_folder_when_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg4");
+        root.layout.active_pane = ActivePane::Messages;
+        assert!(!temp.path().join("Trash").exists());
+
+        let d = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        root.process_event(d).unwrap();
+        assert!(temp.path().join("Trash").join("cur").join("msg4").exists());
+    }
+
+    #[test]
+    fn star_action_adds_f_flag_when_unstarred() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Maildir filenames without a `:2,` suffix are tolerated; the
+        // helper adds one when it appends a flag.
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg5:2,S");
+        root.layout.active_pane = ActivePane::Messages;
+        // Pre-condition: in-memory mirror starts unflagged (`S` only).
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            assert!(!store.root_folder.subfolders[0].emails[0].is_flagged);
+        }
+
+        let s = Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        root.process_event(s).unwrap();
+
+        // Filename should now contain the F flag (ASCII-sorted: FS).
+        let new = temp.path().join("INBOX").join("cur").join("msg5:2,FS");
+        assert!(new.exists(), "expected {:?} to exist", new);
+        assert!(!src.exists(), "original path must be gone");
+        // Mirror got flipped.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        assert!(store.root_folder.subfolders[0].emails[0].is_flagged);
+        assert_eq!(store.root_folder.subfolders[0].emails[0].file_path, new);
+        assert_eq!(root.undo_stack_len(), 1);
+    }
+
+    #[test]
+    fn star_action_removes_f_flag_when_starred() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg6:2,FS");
+        root.layout.active_pane = ActivePane::Messages;
+        // Email::new derives `is_flagged` from the path.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            assert!(store.root_folder.subfolders[0].emails[0].is_flagged);
+        }
+
+        let s = Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        root.process_event(s).unwrap();
+
+        let new = temp.path().join("INBOX").join("cur").join("msg6:2,S");
+        assert!(new.exists());
+        assert!(!src.exists());
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        assert!(!store.root_folder.subfolders[0].emails[0].is_flagged);
+    }
+
+    #[test]
+    fn undo_after_archive_restores_file_to_inbox() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg7");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let a = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        root.process_event(a).unwrap();
+        let archive = temp.path().join("Archive").join("cur").join("msg7");
+        assert!(archive.exists() && !src.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        assert!(src.exists(), "undo must restore to INBOX/cur");
+        assert!(!archive.exists());
+        assert_eq!(root.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn undo_after_delete_restores_file_to_inbox() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg8");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let d = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        root.process_event(d).unwrap();
+        let trash = temp.path().join("Trash").join("cur").join("msg8");
+        assert!(trash.exists() && !src.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        assert!(src.exists());
+        assert!(!trash.exists());
+    }
+
+    #[test]
+    fn undo_after_star_toggle_restores_flag_state() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg9:2,S");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let s = Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        root.process_event(s).unwrap();
+        let starred = temp.path().join("INBOX").join("cur").join("msg9:2,FS");
+        assert!(starred.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        let unstarred = temp.path().join("INBOX").join("cur").join("msg9:2,S");
+        assert!(unstarred.exists(), "undo must remove the F flag");
+        assert!(!starred.exists());
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        assert!(!store.root_folder.subfolders[0].emails[0].is_flagged);
     }
 
     #[test]

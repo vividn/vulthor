@@ -102,6 +102,25 @@ pub enum Msg {
     /// store knows where the user is reading.
     StoreLoadMore(usize),
 
+    // Direct mutation actions (Phase 1.c, vu-bti). All three carry
+    // a `MessageId` for forward compatibility, but until the store
+    // grows a real index the action-key handler in `MessagesComponent`
+    // emits an empty sentinel string and `AppRoot::apply_root` resolves
+    // the target from the current cursor (same convention as
+    // `Msg::MessageOpen`).
+    /// Move the cursor-selected email to `<maildir_root>/Archive/cur/`.
+    /// Creates the Archive folder on first use. Pushes an `Archive`
+    /// mutation onto the undo stack.
+    Archive(MessageId),
+    /// Toggle the MailDir `F` (Flagged) flag on the cursor-selected
+    /// email's filename. Pushes a `ToggleStar` mutation that captures
+    /// the *previous* flag state so undo restores it directly.
+    ToggleStar(MessageId),
+    /// Move the cursor-selected email to `<maildir_root>/Trash/cur/`.
+    /// Creates the Trash folder on first use. Pushes a `Delete`
+    /// mutation onto the undo stack.
+    Delete(MessageId),
+
     // Content
     ContentScroll(Dir, usize),
 

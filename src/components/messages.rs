@@ -362,6 +362,11 @@ impl Component for MessagesComponent {
             // `self.email_index`. We pass an empty id as a sentinel.
             KeyCode::Enter => Some(Msg::MessageOpen(String::new())),
             KeyCode::Backspace => Some(Msg::FolderExitParent),
+            // Phase 1.c (vu-bti). Same empty-id sentinel — AppRoot
+            // resolves the target email from the cursor.
+            KeyCode::Char('a') => Some(Msg::Archive(String::new())),
+            KeyCode::Char('s') => Some(Msg::ToggleStar(String::new())),
+            KeyCode::Char('d') => Some(Msg::Delete(String::new())),
             _ => None,
         }
     }
@@ -579,6 +584,23 @@ mod tests {
 
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert!(matches!(m.on_key(enter, &ctx), Some(Msg::MessageOpen(_))));
+    }
+
+    #[test]
+    fn on_key_a_s_d_emit_action_messages() {
+        // Phase 1.c (vu-bti): direct action keys map to mutation
+        // messages carrying an empty MessageId sentinel.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert!(matches!(m.on_key(a, &ctx), Some(Msg::Archive(_))));
+        let s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        assert!(matches!(m.on_key(s, &ctx), Some(Msg::ToggleStar(_))));
+        let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(matches!(m.on_key(d, &ctx), Some(Msg::Delete(_))));
     }
 
     #[test]

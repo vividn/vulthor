@@ -125,7 +125,7 @@ fn flip_flag_f(msg: &Path, want: bool) -> Reversed {
 /// filename) and rename the file. Flags are kept ASCII-sorted per the
 /// Maildir spec. Returns the new path (or the unchanged input if the
 /// flag was already in the desired state).
-fn set_maildir_flag(path: &Path, flag: char, want: bool) -> std::io::Result<PathBuf> {
+pub(crate) fn set_maildir_flag(path: &Path, flag: char, want: bool) -> std::io::Result<PathBuf> {
     let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let name = path
         .file_name()

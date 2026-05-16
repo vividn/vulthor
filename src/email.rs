@@ -1,7 +1,18 @@
 use crate::error::{Result, VulthorError};
 use mail_parser::{Message, MessageParser, MimeHeaders};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// True when the MailDir info-flags suffix (`:2,…`) of the path's
+/// filename contains `flag`. Returns false on non-UTF-8 names or paths
+/// without a `:2,` suffix — both are safe defaults for "not flagged".
+pub fn maildir_flag_in_filename(path: &Path, flag: char) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|name| name.split_once(":2,").map(|(_, flags)| flags.to_string()))
+        .map(|flags| flags.contains(flag))
+        .unwrap_or(false)
+}
 
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
@@ -33,11 +44,18 @@ pub struct Email {
     pub attachments: Vec<Attachment>,
     pub file_path: PathBuf,
     pub is_unread: bool,
+    /// MailDir `F` (Flagged) info flag — `s` toggles this, undo reverses
+    /// it. Mirror of the on-disk filename's `:2,…F…` suffix; the
+    /// MailDir scanner seeds it, the action-key handler updates it in
+    /// lockstep with the file rename. See VISION.md § "Action
+    /// Keybindings" (`s` / `F`) and `crate::undo::Mutation::ToggleStar`.
+    pub is_flagged: bool,
     pub load_state: EmailLoadState,
 }
 
 impl Email {
     pub fn new(file_path: PathBuf) -> Self {
+        let is_flagged = maildir_flag_in_filename(&file_path, 'F');
         Self {
             headers: EmailHeaders {
                 from: String::new(),
@@ -51,6 +69,7 @@ impl Email {
             attachments: Vec::new(),
             file_path,
             is_unread: false,
+            is_flagged,
             load_state: EmailLoadState::HeadersOnly,
         }
     }
@@ -520,6 +539,10 @@ impl EmailStore {
         for email in &mut folder.emails {
             if email.file_path == old {
                 email.file_path = new.to_path_buf();
+                // `is_flagged` is the in-memory mirror of the on-disk
+                // `:2,…F…` flag; refresh it so Phase 1.c star-toggle
+                // and its undo stay coherent without a separate writer.
+                email.is_flagged = maildir_flag_in_filename(new, 'F');
                 return true;
             }
         }
