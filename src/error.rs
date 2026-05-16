@@ -57,6 +57,13 @@ pub enum VulthorError {
         #[source]
         source: std::io::Error,
     },
+
+    // Phase 3.a — notmuch search.
+    #[error("notmuch not found on PATH")]
+    NotmuchNotFound,
+
+    #[error("notmuch query failed: {stderr}")]
+    NotmuchQueryFailed { stderr: String },
 }
 
 /// Crate-wide result alias: every fallible Vulthor API returns

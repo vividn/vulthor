@@ -1,6 +1,6 @@
 use crate::components::{
     AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FolderPickerComponent,
-    FoldersComponent, MessagesComponent,
+    FoldersComponent, MessagesComponent, SearchComponent,
 };
 use crate::config::Config;
 use crate::email::{EmailLoadState, EmailStore};
@@ -45,6 +45,7 @@ impl UI {
         accounts: &AccountsComponent,
         draft: &DraftComponent,
         folder_picker: &FolderPickerComponent,
+        search: &SearchComponent,
     ) {
         let size = f.area();
         if help_visible {
@@ -55,9 +56,12 @@ impl UI {
             f, store, layout, folders, messages, content, accounts, draft, size,
         );
         self.draw_status_bar(f, layout, status_message, size);
-        // Modal overlay drawn last so it sits on top of every pane;
-        // `render_modal` is a no-op when the picker is hidden.
+        // Modal overlays drawn last so they sit on top of every pane;
+        // each `render_modal` is a no-op when its modal is hidden. The
+        // folder picker is centered; the search modal is bottom-of-
+        // screen, so they never collide.
         folder_picker.render_modal(f, size);
+        search.render_modal(f, size);
     }
 
     #[allow(clippy::too_many_arguments)]

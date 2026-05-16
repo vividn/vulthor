@@ -37,7 +37,8 @@ use crate::undo::{Mutation, Reversed};
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
     FolderPickerComponent, FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest,
-    MAX_DISPATCH_DEPTH, MessagesComponent, Msg, ReplyKind,
+    MAX_DISPATCH_DEPTH, MessagesComponent, Msg, ReplyKind, SearchComponent, notmuch_available,
+    parse_notmuch_files_output,
 };
 
 use crate::compose::{Compose, build_reply_template, default_template};
@@ -74,6 +75,13 @@ pub struct AppRoot {
     /// true, `process_event` routes every key event to the picker
     /// first so the modal absorbs input.
     folder_picker: FolderPickerComponent,
+    /// Modal notmuch search input (Phase 3.a). When `search.visible`
+    /// is true, `process_event` routes every key event to the modal
+    /// so it absorbs typed query characters. Independent from the
+    /// active `search_results` virtual folder on the store — the
+    /// modal closes once `SearchExecute` fires, even though results
+    /// remain on display.
+    search: SearchComponent,
     queue: VecDeque<Msg>,
     body_loader: BodyLoader,
     loading_paths: HashSet<PathBuf>,
@@ -150,6 +158,7 @@ impl AppRoot {
             accounts: AccountsComponent::with_config(&config),
             draft: DraftComponent::new(),
             folder_picker: FolderPickerComponent::new(),
+            search: SearchComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -269,6 +278,7 @@ impl AppRoot {
         let accounts = &self.accounts;
         let draft = &self.draft;
         let folder_picker = &self.folder_picker;
+        let search = &self.search;
         let layout = &self.layout;
         let status = &self.status_message;
         let help = self.help_visible;
@@ -285,6 +295,7 @@ impl AppRoot {
                 accounts,
                 draft,
                 folder_picker,
+                search,
             )
         })?;
         self.message_pane_visible_rows = self.messages.visible_rows.get();
@@ -327,6 +338,45 @@ impl AppRoot {
                 if let Some(msg) = ctx_msg {
                     self.queue.push_back(msg);
                 }
+                self.drain();
+                return Ok(self.should_quit);
+            }
+            // 0b. Search input modal — same absorb-every-key contract
+            //     as the folder picker. Closes on Esc/Enter; the
+            //     follow-up Msg::SearchExecute fires the notmuch
+            //     shell-out in `apply_root`.
+            if self.search.visible {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.search.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                }
+                self.drain();
+                return Ok(self.should_quit);
+            }
+            // 0c. While a search-results virtual folder is on display
+            //     (modal already closed), `h` / `Esc` exit the search
+            //     and return to the prior folder view. We intercept
+            //     here so the global `h` (ViewPrev) doesn't fire first.
+            if self.search_results_active()
+                && key.modifiers.is_empty()
+                && matches!(key.code, KeyCode::Char('h') | KeyCode::Esc)
+            {
+                self.queue.push_back(Msg::SearchCancel);
+                self.drain();
+                return Ok(self.should_quit);
+            }
+            // 0d. `/` opens the notmuch search input modal (Phase 3.a).
+            //     Available everywhere except the Draft pane, where
+            //     `/` types into the in-flight reply via $EDITOR.
+            if key.modifiers.is_empty()
+                && matches!(key.code, KeyCode::Char('/'))
+                && !matches!(self.layout.active_pane, ActivePane::Draft)
+            {
+                self.queue.push_back(Msg::OpenSearchInput);
                 self.drain();
                 return Ok(self.should_quit);
             }
@@ -678,6 +728,7 @@ impl AppRoot {
                 fu.extend(self.accounts.handle_msg(&msg, &ctx));
                 fu.extend(self.draft.handle_msg(&msg, &ctx));
                 fu.extend(self.folder_picker.handle_msg(&msg, &ctx));
+                fu.extend(self.search.handle_msg(&msg, &ctx));
                 fu
             };
             self.queue.extend(follow_ups);
@@ -903,6 +954,18 @@ impl AppRoot {
             Msg::ToggleHtmlViewer => {
                 self.apply_toggle_html_viewer();
             }
+            Msg::OpenSearchInput => {
+                self.apply_open_search_input();
+            }
+            Msg::SearchExecute(query) => {
+                self.apply_search_execute(query.clone());
+            }
+            Msg::SearchResults(paths) => {
+                self.apply_search_results(paths.clone());
+            }
+            Msg::SearchCancel => {
+                self.apply_search_cancel();
+            }
             _ => {}
         }
     }
@@ -947,6 +1010,135 @@ impl AppRoot {
             Err(e) => {
                 self.status_message = Some(format!("Failed to launch {}: {}", browser.binary(), e));
             }
+        }
+    }
+
+    /// True while a notmuch search-results virtual folder is on
+    /// display. Used by `process_event` to intercept `h` / `Esc`
+    /// before the global view-prev shortcut fires.
+    fn search_results_active(&self) -> bool {
+        self.email_store
+            .lock()
+            .unwrap()
+            .search_results
+            .is_some()
+    }
+
+    /// Probe `notmuch` and either open the modal or surface a
+    /// status-bar fallback. Keeps the not-installed path off the
+    /// hot UI path — the modal never opens, so the user immediately
+    /// gets the "notmuch not found" message and can keep working.
+    fn apply_open_search_input(&mut self) {
+        if !notmuch_available() {
+            self.status_message = Some(crate::error::VulthorError::NotmuchNotFound.to_string());
+            // Suppress the SearchComponent's open() that already ran
+            // via handle_msg — close it back so the modal stays hidden.
+            self.search.close();
+        }
+        // Otherwise, SearchComponent::handle_msg already flipped
+        // `visible` true; nothing more to do here.
+    }
+
+    /// Shell out to `notmuch search --output=files <query>` and
+    /// enqueue a follow-up `SearchResults` with the parsed paths.
+    /// Errors surface in the status bar and leave the prior search
+    /// state (if any) untouched. Runs synchronously on the TUI
+    /// thread for now — notmuch's query latency dominates a maildir
+    /// scan and is bounded by the local index size; if it ever
+    /// becomes a problem this moves to a worker like `BodyLoader`.
+    fn apply_search_execute(&mut self, query: String) {
+        let output = std::process::Command::new("notmuch")
+            .args(["search", "--output=files"])
+            .arg(&query)
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let paths = parse_notmuch_files_output(&stdout);
+                // Carry the query through so the SearchResults handler
+                // can label the virtual folder. We piggy-back on the
+                // search component's now-cleared state by stashing the
+                // query on it before close() ran — too late for that,
+                // so name the folder from the still-available `query`
+                // local via a chained handler.
+                self.apply_search_results_named(paths, query);
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                self.status_message =
+                    Some(crate::error::VulthorError::NotmuchQueryFailed { stderr }.to_string());
+            }
+            Err(e) => {
+                self.status_message = Some(
+                    crate::error::VulthorError::NotmuchQueryFailed {
+                        stderr: e.to_string(),
+                    }
+                    .to_string(),
+                );
+            }
+        }
+    }
+
+    /// Apply paths from a `Msg::SearchResults` to the store as a
+    /// virtual folder named after the (default) query placeholder.
+    /// `apply_search_execute` calls `apply_search_results_named`
+    /// instead so it can label the folder with the live query.
+    fn apply_search_results(&mut self, paths: Vec<PathBuf>) {
+        self.apply_search_results_named(paths, String::new());
+    }
+
+    fn apply_search_results_named(&mut self, paths: Vec<PathBuf>, query: String) {
+        let label = if query.is_empty() {
+            "Search".to_string()
+        } else {
+            format!("Search: {}", query)
+        };
+        let mut folder = crate::email::Folder::new(label.clone(), PathBuf::from(":search:"));
+        folder.is_loaded = true;
+        for p in paths {
+            // Skip phantom rows where the file vanished between the
+            // notmuch index and the filesystem (mbsync mid-flight).
+            if !p.exists() {
+                continue;
+            }
+            let mut email = crate::email::Email::new(p);
+            if email.parse_headers_only().is_ok() {
+                folder.add_email(email);
+            }
+        }
+        let count = folder.emails.len();
+        {
+            let mut store = self.email_store.lock().unwrap();
+            store.set_search_results(folder);
+        }
+        // Reset the Messages-pane cursor so the user lands on the
+        // first hit. Mirror into layout state to keep render-time
+        // consumers (Selection mirrors) in sync.
+        self.messages.email_index = 0;
+        self.messages.remembered_email_index = None;
+        self.layout.selection.email_index = 0;
+        self.layout.selection.remembered_email_index = None;
+        // Surface results in the Messages-only view so the breadcrumb
+        // shows "Search: …" with no folder pane competing for space.
+        self.layout.current_view = layout::View::Messages;
+        self.layout.active_pane = ActivePane::Messages;
+        self.publish_focus();
+        self.status_message = Some(format!("{}: {} result(s)", label, count));
+    }
+
+    /// Drop the active search-results virtual folder and return to
+    /// the prior folder view. No-op when no search is active.
+    fn apply_search_cancel(&mut self) {
+        let was_active = {
+            let mut store = self.email_store.lock().unwrap();
+            let active = store.search_results.is_some();
+            store.clear_search_results();
+            active
+        };
+        if was_active {
+            self.layout.current_view = layout::View::FolderMessages;
+            self.layout.active_pane = ActivePane::Messages;
+            self.publish_focus();
         }
     }
 
