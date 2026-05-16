@@ -277,48 +277,15 @@ pub fn handle_folder_selection_and_switch_view(app: &mut App) {
 }
 
 fn handle_selection(app: &mut App) {
+    // The `ActivePane::Folders` arm that used to live here (audit B4,
+    // src/input.rs:298) was dead code: callers of `handle_selection`
+    // dispatch Enter from `handle_main_view_input` only when the active
+    // pane is *not* Folders. The blocking
+    // `ensure_current_folder_loaded_with_limit` call has been deleted
+    // along with that branch; folder-enter now flows through
+    // `AppRoot::enter_selected_folder_async` (Phase 0.3.3, vu-kx9).
     match app.active_pane {
-        ActivePane::Folders => {
-            // This case should now be handled by handle_folder_selection_and_switch_view
-            // But keeping the logic here for backward compatibility
-            let root_folder = &app.email_store.root_folder;
-            let folder_path =
-                get_folder_path_from_display_index(root_folder, app.selection.folder_index);
-
-            if let Some(path) = folder_path {
-                // Reset current folder path to root first
-                app.email_store.current_folder.clear();
-
-                // Navigate through the full path to handle subfolders correctly
-                app.email_store.enter_folder_by_path(&path);
-
-                // Load emails with visible row limit
-                let estimated_visible_rows = 20;
-                let load_count = (estimated_visible_rows + 5).max(10);
-
-                match app
-                    .email_store
-                    .ensure_current_folder_loaded_with_limit(&app.scanner, load_count)
-                {
-                    Ok(()) => {
-                        app.selection.email_index = 0;
-                        app.selection.scroll_offset = 0;
-                        app.selection.remembered_email_index = None; // Clear remembered selection for new folder
-
-                        // Select the first email if folder has emails
-                        let current_folder = app.email_store.get_current_folder();
-                        if !current_folder.emails.is_empty() {
-                            app.email_store.select_email(0);
-                        }
-
-                        app.set_state(AppState::EmailList);
-                    }
-                    Err(e) => {
-                        app.set_status(format!("Error loading folder: {}", e));
-                    }
-                }
-            }
-        }
+        ActivePane::Folders => {}
         ActivePane::Messages => {
             // Select email and switch to content view
             let current_folder = app.email_store.get_current_folder();

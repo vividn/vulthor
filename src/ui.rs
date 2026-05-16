@@ -184,12 +184,17 @@ impl UI {
             }
         };
 
+        // Title shows "(loading)" while the headers worker has not yet
+        // landed any emails (Phase 0.3.3, vu-kx9). Once headers stream in,
+        // we switch to "(N/…)" for partial / "(N)" for fully loaded.
         let title = if folder_to_display.is_loaded {
             format!(
                 "Emails - {} ({})",
                 folder_path,
                 folder_to_display.emails.len()
             )
+        } else if folder_to_display.emails.is_empty() {
+            format!("Emails - {} (loading)", folder_path)
         } else {
             format!(
                 "Emails - {} ({}/...)",
