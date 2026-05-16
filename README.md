@@ -106,21 +106,16 @@ smtp_command  = "msmtp -a work"
 The Accounts pane appears automatically when more than one `[accounts.*]`
 table is configured.
 
-### Planned config sections
+### Additional config sections
 
-These sections are described in `VISION.md` and will land as the features
-that consume them ship:
-
-- `[web]` — bind address / port for the HTML viewer
-- `[keybindings]` — overrides for any action key
-- `[theme]` — palette overrides
-- `[ai]` — local classifier (post-v1)
+- `[web]` — bind address / port for the HTML viewer.
+- `[keybindings]` — overrides for any action key, including multi-key
+  chords (e.g. `gr`).
+- `[theme]` — palette overrides. Drop a `<name>.toml` into the themes
+  directory and reference it as `theme = "<name>"`.
+- `[ai]` — placeholder for the local classifier (post-v1 feature).
 
 ## ⌨️ Keybindings
-
-The keymap below reflects what is currently wired in the code. Additional
-keys listed in `VISION.md` (`/` search, `v` viewer launch) are not yet
-implemented.
 
 ### Navigation
 
@@ -153,6 +148,8 @@ implemented.
 
 | Key | Action |
 |-----|--------|
+| `/` | Search via notmuch |
+| `v` | Open the selected message in the HTML viewer |
 | `u` | Undo last mutation (session-only) |
 | `Alt+c` | Toggle the content pane |
 | `?` | Toggle help overlay |
@@ -199,7 +196,8 @@ notmuch setup    # one-time
 notmuch new      # after each mbsync run
 ```
 
-Vulthor's `/` search (planned) will hand queries directly to notmuch.
+Vulthor's `/` search hands queries directly to notmuch and shows results in
+the Messages pane.
 
 ## ✉️ Sending with msmtp
 
