@@ -68,6 +68,14 @@ pub enum VulthorError {
     // Phase 4.a — config validation (web/ai blocks).
     #[error("Invalid configuration: {message}")]
     Config { message: String },
+
+    // Phase 4.d — inotify MailDir watch.
+    #[error("MailDir watch failed for {path}: {source}")]
+    MailDirWatch {
+        path: PathBuf,
+        #[source]
+        source: notify::Error,
+    },
 }
 
 /// Crate-wide result alias: every fallible Vulthor API returns

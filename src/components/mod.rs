@@ -16,6 +16,7 @@ mod folder_scanner;
 mod folders;
 mod headers_loader;
 mod html_viewer;
+mod maildir_watcher;
 mod messages;
 mod msg;
 mod root;
@@ -42,6 +43,9 @@ pub use folders::FoldersComponent;
 /// Re-exported: off-thread folder-headers loader types
 /// ([`HeadersLoader`], [`LoadFolderRequest`], [`LoadedFolder`]).
 pub use headers_loader::{HeadersLoader, LoadFolderRequest, LoadedFolder};
+/// Re-exported: off-thread MailDir watcher
+/// ([`MaildirWatcherComponent`]) for Phase 4.d auto-refresh.
+pub use maildir_watcher::{DEFAULT_DEBOUNCE as MAILDIR_WATCH_DEBOUNCE, MaildirWatcherComponent};
 /// Re-exported: [`MessagesComponent`].
 pub use messages::MessagesComponent;
 /// Re-exported: cross-component message types and id aliases

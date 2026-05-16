@@ -190,4 +190,11 @@ pub enum Msg {
     /// modal's `Esc` key, and (when the virtual folder is active) by
     /// `h` / `Esc` from the Messages pane.
     SearchCancel,
+
+    // Phase 4.d — MailDir auto-refresh (inotify/FSEvents). Emitted by
+    // `MaildirWatcherComponent` after a debounce window when the
+    // filesystem reports a Create/Rename under `<folder>/cur/` or
+    // `<folder>/new/`. `AppRoot` invalidates the affected folder and
+    // re-runs the headers scan.
+    MailDirChanged(FolderPath),
 }

@@ -37,8 +37,8 @@ use crate::undo::{Mutation, Reversed};
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
     FolderPickerComponent, FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest,
-    MAX_DISPATCH_DEPTH, MessagesComponent, Msg, ReplyKind, SearchComponent, notmuch_available,
-    parse_notmuch_files_output,
+    MAILDIR_WATCH_DEBOUNCE, MAX_DISPATCH_DEPTH, MaildirWatcherComponent, MessagesComponent, Msg,
+    ReplyKind, SearchComponent, notmuch_available, parse_notmuch_files_output,
 };
 
 use crate::compose::{Compose, build_reply_template, default_template};
@@ -120,6 +120,13 @@ pub struct AppRoot {
     /// reads `VulthorTheme::*` constants.
     #[allow(dead_code)]
     theme: Theme,
+    /// Phase 4.d MailDir watcher. `Some` once a watcher has been
+    /// successfully spawned against the active account's maildir root;
+    /// `None` when the path does not exist or `notify` init failed
+    /// (status-bar message surfaces the reason). Replaced by
+    /// `switch_active_maildir` on `Msg::AccountSelect` so the watch
+    /// always tracks the live tree.
+    maildir_watcher: Option<MaildirWatcherComponent>,
 }
 
 /// Reply-template editor invocation parked between AppRoot dispatch
@@ -178,6 +185,7 @@ impl AppRoot {
             web_port: 8080,
             html_viewer_child: None,
             theme: Theme::default(),
+            maildir_watcher: None,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -215,6 +223,7 @@ impl AppRoot {
         self.web_port = port;
     }
 
+<<<<<<< HEAD
     /// Install the runtime [`Theme`] resolved by
     /// `crate::theme::build_theme`. `main.rs` calls this after config
     /// load so user themes / `[theme].overrides` reach the component
@@ -223,6 +232,28 @@ impl AppRoot {
     #[allow(dead_code)]
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+=======
+    /// Spawn the Phase 4.d MailDir watcher against the live email
+    /// store's root path. Called once from `main.rs` after AppRoot
+    /// construction; tests skip it so the watcher does not subscribe
+    /// to `/tmp`. Init failures surface in the status bar — the TUI
+    /// still launches.
+    pub fn init_maildir_watcher(&mut self) {
+        let root = self.email_store.lock().unwrap().root_folder.path.clone();
+        self.spawn_maildir_watcher(root);
+    }
+
+    fn spawn_maildir_watcher(&mut self, root: PathBuf) {
+        match MaildirWatcherComponent::spawn(root, MAILDIR_WATCH_DEBOUNCE) {
+            Ok(w) => {
+                self.maildir_watcher = Some(w);
+            }
+            Err(e) => {
+                self.maildir_watcher = None;
+                self.status_message = Some(e.to_string());
+            }
+        }
+>>>>>>> 038f883 (feat(watch): inotify MailDir auto-refresh (vu-e3e))
     }
 
     /// Clone of the focused-pane signal the web server reads.
@@ -287,6 +318,7 @@ impl AppRoot {
         self.drain_scanned_folders();
         self.drain_loaded_bodies();
         self.drain_loaded_folders();
+        self.drain_maildir_watcher();
         self.request_body_if_needed();
 
         let store_arc = self.email_store.clone();
@@ -326,11 +358,30 @@ impl AppRoot {
         self.drain_scanned_folders();
         self.drain_loaded_bodies();
         self.drain_loaded_folders();
+        self.drain_maildir_watcher();
         if !event::poll(Duration::from_millis(100))? {
             return Ok(false);
         }
         let event = event::read()?;
         self.process_event(event)
+    }
+
+    /// Forward any debounced `Msg::MailDirChanged` from the watcher
+    /// onto the dispatch queue and drain so `apply_root` can
+    /// invalidate the affected folder. Called from `tick` and `render`
+    /// — same shape as the other off-thread drains.
+    fn drain_maildir_watcher(&mut self) {
+        let msgs = match self.maildir_watcher.as_mut() {
+            Some(w) => w.drain(),
+            None => return,
+        };
+        if msgs.is_empty() {
+            return;
+        }
+        for m in msgs {
+            self.queue.push_back(m);
+        }
+        self.drain();
     }
 
     /// Apply a single input event.
@@ -985,8 +1036,35 @@ impl AppRoot {
             Msg::SearchCancel => {
                 self.apply_search_cancel();
             }
+            Msg::MailDirChanged(path) => {
+                self.apply_maildir_changed(path.clone());
+            }
             _ => {}
         }
+    }
+
+    /// Refresh the folder at `fs_path` after the MailDir watcher
+    /// observed a Create/Rename under its `cur/` or `new/` leaf.
+    /// Clears the cached headers and resubmits an off-thread headers
+    /// load. No-op when the folder is not in the live tree (a
+    /// neighbouring account's path, a transient stale event, etc).
+    fn apply_maildir_changed(&mut self, fs_path: PathBuf) {
+        let found = {
+            let mut store = self.email_store.lock().unwrap();
+            store.invalidate_folder(&fs_path)
+        };
+        if !found {
+            return;
+        }
+        // Clear the in-flight slot so the re-load is not suppressed
+        // as a duplicate of the prior scan.
+        self.loading_folder_paths.remove(&fs_path);
+        let limit = (self.message_pane_visible_rows + 5).max(10);
+        self.loading_folder_paths.insert(fs_path.clone());
+        self.headers_loader.request(LoadFolderRequest {
+            fs_path,
+            limit: Some(limit),
+        });
     }
 
     /// Toggle the chromeless HTML viewer. First press detects a
@@ -1671,6 +1749,15 @@ impl AppRoot {
         self.undo_stack.len()
     }
 
+    /// Test seam: peek at the live MailDir watcher's root, if any.
+    /// Lets the account-switch integration tests verify that
+    /// `switch_active_maildir` actually re-pointed the watcher at
+    /// the new tree.
+    #[cfg(test)]
+    pub(crate) fn maildir_watcher_root(&self) -> Option<&std::path::Path> {
+        self.maildir_watcher.as_ref().map(|w| w.root())
+    }
+
     /// Test seam: force the active pane. Production code transitions
     /// the pane via `Msg::FocusNext` / `Msg::FocusPrev` and view-
     /// progression; tests outside `root.rs` skip that machinery to
@@ -1715,6 +1802,14 @@ impl AppRoot {
         self.scanner = MaildirScanner::new(new_path.clone());
         self.headers_loader = HeadersLoader::spawn(self.scanner.clone());
         self.folder_scanner = Some(FolderScannerHandle::spawn(new_path.clone()));
+
+        // 2b. Tear down the old MailDir watcher and rebuild rooted at
+        //     the new path. Tests that never call
+        //     `init_maildir_watcher` leave the slot `None`; in that
+        //     case we still rebuild so an explicit account switch
+        //     starts the watcher (the bead's TDD assertion).
+        self.maildir_watcher = None;
+        self.spawn_maildir_watcher(new_path.clone());
 
         // 3. Reset component cursors. Folders auto-select runs again
         //    in `drain_scanned_folders` once the new scan lands.
@@ -4370,5 +4465,103 @@ mod tests {
         root.process_event(Event::Key(esc)).unwrap();
         assert!(!root.search.visible, "modal closes on Esc");
         assert!(!root.search_results_active(), "no query was executed");
+    }
+
+    /// Phase 4.d acceptance: account switch tears down the old
+    /// MailDir watcher and spawns a fresh one rooted at the new
+    /// account's maildir_path.
+    #[test]
+    fn account_select_repoints_maildir_watcher_at_new_root() {
+        let temp_a = tempfile::TempDir::new().unwrap();
+        let temp_b = tempfile::TempDir::new().unwrap();
+        let path_a = write_account_inbox(temp_a.path(), &["msg"]);
+        let path_b = write_account_inbox(temp_b.path(), &["msg"]);
+
+        let mut cfg = Config::default();
+        cfg.accounts.insert(
+            "alpha".into(),
+            crate::config::AccountConfig {
+                name: "Alpha".into(),
+                email: "a@x.test".into(),
+                maildir_path: path_a.clone(),
+                smtp_command: None,
+                signature: None,
+            },
+        );
+        cfg.accounts.insert(
+            "bravo".into(),
+            crate::config::AccountConfig {
+                name: "Bravo".into(),
+                email: "b@x.test".into(),
+                maildir_path: path_b.clone(),
+                smtp_command: None,
+                signature: None,
+            },
+        );
+
+        let store = EmailStore::new(path_a.clone());
+        let scanner = MaildirScanner::new(path_a.clone());
+        let mut root = AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, cfg);
+        root.init_maildir_watcher();
+        assert_eq!(
+            root.maildir_watcher_root(),
+            Some(path_a.as_path()),
+            "watcher must initially track Alpha",
+        );
+
+        root.enqueue(Msg::AccountSelect("bravo".into()));
+        root.drain();
+        assert_eq!(
+            root.maildir_watcher_root(),
+            Some(path_b.as_path()),
+            "AccountSelect must re-point the watcher at Bravo",
+        );
+    }
+
+    /// Phase 4.d acceptance: `Msg::MailDirChanged` invalidates the
+    /// cached folder headers so the next render-tick re-load picks up
+    /// the fresh mail. We verify by:
+    ///
+    ///   1. seeding INBOX with one email + `is_loaded=true`
+    ///   2. dispatching `Msg::MailDirChanged(<INBOX path>)`
+    ///   3. asserting the folder is now empty and `is_loaded=false`.
+    ///
+    /// The headers loader will refill it asynchronously; that part is
+    /// covered by `HeadersLoader` unit tests.
+    #[test]
+    fn maildir_changed_invalidates_target_folder() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = write_account_inbox(temp.path(), &["seed"]);
+        let inbox_path = path.join("INBOX");
+
+        let store = EmailStore::new(path.clone());
+        let scanner = MaildirScanner::new(path.clone());
+        let mut root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        // Seed the folder so the invalidation has something to clear.
+        {
+            let handle = root.email_store_handle();
+            let mut store = handle.lock().unwrap();
+            let mut inbox = Folder::new("INBOX".to_string(), inbox_path.clone());
+            inbox.add_email(Email::new(inbox_path.join("cur").join("seed")));
+            inbox.is_loaded = true;
+            inbox.total_count = 1;
+            store.root_folder.subfolders.clear();
+            store.root_folder.add_subfolder(inbox);
+        }
+
+        root.enqueue(Msg::MailDirChanged(inbox_path.clone()));
+        root.drain();
+
+        let handle = root.email_store_handle();
+        let store = handle.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert!(
+            inbox.emails.is_empty(),
+            "MailDirChanged must clear cached headers",
+        );
+        assert!(
+            !inbox.is_loaded,
+            "MailDirChanged must reset is_loaded so next scan refills",
+        );
     }
 }

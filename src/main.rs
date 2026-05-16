@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
     app_root.attach_folder_scanner(folder_scanner_handle);
     app_root.set_web_port(web_port);
     app_root.set_theme(resolved_theme);
+    app_root.init_maildir_watcher();
 
     let web_server = WebServer::new(
         web_bind.clone(),

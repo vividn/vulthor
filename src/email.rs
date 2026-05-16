@@ -696,6 +696,32 @@ impl EmailStore {
         Self::apply_loaded_folder_to(&mut self.root_folder, fs_path, &mut payload, fully_loaded)
     }
 
+    /// Clear cached emails for the folder whose filesystem path is
+    /// `fs_path` so the next `request_folder_load_if_needed` for it
+    /// triggers a fresh scan. Used by Phase 4.d MailDir watching: an
+    /// inotify Create under `<folder>/cur/` invalidates the cached
+    /// headers for that folder. Returns true when a matching folder
+    /// was found.
+    pub fn invalidate_folder(&mut self, fs_path: &std::path::Path) -> bool {
+        Self::invalidate_folder_at(&mut self.root_folder, fs_path)
+    }
+
+    fn invalidate_folder_at(folder: &mut Folder, fs_path: &std::path::Path) -> bool {
+        if folder.path == fs_path {
+            folder.emails.clear();
+            folder.is_loaded = false;
+            folder.unread_count = 0;
+            folder.total_count = 0;
+            return true;
+        }
+        for sub in &mut folder.subfolders {
+            if Self::invalidate_folder_at(sub, fs_path) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn apply_loaded_folder_to(
         folder: &mut Folder,
         fs_path: &std::path::Path,
