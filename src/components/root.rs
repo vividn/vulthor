@@ -1017,11 +1017,7 @@ impl AppRoot {
     /// display. Used by `process_event` to intercept `h` / `Esc`
     /// before the global view-prev shortcut fires.
     fn search_results_active(&self) -> bool {
-        self.email_store
-            .lock()
-            .unwrap()
-            .search_results
-            .is_some()
+        self.email_store.lock().unwrap().search_results.is_some()
     }
 
     /// Probe `notmuch` and either open the modal or surface a
@@ -4152,5 +4148,209 @@ mod tests {
             .get("orig-1@example.com")
             .expect("drafts index gained an entry for the original");
         assert!(entry.body_empty);
+    }
+
+    // ---- Phase 3.a — notmuch search lifecycle --------------------------
+
+    /// `/` from the Messages pane opens the search input modal.
+    /// Pre-condition: `notmuch` must be available — we skip this test
+    /// when it isn't, so the host doesn't need a notmuch install to
+    /// run `cargo test`. The unavailable path is covered separately.
+    #[test]
+    fn slash_key_opens_search_modal_when_notmuch_available() {
+        if !notmuch_available() {
+            eprintln!("notmuch not on PATH — skipping");
+            return;
+        }
+        let mut root = make_root_with_folders(&["INBOX"]);
+        root.set_active_pane_for_test(ActivePane::Messages);
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        root.process_event(Event::Key(slash)).unwrap();
+        assert!(root.search.visible, "/ opens the modal");
+        assert_eq!(root.search.query, "");
+    }
+
+    /// When `notmuch` is missing from `PATH`, `OpenSearchInput`
+    /// surfaces a status message and leaves the modal closed. We
+    /// exercise the `apply_open_search_input` path directly so the
+    /// test doesn't depend on the host's `PATH`.
+    #[test]
+    fn open_search_input_with_no_notmuch_sets_status_and_skips_modal() {
+        let mut root = make_root();
+        // SearchComponent::handle_msg flips `visible` true on
+        // OpenSearchInput. apply_open_search_input must close it back
+        // if notmuch is missing.
+        let original_path = std::env::var_os("PATH");
+        // SAFETY: tests in this module run single-threaded by default
+        // and don't otherwise mutate $PATH; restore after the probe.
+        unsafe {
+            std::env::set_var("PATH", "/nonexistent-vulthor-search-path");
+        }
+        root.enqueue(Msg::OpenSearchInput);
+        root.drain();
+        let visible = root.search.visible;
+        unsafe {
+            match original_path {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        assert!(!visible, "modal stays hidden when notmuch is missing");
+        assert!(
+            matches!(
+                root.status_message.as_deref(),
+                Some(s) if s.contains("notmuch not found"),
+            ),
+            "status reports notmuch missing; got {:?}",
+            root.status_message
+        );
+    }
+
+    /// `Msg::SearchResults` installs a virtual folder named
+    /// `Search: <query>` and switches to the Messages-only view, so
+    /// the breadcrumb reads `Mail > Search: …`.
+    #[test]
+    fn search_results_installs_virtual_folder() {
+        use std::fs;
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        // Materialise a real maildir-style file so
+        // apply_search_results_named's `path.exists()` gate accepts it.
+        let path = tmp.path().join("hit.eml");
+        fs::write(
+            &path,
+            "From: a@example.com\r\nTo: b@example.com\r\nSubject: hello\r\n\r\nbody\r\n",
+        )
+        .unwrap();
+
+        let mut root = make_root();
+        root.apply_search_results_named(vec![path.clone()], "tag:inbox".into());
+
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let results = store
+            .search_results
+            .as_ref()
+            .expect("search results installed");
+        assert_eq!(results.name, "Search: tag:inbox");
+        assert_eq!(results.emails.len(), 1, "single matched file resolved");
+        assert_eq!(results.emails[0].file_path, path);
+        // The Messages-only view + Messages-pane focus is what the
+        // breadcrumb code reads to render the virtual folder name.
+        assert_eq!(root.layout.current_view, View::Messages);
+        assert_eq!(root.layout.active_pane, ActivePane::Messages);
+    }
+
+    /// Phantom rows (path returned by notmuch but file vanished from
+    /// disk between the index and the read) are silently dropped.
+    #[test]
+    fn search_results_skips_missing_files() {
+        let mut root = make_root();
+        root.apply_search_results_named(
+            vec![PathBuf::from("/definitely/does/not/exist.eml")],
+            "tag:inbox".into(),
+        );
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let results = store.search_results.as_ref().unwrap();
+        assert!(results.emails.is_empty());
+    }
+
+    /// `Msg::SearchCancel` clears the virtual folder and returns to
+    /// the FolderMessages view.
+    #[test]
+    fn search_cancel_clears_virtual_folder() {
+        use std::fs;
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("hit.eml");
+        fs::write(&path, "Subject: x\r\n\r\nbody\r\n").unwrap();
+
+        let mut root = make_root();
+        root.apply_search_results_named(vec![path], "tag:inbox".into());
+        assert!(root.search_results_active());
+
+        root.enqueue(Msg::SearchCancel);
+        root.drain();
+
+        assert!(!root.search_results_active());
+        assert_eq!(root.layout.current_view, View::FolderMessages);
+    }
+
+    /// While search results are on display, `h` and `Esc` exit the
+    /// search instead of dropping the global view-prev / pane-exit
+    /// shortcut through.
+    #[test]
+    fn h_key_in_search_results_emits_cancel() {
+        use std::fs;
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("hit.eml");
+        fs::write(&path, "Subject: x\r\n\r\nbody\r\n").unwrap();
+
+        let mut root = make_root();
+        root.apply_search_results_named(vec![path], "tag:inbox".into());
+        assert!(root.search_results_active());
+
+        let h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        root.process_event(Event::Key(h)).unwrap();
+
+        assert!(!root.search_results_active(), "h cancels search");
+    }
+
+    #[test]
+    fn esc_key_in_search_results_emits_cancel() {
+        use std::fs;
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("hit.eml");
+        fs::write(&path, "Subject: x\r\n\r\nbody\r\n").unwrap();
+
+        let mut root = make_root();
+        root.apply_search_results_named(vec![path], "tag:inbox".into());
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        root.process_event(Event::Key(esc)).unwrap();
+
+        assert!(!root.search_results_active(), "Esc cancels search");
+    }
+
+    /// The modal absorbs every key — including `q`, which would
+    /// otherwise quit the app — while it is visible.
+    #[test]
+    fn search_modal_absorbs_typed_chars_including_q() {
+        let mut root = make_root();
+        // Force the modal open without going through the notmuch
+        // availability check.
+        root.search.open();
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        root.process_event(Event::Key(q)).unwrap();
+        assert!(!root.should_quit, "q must not quit while modal is open");
+        assert_eq!(root.search.query, "q", "q is typed into the modal");
+    }
+
+    /// Enter on a non-empty query closes the modal and (because
+    /// notmuch may not be installed in CI) at least produces a
+    /// status message — either the result count or the missing-binary
+    /// error. The modal itself is closed regardless.
+    #[test]
+    fn enter_in_search_modal_closes_it() {
+        let mut root = make_root();
+        root.search.open();
+        root.search.query = "tag:inbox".into();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        root.process_event(Event::Key(enter)).unwrap();
+        assert!(!root.search.visible, "modal closes after Enter");
+    }
+
+    #[test]
+    fn esc_in_search_modal_closes_without_running_query() {
+        let mut root = make_root();
+        root.search.open();
+        root.search.query = "anything".into();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        root.process_event(Event::Key(esc)).unwrap();
+        assert!(!root.search.visible, "modal closes on Esc");
+        assert!(!root.search_results_active(), "no query was executed");
     }
 }

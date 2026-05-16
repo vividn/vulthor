@@ -178,6 +178,16 @@ impl UI {
         area: Rect,
         is_active: bool,
     ) {
+        // Search-results virtual folder wins over every per-view
+        // selection: when a notmuch search is live, the Messages pane
+        // shows the matches with `Mail > Search: <query>` as the
+        // breadcrumb, regardless of which underlying folder the user
+        // was browsing.
+        if let Some(results) = store.search_results.as_ref() {
+            let breadcrumb = format!("Mail > {}", results.name);
+            messages.render_with_folder(f, area, is_active, results, &breadcrumb, &store.drafts);
+            return;
+        }
         let selected_folder = match lay.current_view {
             View::FolderMessages => {
                 let root = &store.root_folder;
@@ -399,6 +409,10 @@ pub(crate) fn help_screen_lines() -> Vec<&'static str> {
         "  gr         - Reply (sender only)",
         "  f          - Forward",
         "  R          - Reply-later (empty draft, no editor)",
+        "",
+        "Search:",
+        "  /          - Search (notmuch query)",
+        "  Esc/h      - Cancel search results",
         "",
         "View Control:",
         "  Alt+c      - Toggle content pane",
