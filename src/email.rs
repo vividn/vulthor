@@ -341,17 +341,28 @@ impl EmailStore {
         Ok(())
     }
 
-    /// Load more messages if current folder is not fully loaded
+    /// Load more messages if current folder is not fully loaded.
+    ///
+    /// Called on each `j` scroll in the Messages pane. The previous
+    /// implementation called `scanner.load_folder_emails(folder)` with no
+    /// limit, which on a 50k-message archive folder could freeze the TUI
+    /// for tens of seconds (vu-5jt / AUDIT-BLOCKING-IO.md §B2).
+    ///
+    /// The paged loader loads at most `SCROLL_LOAD_CHUNK` headers per
+    /// call, so per-scroll latency is bounded by `chunk × per-message
+    /// parse cost`, not by total folder size. Repeated scrolls within
+    /// the unloaded tail trigger repeated chunks; when the folder is
+    /// exhausted, `load_more_folder_emails` flips `is_loaded` and this
+    /// becomes a cheap branch.
     pub fn load_more_messages_if_needed(
         &mut self,
         scanner: &crate::maildir::MaildirScanner,
         index: usize,
     ) -> Result<()> {
+        const SCROLL_LOAD_CHUNK: usize = 50;
         let folder = self.get_current_folder_mut();
-        // If user is near the end of loaded messages and folder is not fully loaded, load more
         if !folder.is_loaded && index + 5 >= folder.emails.len() {
-            // Load the full folder
-            scanner.load_folder_emails(folder)?;
+            scanner.load_more_folder_emails(folder, SCROLL_LOAD_CHUNK)?;
         }
         Ok(())
     }

@@ -1,5 +1,6 @@
 use crate::email::{Email, Folder};
 use crate::error::{Result, VulthorError};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -62,9 +63,108 @@ impl MaildirScanner {
         Ok(())
     }
 
-    /// Load emails for a specific folder (lazy loading)
-    pub fn load_folder_emails(&self, folder: &mut Folder) -> Result<()> {
-        self.load_folder_emails_with_limit(folder, None)
+    /// Load up to `chunk_size` additional emails into a folder that is
+    /// already partially loaded. Bounded paged loader for B2 (vu-5jt):
+    /// replaces the unbounded `load_folder_emails` call from the scroll-
+    /// triggered code path, which used to freeze the TUI on large folders.
+    ///
+    /// Behavior:
+    /// - No-op (returns `Ok(0)`) if the folder is already fully loaded or
+    ///   is not a maildir directory.
+    /// - Walks `cur/` then `new/`, skipping files already present in
+    ///   `folder.emails` (dedup by path).
+    /// - Parses headers for at most `chunk_size` new emails per call.
+    /// - When a full pass adds zero new emails, the folder is exhausted,
+    ///   so we mark `is_loaded = true` to short-circuit future calls.
+    ///
+    /// Cost is O(dir_size) per call (one WalkDir pass with `is_file`
+    /// stats) plus O(chunk_size) parses. For large folders the per-call
+    /// latency is bounded by the parse work, not by total folder size.
+    pub fn load_more_folder_emails(
+        &self,
+        folder: &mut Folder,
+        chunk_size: usize,
+    ) -> Result<usize> {
+        if folder.is_loaded || chunk_size == 0 {
+            return Ok(0);
+        }
+
+        let path = &folder.path;
+        let cur_path = path.join("cur");
+        let new_path = path.join("new");
+        let tmp_path = path.join("tmp");
+        if !(cur_path.exists() && new_path.exists() && tmp_path.exists()) {
+            return Ok(0);
+        }
+
+        let loaded: HashSet<PathBuf> =
+            folder.emails.iter().map(|e| e.file_path.clone()).collect();
+
+        let mut budget = chunk_size;
+        let cur_added = self.scan_more_in_dir(folder, &cur_path, &loaded, budget)?;
+        budget = budget.saturating_sub(cur_added);
+        let new_added = if budget > 0 {
+            self.scan_more_in_dir(folder, &new_path, &loaded, budget)?
+        } else {
+            0
+        };
+
+        let added = cur_added + new_added;
+        // No new emails despite a non-zero budget => folder is exhausted.
+        if added == 0 {
+            folder.is_loaded = true;
+        }
+        Ok(added)
+    }
+
+    /// Helper for `load_more_folder_emails`: walk `dir_path`, skip entries
+    /// whose path is already in `loaded`, parse headers for up to `budget`
+    /// new emails, and append them to `folder.emails`. Returns the number
+    /// added.
+    fn scan_more_in_dir(
+        &self,
+        folder: &mut Folder,
+        dir_path: &Path,
+        loaded: &HashSet<PathBuf>,
+        budget: usize,
+    ) -> Result<usize> {
+        if !dir_path.exists() || !dir_path.is_dir() {
+            return Ok(0);
+        }
+        let is_new = dir_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map_or(false, |name| name == "new");
+
+        let mut added = 0;
+        for entry in WalkDir::new(dir_path).min_depth(1).max_depth(1) {
+            if added >= budget {
+                break;
+            }
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || !self.is_email_file(path) {
+                continue;
+            }
+            if loaded.contains(path) {
+                continue;
+            }
+
+            let mut email = Email::new(path.to_path_buf());
+            email.is_unread = is_new;
+            match email.parse_headers_only() {
+                Ok(()) => {
+                    folder.add_email(email);
+                    added += 1;
+                }
+                Err(e) => {
+                    email.headers.subject = format!("Parse Error: {}", e);
+                    folder.add_email(email);
+                    added += 1;
+                }
+            }
+        }
+        Ok(added)
     }
 
     /// Load limited number of emails for a specific folder (for fast startup)
@@ -248,10 +348,112 @@ mod tests {
         assert_eq!(result.subfolders.len(), 1);
         assert_eq!(result.subfolders[0].name, "INBOX");
 
-        // Load emails for INBOX to test the lazy loading
+        // Load emails for INBOX to test the lazy loading.
+        // `None` limit is the explicit "load every message" mode used
+        // here for setup; production code paths now go through the
+        // paged `load_more_folder_emails` instead (vu-5jt).
         scanner
-            .load_folder_emails(&mut result.subfolders[0])
+            .load_folder_emails_with_limit(&mut result.subfolders[0], None)
             .unwrap();
         assert_eq!(result.subfolders[0].emails.len(), 1);
+    }
+
+    /// Build a `cur/`-only INBOX with `n` minimal RFC-822 messages and
+    /// return (TempDir, scanner, root Folder). Used by the paged-loader
+    /// regression tests below.
+    fn build_folder_with_n_emails(n: usize) -> (TempDir, MaildirScanner, Folder) {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("INBOX/cur")).unwrap();
+        fs::create_dir_all(root.join("INBOX/new")).unwrap();
+        fs::create_dir_all(root.join("INBOX/tmp")).unwrap();
+        for i in 0..n {
+            let body = format!(
+                "From: a@b.test\r\nTo: c@d.test\r\nSubject: msg {}\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\nMessage-ID: <{}@b.test>\r\n\r\nbody {}\r\n",
+                i, i, i
+            );
+            fs::write(root.join(format!("INBOX/cur/{:06}.eml", i)), body).unwrap();
+        }
+        let scanner = MaildirScanner::new(root.to_path_buf());
+        let result = scanner.scan().unwrap();
+        (temp, scanner, result)
+    }
+
+    /// vu-5jt acceptance: one call to `load_more_folder_emails` must add
+    /// at most `chunk_size` emails, regardless of how many remain in the
+    /// folder. Proves the unbounded-load mode is gone from the scroll path.
+    #[test]
+    fn load_more_folder_emails_is_bounded_by_chunk_size() {
+        let (_temp, scanner, mut root) = build_folder_with_n_emails(200);
+        let folder = &mut root.subfolders[0];
+
+        // Seed an initial 10 (mirrors what the Enter-into-folder path does).
+        scanner
+            .load_folder_emails_with_limit(folder, Some(10))
+            .unwrap();
+        assert_eq!(folder.emails.len(), 10);
+        assert!(!folder.is_loaded);
+
+        let added = scanner.load_more_folder_emails(folder, 50).unwrap();
+        assert_eq!(added, 50, "must load exactly chunk_size when more remain");
+        assert_eq!(folder.emails.len(), 60);
+        assert!(
+            !folder.is_loaded,
+            "folder still has 140 more emails — must not be marked fully loaded",
+        );
+    }
+
+    /// Repeated paged calls eventually exhaust the folder and flip
+    /// `is_loaded = true`, after which further calls are no-ops.
+    #[test]
+    fn load_more_folder_emails_exhausts_and_marks_loaded() {
+        let (_temp, scanner, mut root) = build_folder_with_n_emails(35);
+        let folder = &mut root.subfolders[0];
+        scanner
+            .load_folder_emails_with_limit(folder, Some(10))
+            .unwrap();
+        assert_eq!(folder.emails.len(), 10);
+
+        // Two chunks of 20 covers the remaining 25 with one short tail.
+        let a = scanner.load_more_folder_emails(folder, 20).unwrap();
+        let b = scanner.load_more_folder_emails(folder, 20).unwrap();
+        let c = scanner.load_more_folder_emails(folder, 20).unwrap();
+        assert_eq!(a, 20);
+        assert_eq!(b, 5, "last partial chunk = remaining emails");
+        assert_eq!(c, 0, "no more emails, returns 0");
+        assert_eq!(folder.emails.len(), 35);
+        assert!(folder.is_loaded, "exhaustion flips is_loaded");
+
+        // Once is_loaded is true, subsequent calls short-circuit.
+        let d = scanner.load_more_folder_emails(folder, 20).unwrap();
+        assert_eq!(d, 0);
+    }
+
+    /// Dedup: if the same path is already in `folder.emails`, the paged
+    /// loader does not double-count it. (Defends against the WalkDir
+    /// returning the same entries we already loaded in the seed call.)
+    #[test]
+    fn load_more_folder_emails_skips_already_loaded_paths() {
+        let (_temp, scanner, mut root) = build_folder_with_n_emails(30);
+        let folder = &mut root.subfolders[0];
+
+        // Seed with the first 10 (the initial bounded scan).
+        scanner
+            .load_folder_emails_with_limit(folder, Some(10))
+            .unwrap();
+        assert_eq!(folder.emails.len(), 10);
+
+        // Request a chunk that exceeds remaining. We must add exactly
+        // 20 (the remaining), not 30 (re-adding the seed).
+        let added = scanner.load_more_folder_emails(folder, 100).unwrap();
+        assert_eq!(added, 20);
+        assert_eq!(folder.emails.len(), 30);
+
+        // No duplicates: every file_path appears once.
+        let mut paths: Vec<_> = folder.emails.iter().map(|e| e.file_path.clone()).collect();
+        paths.sort();
+        let before = paths.len();
+        paths.dedup();
+        assert_eq!(paths.len(), before, "no duplicate paths after paged load");
     }
 }
