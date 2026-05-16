@@ -1,41 +1,32 @@
-# 📧 Vulthor
+# Vulthor
 
 [![CI](https://github.com/vividn/vulthor/actions/workflows/ci.yml/badge.svg)](https://github.com/vividn/vulthor/actions/workflows/ci.yml)
 
-A modern TUI email client with an integrated HTML viewer, built in Rust.
+A modern TUI email client for daily-driver use. Vulthor reads and writes
+standard MailDirs, syncs through `mbsync`, searches through `notmuch`,
+sends through `msmtp`, and pairs the terminal UI with an embedded HTML
+viewer pane so rich-formatted mail still renders properly. Multiple
+accounts, compose and drafts, configurable keybindings and theme, and an
+opt-in local AI classifier are all built in.
 
-Vulthor is a daily-driver terminal email client for people who live in the
-shell but still want HTML emails rendered properly. It pairs with `mbsync`
-(for sync) and `notmuch` (for search), composes via `$EDITOR`, and sends via
-`msmtp`. The companion web pane is a render-only HTML viewer — not a second
-UI.
+## Quickstart
 
-## ✨ Features
+### 1. Install Rust
 
-- **MailDir-native**: reads (and safely mutates) standard MailDir folders. No
-  IMAP/POP code — let `mbsync` do that.
-- **Vim-flavored navigation**: `j`/`k` to move, `h`/`l` to step between view
-  tiers (Accounts → Folders → Messages → Content), `Tab` to cycle panes.
-- **Multi-account**: configure any number of `[accounts.*]` sections, each
-  with its own MailDir. The Accounts pane appears automatically when more
-  than one account is configured.
-- **Action keymap**: `a` archive, `s`/`F` star, `d` delete, `m` move (with
-  filterable folder picker), `U` mark unread, `Enter` opens and marks read.
-- **Session undo**: `u` reverses the last mutation (move/star/mark) within
-  the session.
-- **Drafts on disk**: drafts live in the MailDir's `Drafts/` folder with
-  proper `In-Reply-To`/`References` headers, so they remain compatible with
-  other mail clients.
-- **HTML pane**: an embedded `axum` server renders the selected email's
-  HTML body in your browser and stays in sync over SSE.
-- **Lazy loading**: only headers are read on folder scan; bodies load on
-  demand for fast startup even on large MailDirs.
-- **Help overlay**: `?` shows the full keymap at any time.
+Vulthor requires the Rust 2024 edition toolchain (Rust 1.85+). Install
+via [rustup](https://rustup.rs/):
 
-## 🚀 Installation
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
-Vulthor builds from source with a recent Rust toolchain (edition 2024;
-Rust 1.85+ recommended).
+### 2. Install Vulthor
+
+```bash
+cargo install vulthor
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/vividn/vulthor.git
@@ -44,195 +35,217 @@ cargo build --release
 # binary at target/release/vulthor
 ```
 
-### Pairing tools
+### 3. Install the companion tools
 
-Vulthor is intentionally minimal — it does not sync, search, or send mail by
-itself. For a full daily-driver setup you'll want:
+Vulthor is intentionally minimal — it doesn't sync, search, or send mail
+itself. Set up each tool from its upstream documentation:
 
-- **[mbsync](https://isync.sourceforge.io/)** (`isync` package) — IMAP ↔ MailDir sync.
-- **[notmuch](https://notmuchmail.org/)** — local mail indexer used for `/` search.
-- **[msmtp](https://marlam.de/msmtp/)** — SMTP relay used by Vulthor's send pipeline.
+- **[mbsync](https://isync.sourceforge.io/)** — IMAP ↔ MailDir sync.
+  Configure `~/.mbsyncrc`, then run `mbsync -a` on a timer.
+- **[msmtp](https://marlam.de/msmtp/)** — SMTP relay for sending.
+  Configure `~/.msmtprc` with one account block per address.
+- **[notmuch](https://notmuchmail.org/)** (optional) — local mail index
+  for `/` search. Run `notmuch setup` once, then `notmuch new` after
+  each sync.
 
-Vulthor still runs without any of these — read-only over an existing MailDir
-works out of the box.
+Vulthor still runs read-only over any existing MailDir without these.
 
-## ⚙️ Configuration
+### 4. Run
 
-Vulthor looks for a TOML config in this order:
-
-1. Path passed via `-c <path>`
-2. `~/.config/vulthor/config.toml`
-3. `./vulthor.toml`
-4. Built-in default (`~/Mail`, single-account)
-
-CLI flags override the config:
-
-| Flag | Description |
-|------|-------------|
-| `-p`, `--port <PORT>` | HTML viewer port (default `8080`) |
-| `-c`, `--config <PATH>` | Use a specific config file |
-| `-m`, `--maildir <PATH>` | Override MailDir path |
-
-### Single-account (legacy)
-
-```toml
-maildir_path = "/home/me/Mail"
+```bash
+vulthor --help
+vulthor                 # use config file (or default ~/Mail)
+vulthor -p 9000         # override HTML viewer port
+vulthor -m ~/OtherMail  # override MailDir path
 ```
 
-### Multi-account
+## Configuration
+
+Vulthor reads `vulthor.toml` from the first match in:
+
+1. `-c <path>` on the command line
+2. `~/.config/vulthor/config.toml`
+3. `./vulthor.toml`
+4. Built-in default (`~/Mail`, single account)
+
+A minimal working config:
 
 ```toml
-# Optional: which account is active on startup. Falls back to the first
-# account in alphabetical order when unset.
+# Pick the account active on startup.
 default_account = "personal"
 
-# Required as a fallback when no [accounts.*] tables are configured.
+# Required as a fallback when no [accounts.*] tables are defined.
 maildir_path = "/home/me/Mail"
 
 [accounts.personal]
-name          = "Personal"
-email         = "me@personal.tld"
-maildir_path  = "/home/me/Mail/personal"
-smtp_command  = "msmtp -a personal"   # optional; required to send
-signature     = "Cheers,\nMe"         # optional
-
-[accounts.work]
-name          = "Work"
-email         = "me@company.com"
-maildir_path  = "/home/me/Mail/work"
-smtp_command  = "msmtp -a work"
+name         = "Personal"
+email        = "me@personal.tld"
+maildir_path = "/home/me/Mail/personal"
+smtp_command = "msmtp -a personal"   # optional; required to send
+signature    = "Cheers,\nMe"         # optional
 ```
 
-The Accounts pane appears automatically when more than one `[accounts.*]`
-table is configured.
+Add more `[accounts.<name>]` blocks for additional accounts. The
+Accounts pane appears automatically when more than one is configured.
 
-### Additional config sections
+Overridable sections (all optional):
 
-- `[web]` — bind address / port for the HTML viewer.
-- `[keybindings]` — overrides for any action key, including multi-key
-  chords (e.g. `gr`).
-- `[theme]` — palette overrides. Drop a `<name>.toml` into the themes
-  directory and reference it as `theme = "<name>"`.
-- `[ai]` — placeholder for the local classifier (post-v1 feature).
+- `[accounts.<name>]` — one block per account.
+- `[web]` — `port` and `bind` for the HTML viewer.
+- `[keybindings]` — rebind any action (see table below).
+- `[theme]` — palette overrides or a named theme from
+  `~/.config/vulthor/themes/<name>.toml`.
+- `[ai]` — local classifier settings (opt-in, experimental).
 
-## ⌨️ Keybindings
+See `src/config.rs` for the full schema and field-level documentation.
+
+CLI flags override the config file:
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--port <PORT>` | HTML viewer port (overrides `[web].port`) |
+| `-c`, `--config <PATH>` | Use a specific config file |
+| `-m`, `--maildir <PATH>` | Override MailDir path |
+
+## Keybindings
 
 ### Navigation
 
 | Key | Action |
 |-----|--------|
 | `j` / `k` | Move down / up in the current pane |
-| `↓` / `↑` | Same, with arrow keys |
-| `h` / `l` | Step to broader / deeper view tier |
-| `Tab` / `Shift+Tab` | Cycle panes in the current view |
-| `Enter` | Enter folder, open email (auto mark-read), or activate attachment |
-| `Backspace` | Exit the current folder |
-| `Page Up` / `Page Down` | Scroll content pane by 10 lines |
+| `h` / `l` | Move to broader / deeper view tier |
+| `Tab` / `Shift+Tab` | Cycle panes within the current view |
+| `Enter` | Enter folder, open email (auto mark-read), or activate selection |
+| `Backspace` | Exit the current folder or view |
+| `gg` / `G` | Jump to top / bottom |
+| `gj` / `gk` | Jump to next / previous unread |
 
-### Email actions (in the Messages pane)
+### Email actions
 
 | Key | Action |
 |-----|--------|
 | `a` | Archive (move to `Archive/`) |
-| `s` / `F` | Toggle star/flag |
+| `s` / `F` | Toggle star / flag |
 | `d` | Delete (move to `Trash/`) |
-| `m` | Move to folder (opens a filterable folder picker) |
+| `m` | Move to folder (filterable picker) |
 | `U` | Mark unread |
-| `Enter` | Open + auto mark-read |
-| `r` | Reply-all (opens `$EDITOR` with quoted body) |
+| `;` | Accept AI suggestion for current email |
+| `u` | Undo last mutation (session-only) |
+| `r` | Reply-all |
 | `gr` | Reply to sender only |
 | `f` | Forward |
-| `R` | Reply-later — empty draft saved to `Drafts/`, ⏰ chip appears |
+| `R` | Reply-later (empty draft placeholder) |
 
-### Global
+### Search
 
 | Key | Action |
 |-----|--------|
 | `/` | Search via notmuch |
-| `v` | Open the selected message in the HTML viewer |
-| `u` | Undo last mutation (session-only) |
+| `n` / `N` | Next / previous match |
+
+### View control
+
+| Key | Action |
+|-----|--------|
 | `Alt+c` | Toggle the content pane |
-| `?` | Toggle help overlay |
+| `v` | Toggle the HTML viewer window |
+| `?` | Help overlay |
 | `q` | Quit |
 
-## 📂 MailDir setup with mbsync
+### Draft pane
 
-A minimal `~/.mbsyncrc` snippet:
+| Key | Action |
+|-----|--------|
+| `e` | Edit body in `$EDITOR` |
+| `S` | Send via `msmtp` |
+| `Esc` | Discard the draft |
 
-```
-IMAPAccount personal
-Host        imap.example.com
-User        me@personal.tld
-PassCmd     "pass mail/personal"
-TLSType     IMAPS
+All keys above are rebindable via the `[keybindings]` block in
+`vulthor.toml`.
 
-IMAPStore personal-remote
-Account     personal
+## Drafts and reply variants
 
-MaildirStore personal-local
-Path        ~/Mail/personal/
-Inbox       ~/Mail/personal/INBOX
-SubFolders  Verbatim
+Drafts live in the active account's `Drafts/` folder as standard MailDir
+files with `In-Reply-To` and `References` headers, so they stay
+compatible with other mail clients. Each variant produces a draft for
+the current message:
 
-Channel personal
-Far     :personal-remote:
-Near    :personal-local:
-Patterns *
-Create  Both
-Expunge Both
-SyncState *
-```
+- **`r` — Reply-all.** Opens `$EDITOR` with the original sender, all
+  recipients, and a quoted body. Default reply behaviour.
+- **`gr` — Reply (sender only).** Same as `r`, but the recipient list
+  is trimmed to just the original sender.
+- **`f` — Forward.** Opens `$EDITOR` with the original body inlined,
+  recipients left blank for you to address.
+- **`R` — Reply-later.** Creates an empty draft attached to the
+  current message. The message shows a ⏰ chip in the list so you can
+  return to it. Drafts with real body content show a ✏ chip instead.
 
-Run `mbsync personal` (or `mbsync -a`) periodically — typically via a
-systemd timer or cron job. After each sync, run `notmuch new` to refresh
-the search index.
+After saving in `$EDITOR`, Vulthor returns to a pre-send pane where you
+can re-edit (`e`) or send (`S`).
 
-## 🔍 Search with notmuch
+## HTML viewer
 
-Index your mail once:
+Press `v` to launch a chromeless browser pinned to the currently
+selected message. The viewer detects your installed browser (Chromium,
+Firefox, or `xdg-open` fallback) and stays in sync with the TUI over
+SSE — navigating in the terminal updates the open window instantly.
+Press `v` again to close it.
 
-```bash
-notmuch setup    # one-time
-notmuch new      # after each mbsync run
-```
+## AI classifier
 
-Vulthor's `/` search hands queries directly to notmuch and shows results in
-the Messages pane.
+Vulthor ships with scaffolding for a local, on-device classifier that
+suggests `archive`, `star`, or `delete` for each incoming message and
+learns from corrections. The feature is **experimental and disabled by
+default in v1**. The full classifier backend lands post-v1; today the
+configuration block is parsed but otherwise inert.
 
-## ✉️ Sending with msmtp
+To opt in once the backend ships:
 
-A minimal `~/.msmtprc`:
-
-```
-defaults
-auth       on
-tls        on
-tls_trust_file /etc/ssl/certs/ca-certificates.crt
-
-account    personal
-host       smtp.example.com
-port       587
-from       me@personal.tld
-user       me@personal.tld
-passwordeval "pass mail/personal-smtp"
+```toml
+[ai]
+enabled = true
+backend = "embeddings"
+threshold = 0.6
 ```
 
-Vulthor invokes `msmtp` via the `smtp_command` configured per account.
+When enabled and the model files are present, suggestions appear as
+inline chips in the Messages list and on the status bar. Press `;` to
+accept the suggestion for the selected message.
 
-## 🤝 Contributing
+## Troubleshooting
 
-Issues and pull requests are welcome. Please run `cargo fmt`, `cargo clippy`,
-and `cargo test` before submitting.
+- **No mail appears / inbox is empty.** Vulthor only reads MailDir; it
+  doesn't sync. Run `mbsync -a` (or your equivalent) and re-launch.
+  Verify `maildir_path` points at the directory `mbsync` writes into.
+- **`/` search reports notmuch unavailable.** Install `notmuch` and run
+  `notmuch setup`, then `notmuch new` after each sync. Vulthor probes
+  for the binary on `PATH`; if it's missing, search is disabled but
+  everything else continues to work.
+- **Sending fails or `S` reports an error.** Vulthor shells out to
+  whatever you set as `smtp_command` (typically `msmtp -a <account>`).
+  Confirm the `msmtp` config at `~/.msmtprc` works on its own:
+  `echo "test" | msmtp -a <account> you@example.com`. The draft is
+  preserved when send fails — fix the config and retry from the
+  pre-send pane.
+- **Keybinding conflict at startup.** If two actions resolve to the
+  same key (typically after a `[keybindings]` override that doesn't
+  free the original key), Vulthor refuses to start and names both
+  actions in the error. Rebind the colliding default to a free key.
+
+## Links
+
+- [VISION.md](VISION.md) — design intent, view progression, roadmap.
+- [CHANGELOG.md](CHANGELOG.md) — release notes.
+- [LICENSE](LICENSE) — MIT.
+
+## Contributing
+
+Issues and pull requests are welcome. Run the standard checks before
+submitting:
 
 ```bash
 cargo fmt --check
 cargo clippy
 cargo test
 ```
-
-See `VISION.md` for the long-term direction and `CLAUDE.md` for working
-conventions.
-
-## 📄 License
-
-Vulthor is licensed under the MIT License. See [LICENSE](LICENSE).
