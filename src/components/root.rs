@@ -566,7 +566,11 @@ impl AppRoot {
             (KeyCode::BackTab, _) => Some(Msg::FocusPrev),
             (KeyCode::Char('h'), m) if m.is_empty() => Some(Msg::ViewPrev),
             (KeyCode::Char('l'), m) if m.is_empty() => {
-                if matches!(active_pane, ActivePane::Folders) {
+                // Defer to per-pane handlers for panes whose 'l' has
+                // select semantics (Folders: enter folder; Accounts:
+                // switch account — vu-4bg). Other panes use 'l' as
+                // the view-right shortcut.
+                if matches!(active_pane, ActivePane::Folders | ActivePane::Accounts) {
                     None
                 } else {
                     Some(Msg::ViewNext)
@@ -1253,6 +1257,8 @@ mod tests {
     fn handle_global_key_l_from_folders_defers() {
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         assert!(AppRoot::handle_global_key(key, &ActivePane::Folders).is_none());
+        // Accounts pane also defers so AccountSelect can fire (vu-4bg).
+        assert!(AppRoot::handle_global_key(key, &ActivePane::Accounts).is_none());
         assert_eq!(
             AppRoot::handle_global_key(key, &ActivePane::Messages),
             Some(Msg::ViewNext)
@@ -1981,6 +1987,43 @@ mod tests {
         root.drain();
 
         assert_eq!(store_handle.lock().unwrap().root_folder.path, prior_path);
+    }
+
+    #[test]
+    fn l_on_accounts_pane_switches_account_end_to_end() {
+        // vu-4bg regression: the global 'l' handler must defer to the
+        // AccountsComponent so its `Char('l') => AccountSelect` mapping
+        // actually fires. Drive 'h' → Tab → j → 'l' through
+        // `process_event` so we catch any future router change that
+        // re-intercepts 'l' before the per-pane dispatch.
+        let cfg = multi_account_config(&[("a", "/tmp/a-mail"), ("b", "/tmp/b-mail")]);
+        let mut root = make_root_with_config(cfg);
+        let store_handle = root.email_store_handle();
+        let prior_path = store_handle.lock().unwrap().root_folder.path.clone();
+
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+        assert_eq!(root.layout.current_view, View::AccountsFolders);
+
+        let tab = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        root.process_event(tab).unwrap();
+        assert_eq!(root.layout.active_pane, ActivePane::Accounts);
+
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j).unwrap();
+        assert_eq!(root.accounts.selected_index(), 1);
+
+        let l = Event::Key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        root.process_event(l).unwrap();
+
+        let store = store_handle.lock().unwrap();
+        assert_ne!(
+            store.root_folder.path, prior_path,
+            "AccountSelect did not fire — 'l' was intercepted as ViewNext"
+        );
+        assert_eq!(store.root_folder.path, PathBuf::from("/tmp/b-mail"));
+        assert_eq!(root.layout.current_view, View::FolderMessages);
+        assert_eq!(root.layout.active_pane, ActivePane::Folders);
     }
 
     // -----------------------------------------------------------------
