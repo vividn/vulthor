@@ -343,11 +343,7 @@ fn new_message_id() -> String {
 /// `In-Reply-To` is set to the original `Message-ID` (with surrounding
 /// angle brackets) for every reply variant; forwards leave it `None`.
 /// `from` and `signature` come from `account`.
-pub fn build_reply_template(
-    original: &Email,
-    kind: ReplyKind,
-    account: &AccountConfig,
-) -> Compose {
+pub fn build_reply_template(original: &Email, kind: ReplyKind, account: &AccountConfig) -> Compose {
     let from = format_account_from(account);
     let signature = account.signature.clone();
     let in_reply_to = if matches!(kind, ReplyKind::Forward) {
@@ -964,10 +960,7 @@ mod tests {
         assert_eq!(c.to, "", "forward leaves To: blank for user to fill");
         assert_eq!(c.cc, "");
         assert_eq!(c.subject, "Fwd: Lunch tomorrow?");
-        assert!(
-            c.in_reply_to.is_none(),
-            "forwards must not set In-Reply-To",
-        );
+        assert!(c.in_reply_to.is_none(), "forwards must not set In-Reply-To",);
         assert!(c.body.contains("---------- Forwarded message ----------"));
         assert!(c.body.contains("From: Alice <alice@example.com>"));
         assert!(c.body.contains("Hey,\nWant to grab lunch?"));

@@ -119,8 +119,8 @@ that consume them ship:
 ## ⌨️ Keybindings
 
 The keymap below reflects what is currently wired in the code. Additional
-keys listed in `VISION.md` (reply/forward, `/` search, `v` viewer launch)
-are not yet implemented.
+keys listed in `VISION.md` (`/` search, `v` viewer launch) are not yet
+implemented.
 
 ### Navigation
 
@@ -144,6 +144,10 @@ are not yet implemented.
 | `m` | Move to folder (opens a filterable folder picker) |
 | `U` | Mark unread |
 | `Enter` | Open + auto mark-read |
+| `r` | Reply-all (opens `$EDITOR` with quoted body) |
+| `gr` | Reply to sender only |
+| `f` | Forward |
+| `R` | Reply-later — empty draft saved to `Drafts/`, ⏰ chip appears |
 
 ### Global
 

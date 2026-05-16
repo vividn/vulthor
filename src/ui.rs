@@ -391,6 +391,10 @@ pub(crate) fn help_screen_lines() -> Vec<&'static str> {
         "  m          - Move to folder (picker)",
         "  U          - Mark unread",
         "  u          - Undo last action (session-only)",
+        "  r          - Reply-all (opens $EDITOR)",
+        "  gr         - Reply (sender only)",
+        "  f          - Forward",
+        "  R          - Reply-later (empty draft, no editor)",
         "",
         "View Control:",
         "  Alt+c      - Toggle content pane",
@@ -474,11 +478,25 @@ mod tests {
         // Guard against re-introducing stale entries for not-yet-wired
         // VISION.md keys. Update this list as features land.
         let text = joined();
-        for stale in ["Reply", "Forward", "Search forward", "PWA"] {
+        for stale in ["Search forward", "PWA"] {
             assert!(
                 !text.contains(stale),
                 "help screen advertises unwired feature `{}`:\n{}",
                 stale,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn help_screen_lists_reply_variant_keys() {
+        // Phase 2.d (vu-l1y): the four reply keys must surface in `?`.
+        let text = joined();
+        for token in ["Reply-all", "gr", "Forward", "Reply-later"] {
+            assert!(
+                text.contains(token),
+                "help screen missing reply variant `{}`:\n{}",
+                token,
                 text
             );
         }

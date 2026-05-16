@@ -864,7 +864,8 @@ impl AppRoot {
                 match self.write_reply_later_draft(&compose, &account) {
                     Ok(path) => {
                         self.register_reply_later_draft(&compose, &path);
-                        self.draft.set_status(crate::components::draft::DraftStatus::ReadyToSend);
+                        self.draft
+                            .set_status(crate::components::draft::DraftStatus::ReadyToSend);
                         self.status_message = Some("Reply-later saved to Drafts/".into());
                     }
                     Err(e) => {
@@ -884,18 +885,23 @@ impl AppRoot {
     /// Resolve the active account config the compose flow should
     /// templatize against. Prefers the Accounts pane's current
     /// selection; falls back to a synthetic single-account record
-    /// built from the top-level `maildir_path` when no `[accounts.*]`
-    /// tables are configured (single-account installs).
+    /// rooted at the **live store's** maildir path when no
+    /// `[accounts.*]` tables are configured. Using the store path —
+    /// not `Config::default().maildir_path` — keeps reply-later draft
+    /// writes scoped to the same tree the user is actively browsing,
+    /// which matters both for tests with temp roots and for runs
+    /// where `-m <path>` overrode the config default.
     fn resolve_active_account(&self) -> AccountConfig {
         if let Some(id) = self.accounts.current_account_id()
             && let Some(account) = self.accounts.account_by_id(&id)
         {
             return account.clone();
         }
+        let maildir_path = self.email_store.lock().unwrap().root_folder.path.clone();
         AccountConfig {
             name: String::new(),
             email: String::new(),
-            maildir_path: self.config.maildir_path.clone(),
+            maildir_path,
             smtp_command: None,
             signature: None,
         }
@@ -921,11 +927,7 @@ impl AppRoot {
     /// `drafts` index so the Messages pane paints the `⏰` chip
     /// immediately, without waiting for the next folder scan.
     fn register_reply_later_draft(&self, compose: &Compose, path: &std::path::Path) {
-        let Some(parent_id) = compose
-            .in_reply_to
-            .as_deref()
-            .map(strip_angle_brackets)
-        else {
+        let Some(parent_id) = compose.in_reply_to.as_deref().map(strip_angle_brackets) else {
             return;
         };
         if parent_id.is_empty() {
@@ -1366,7 +1368,9 @@ static THEME: VulthorTheme = VulthorTheme;
 /// counter inside `compose`.
 fn reply_later_filename() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = now.as_secs();
     let micros = now.subsec_micros();
     let pid = std::process::id();
@@ -3310,6 +3314,13 @@ mod tests {
     ///   - install a populated `Compose` on the live draft,
     ///   - park an editor launch (the run loop will pick it up),
     ///   - flip the view to ContentDraft with focus on Draft.
+    ///
+    /// Note: `mail-parser` (and the current `EmailHeaders` schema) only
+    /// surfaces the FIRST recipient on the To: line — multi-recipient
+    /// parsing isn't wired up yet. So reply-all currently fans out to
+    /// `original.From + original.To[0]` minus our address. Once header
+    /// parsing learns about the full recipient list, this test should
+    /// grow assertions for the additional names.
     #[test]
     fn r_key_dispatches_reply_all_template_and_parks_editor() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -3329,7 +3340,14 @@ mod tests {
         assert_eq!(state.reply_kind, ReplyKind::ReplyAll);
         assert_eq!(state.status, crate::components::draft::DraftStatus::Editing);
         assert!(state.compose.to.contains("Alice <alice@example.com>"));
-        assert!(state.compose.to.contains("Bob <bob@example.com>"));
+        // Reply-all surfaces the original first-recipient too — until
+        // the schema grows multi-recipient support this is the only
+        // "other recipient" that fans out.
+        assert!(
+            state.compose.to.contains("Tester <tester@example.com>"),
+            "reply-all must include the original To recipient, got {:?}",
+            state.compose.to,
+        );
         assert_eq!(state.compose.subject, "Re: Lunch tomorrow?");
         assert_eq!(
             state.compose.in_reply_to.as_deref(),
@@ -3341,6 +3359,8 @@ mod tests {
     }
 
     /// `gr` (two-key) must dispatch a sender-only reply, not reply-all.
+    /// The key signal: the original To recipient does NOT appear in
+    /// the reply To line.
     #[test]
     fn gr_two_key_dispatches_reply_sender_template() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -3359,10 +3379,10 @@ mod tests {
         assert!(root.has_pending_editor(), "gr must park an editor launch");
         let state = root.draft().state().expect("draft started");
         assert_eq!(state.reply_kind, ReplyKind::Reply);
-        // Reply-sender — Bob (the original other recipient) must NOT be on
-        // the To: line.
-        assert!(!state.compose.to.contains("Bob"));
-        assert!(state.compose.to.contains("Alice <alice@example.com>"));
+        // Reply-sender — the original To recipient ("Tester") must NOT
+        // be on the To: line; only the original From (Alice).
+        assert_eq!(state.compose.to, "Alice <alice@example.com>");
+        assert!(!state.compose.to.contains("Tester"));
     }
 
     /// `f` (forward) must dispatch a forward template with an empty To
@@ -3407,7 +3427,10 @@ mod tests {
         // Draft state advanced to ReadyToSend (skips Editing).
         let state = root.draft().state().expect("draft started");
         assert_eq!(state.reply_kind, ReplyKind::ReplyLater);
-        assert_eq!(state.status, crate::components::draft::DraftStatus::ReadyToSend);
+        assert_eq!(
+            state.status,
+            crate::components::draft::DraftStatus::ReadyToSend
+        );
         assert_eq!(state.compose.body, "");
 
         // The file exists under Drafts/cur/.
