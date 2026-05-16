@@ -357,7 +357,13 @@ impl Component for MessagesComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        if !key.modifiers.is_empty() && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+        // SHIFT is allowed (capital-letter bindings like `F`/`U`); other
+        // modifiers (ALT, CTRL) still bail out so Alt-pane shortcuts and
+        // friends don't double-fire. Arrow keys keep their legacy
+        // any-modifier pass-through.
+        use crossterm::event::KeyModifiers;
+        let mods_ok = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+        if !mods_ok && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
             return None;
         }
         match key.code {
@@ -374,11 +380,16 @@ impl Component for MessagesComponent {
             // Phase 1.c (vu-bti). Same empty-id sentinel — AppRoot
             // resolves the target email from the cursor.
             KeyCode::Char('a') => Some(Msg::Archive(String::new())),
-            KeyCode::Char('s') => Some(Msg::ToggleStar(String::new())),
+            // Phase 1.e (vu-0o3): `F` is a capital-letter alias for
+            // `s`. VISION.md lists both; treating them as the same
+            // action keeps the rebinding story simple.
+            KeyCode::Char('s') | KeyCode::Char('F') => Some(Msg::ToggleStar(String::new())),
             KeyCode::Char('d') => Some(Msg::Delete(String::new())),
             // Phase 1.d (vu-rr6). 'm' surfaces the folder picker; the
             // picker dispatches `Msg::MoveTo` on Enter.
             KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
+            // Phase 1.e (vu-0o3): mark the cursor email unread.
+            KeyCode::Char('U') => Some(Msg::MarkUnread(String::new())),
             _ => None,
         }
     }
@@ -644,6 +655,51 @@ mod tests {
         let mut m = MessagesComponent::new();
         let key = KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE);
         assert_eq!(m.on_key(key, &ctx), Some(Msg::OpenFolderPicker));
+    }
+
+    #[test]
+    fn on_key_capital_f_emits_toggle_star_alias() {
+        // Phase 1.e (vu-0o3): VISION.md lists `F` as a capital-letter
+        // alias for `s`. Both forms — bare and SHIFT-modified, since
+        // terminals vary — must produce ToggleStar.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let f_bare = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE);
+        assert!(matches!(m.on_key(f_bare, &ctx), Some(Msg::ToggleStar(_))));
+        let f_shift = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
+        assert!(matches!(m.on_key(f_shift, &ctx), Some(Msg::ToggleStar(_))));
+    }
+
+    #[test]
+    fn on_key_capital_u_emits_mark_unread() {
+        // Phase 1.e (vu-0o3): `U` marks the cursor email unread.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let u_bare = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE);
+        assert!(matches!(m.on_key(u_bare, &ctx), Some(Msg::MarkUnread(_))));
+        let u_shift = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT);
+        assert!(matches!(m.on_key(u_shift, &ctx), Some(Msg::MarkUnread(_))));
+    }
+
+    #[test]
+    fn on_key_lowercase_u_does_not_emit_mark_unread() {
+        // Capital-letter bindings must not collide with lowercase
+        // global keys (`u` is the session-undo key in `AppRoot`). The
+        // Messages component returns None for plain `u` so the global
+        // handler can claim it.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        assert_eq!(m.on_key(u, &ctx), None);
     }
 
     #[test]

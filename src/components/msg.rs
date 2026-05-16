@@ -120,6 +120,12 @@ pub enum Msg {
     /// Creates the Trash folder on first use. Pushes a `Delete`
     /// mutation onto the undo stack.
     Delete(MessageId),
+    /// Move the cursor-selected email from `<folder>/cur/` to
+    /// `<folder>/new/`, flipping `is_unread` to true and bumping the
+    /// folder's `unread_count`. Idempotent: a no-op when the file is
+    /// already in `new/`. Pushes a `MarkUnread` mutation onto the
+    /// undo stack. Phase 1.e (vu-0o3).
+    MarkUnread(MessageId),
 
     /// Open the folder-picker modal (Phase 1.d, vu-rr6). The
     /// `FolderPickerComponent` populates itself from the live store

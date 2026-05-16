@@ -774,6 +774,9 @@ impl AppRoot {
             Msg::ToggleStar(_) => {
                 self.apply_toggle_star();
             }
+            Msg::MarkUnread(_) => {
+                self.apply_mark_unread();
+            }
             Msg::Undo => {
                 self.apply_undo();
             }
@@ -904,6 +907,79 @@ impl AppRoot {
         };
         let verb = if want { "Starred" } else { "Unstarred" };
         self.status_message = Some(format!("{}: {}", verb, label));
+    }
+
+    /// Move the cursor email from `<folder>/cur/` to `<folder>/new/`,
+    /// flip its in-memory `is_unread` to true and bump the folder's
+    /// `unread_count`. Idempotent when the file is already in `new/`.
+    /// Phase 1.e (vu-0o3).
+    fn apply_mark_unread(&mut self) {
+        let (src_path, subject) = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => (e.file_path.clone(), e.headers.subject.clone()),
+                None => return,
+            }
+        };
+
+        let Some(filename) = src_path.file_name() else {
+            self.status_message = Some("Cannot mark unread: invalid email path".into());
+            return;
+        };
+        let Some(cur_dir) = src_path.parent() else {
+            self.status_message = Some("Cannot mark unread: invalid email path".into());
+            return;
+        };
+        // Idempotent: file already in `new/` means it's already unread.
+        match cur_dir.file_name().and_then(|n| n.to_str()) {
+            Some("new") => {
+                self.status_message = Some("Already unread".into());
+                return;
+            }
+            Some("cur") => {}
+            _ => {
+                self.status_message = Some("Cannot mark unread: not a maildir cur/ file".into());
+                return;
+            }
+        }
+        let Some(folder_dir) = cur_dir.parent() else {
+            self.status_message = Some("Cannot mark unread: missing folder".into());
+            return;
+        };
+        let new_dir = folder_dir.join("new");
+        let dst_path = new_dir.join(filename);
+
+        if let Err(e) = std::fs::create_dir_all(&new_dir) {
+            self.status_message = Some(format!("Failed to mark unread (mkdir): {}", e));
+            return;
+        }
+        if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+            self.status_message = Some(format!("Failed to mark unread: {}", e));
+            return;
+        }
+
+        {
+            // `update_email_read_state` does both the path swap and the
+            // `is_unread`/`unread_count` flip atomically (vu-rxi added
+            // the 3-arg signature); no separate `swap_email_path` call.
+            let mut store = self.email_store.lock().unwrap();
+            store.update_email_read_state(&src_path, &dst_path, true);
+        }
+
+        self.undo_stack.push(Mutation::MarkUnread {
+            msg: dst_path.clone(),
+            from: src_path,
+            to: dst_path,
+        });
+
+        let label = if subject.is_empty() {
+            "(no subject)".to_string()
+        } else {
+            subject
+        };
+        self.status_message = Some(format!("Marked unread: {}", label));
     }
 
     /// Pop one mutation off the undo stack and reverse it. No-op when
@@ -2279,6 +2355,147 @@ mod tests {
         assert_eq!(inbox.emails[0].file_path, new_path);
         // Stack drained.
         assert_eq!(root.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn mark_unread_moves_file_cur_to_new_and_pushes_mutation() {
+        // Phase 1.e (vu-0o3). Pressing `U` on a cursor-selected email
+        // in `INBOX/cur/` must rename it into `INBOX/new/`, flip
+        // is_unread to true, bump unread_count, and record an undoable
+        // mutation. We seed the store with is_unread=false so the
+        // counter change is observable.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-u1");
+        root.layout.active_pane = ActivePane::Messages;
+        // Pre-condition: in-memory mirror starts read.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            assert!(!store.root_folder.subfolders[0].emails[0].is_unread);
+            assert_eq!(store.root_folder.subfolders[0].unread_count, 0);
+        }
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+        root.process_event(u).unwrap();
+
+        let new_path = temp.path().join("INBOX").join("new").join("msg-u1");
+        assert!(new_path.exists(), "expected {:?} to exist", new_path);
+        assert!(!src.exists(), "original cur/ path must be gone");
+        assert_eq!(root.undo_stack_len(), 1);
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Marked unread"),
+            "status: {:?}",
+            root.status_message,
+        );
+
+        // Store side-effects: file_path, is_unread, and unread_count.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, new_path);
+        assert!(inbox.emails[0].is_unread);
+        assert_eq!(inbox.unread_count, 1);
+    }
+
+    #[test]
+    fn mark_unread_creates_new_dir_when_missing() {
+        // The maildir spec requires `new/`, but defensive `mkdir -p`
+        // is consistent with how Archive/Delete handle their target
+        // dirs.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-u2");
+        root.layout.active_pane = ActivePane::Messages;
+        // Remove `new/` if anything seeded it (the fixture only mkdirs
+        // `cur/`); assert it's absent so the test is meaningful.
+        let new_dir = temp.path().join("INBOX").join("new");
+        let _ = std::fs::remove_dir_all(&new_dir);
+        assert!(!new_dir.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+        root.process_event(u).unwrap();
+        assert!(new_dir.join("msg-u2").exists());
+    }
+
+    #[test]
+    fn mark_unread_is_noop_when_already_in_new() {
+        // Idempotency: `U` on an email that's already in `new/` must
+        // leave the filesystem untouched and not stack a phantom
+        // mutation.
+        let temp = tempfile::TempDir::new().unwrap();
+        let inbox_new = temp.path().join("INBOX").join("new");
+        std::fs::create_dir_all(&inbox_new).unwrap();
+        let src = inbox_new.join("msg-u3");
+        std::fs::write(&src, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(src.clone());
+        email.is_unread = true;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(temp.path().to_path_buf());
+        let mut root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        root.layout.active_pane = ActivePane::Messages;
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+        root.process_event(u).unwrap();
+
+        assert!(src.exists(), "file must stay in new/");
+        assert_eq!(root.undo_stack_len(), 0, "no mutation should be recorded");
+    }
+
+    #[test]
+    fn undo_after_mark_unread_restores_file_to_cur() {
+        // Round-trip: `U` then `u` must put the file back in `cur/`,
+        // flip is_unread back to false, and decrement unread_count.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-u4");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let u_cap = Event::Key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+        root.process_event(u_cap).unwrap();
+        let new_path = temp.path().join("INBOX").join("new").join("msg-u4");
+        assert!(new_path.exists() && !src.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        assert!(src.exists(), "undo must restore to INBOX/cur");
+        assert!(!new_path.exists());
+        assert_eq!(root.undo_stack_len(), 0);
+
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, src);
+        assert!(!inbox.emails[0].is_unread, "is_unread must be cleared");
+        assert_eq!(inbox.unread_count, 0, "unread_count must be back to 0");
+    }
+
+    #[test]
+    fn capital_f_toggles_star_same_as_lowercase_s() {
+        // Phase 1.e (vu-0o3): `F` is a documented alias for `s`. Both
+        // must produce identical filesystem + store state.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-f1:2,S");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let f = Event::Key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT));
+        root.process_event(f).unwrap();
+
+        let starred = temp.path().join("INBOX").join("cur").join("msg-f1:2,FS");
+        assert!(starred.exists(), "expected {:?} to exist", starred);
+        assert!(!src.exists());
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        assert!(store.root_folder.subfolders[0].emails[0].is_flagged);
+        assert_eq!(root.undo_stack_len(), 1);
     }
 
     #[test]
