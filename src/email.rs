@@ -1141,11 +1141,10 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(email.body_text.contains("🎉"));
     }
 
-    /// vu-5jt acceptance: a single `load_more_messages_if_needed` call
-    /// must NOT fully load a large folder. Pre-fix this was unbounded
-    /// and froze the TUI on big archives (AUDIT-BLOCKING-IO.md §B2).
-    /// After the fix, one j-scroll trigger loads at most one chunk
-    /// (SCROLL_LOAD_CHUNK = 50) of additional headers.
+    /// A single `load_more_messages_if_needed` call must NOT fully
+    /// load a large folder (see AUDIT-BLOCKING-IO.md §B2). One
+    /// j-scroll trigger loads at most one chunk (SCROLL_LOAD_CHUNK =
+    /// 50) of additional headers.
     #[test]
     fn load_more_messages_if_needed_is_bounded_per_call() {
         use crate::maildir::MaildirScanner;
@@ -1204,12 +1203,12 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         );
     }
 
-    /// Phase 0.3.2 (vu-6td) acceptance: the render-path getters never touch
-    /// the disk. We point an `Email` at a path that does not exist; if the
-    /// getters still called `parse_from_file`, the email would either error
-    /// or, in the old code, the call would block on a filesystem stat. Here
-    /// we verify the `load_state` stays `HeadersOnly` and the returned body
-    /// is empty (since nothing has parsed it yet).
+    /// The render-path getters must never touch the disk. We point an
+    /// `Email` at a path that does not exist; if the getters still
+    /// called `parse_from_file`, the email would either error or block
+    /// on a filesystem stat. The `load_state` must stay `HeadersOnly`
+    /// and the returned body must be empty (since nothing has parsed
+    /// it yet).
     #[test]
     fn render_path_getters_do_not_load_body() {
         let mut store = EmailStore::new(PathBuf::from("/nonexistent_root"));
@@ -1242,9 +1241,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
     }
 
-    /// Phase 0.3.2 (vu-6td): `apply_loaded_body` writes a parsed body back
-    /// into the store and transitions the email to FullyLoaded. The match is
-    /// by file path so late responses still land after the user navigates.
+    /// `apply_loaded_body` writes a parsed body back into the store
+    /// and transitions the email to FullyLoaded. The match is by file
+    /// path so late responses still land after the user navigates.
     #[test]
     fn apply_loaded_body_updates_email_state() {
         let mut store = EmailStore::new(PathBuf::from("/tmp"));
@@ -1277,9 +1276,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
     }
 
-    /// Phase 0.3.3 (vu-kx9): `apply_loaded_folder` writes the worker's
-    /// header batch into the matching subfolder and flips `is_loaded` when
-    /// the worker reported a fully-scanned folder. Counts (`unread_count`,
+    /// `apply_loaded_folder` writes the worker's header batch into the
+    /// matching subfolder and flips `is_loaded` when the worker
+    /// reported a fully-scanned folder. Counts (`unread_count`,
     /// `total_count`) are derived from the new email list.
     #[test]
     fn apply_loaded_folder_writes_emails_to_matching_subfolder() {
@@ -1313,9 +1312,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(inbox.is_loaded);
     }
 
-    /// Phase 0.3.3 (vu-kx9): replies for unknown filesystem paths (e.g. the
-    /// folder was removed while loading) return `false` so AppRoot can drop
-    /// the reply without panicking.
+    /// Replies for unknown filesystem paths (e.g. the folder was
+    /// removed while loading) return `false` so AppRoot can drop the
+    /// reply without panicking.
     #[test]
     fn apply_loaded_folder_returns_false_for_unknown_path() {
         let mut store = EmailStore::new(PathBuf::from("/tmp"));
@@ -1326,9 +1325,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(!applied);
     }
 
-    /// Phase 0.3.2 (vu-6td): `apply_loaded_body` returns `false` when no
-    /// email matches the path — covers the "user navigated and the email is
-    /// gone" race so the worker's reply is dropped cleanly.
+    /// `apply_loaded_body` returns `false` when no email matches the
+    /// path — covers the "user navigated and the email is gone" race
+    /// so the worker's reply is dropped cleanly.
     #[test]
     fn apply_loaded_body_returns_false_for_unknown_path() {
         let mut store = EmailStore::new(PathBuf::from("/tmp"));
@@ -1341,7 +1340,7 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(!applied);
     }
 
-    // --- vu-rxi (Phase 1.b): mark-read planning + in-memory state. ---
+    // --- Mark-read planning + in-memory state. ---
 
     fn store_with_unread_in_new(root: PathBuf) -> EmailStore {
         let mut store = EmailStore::new(root.clone());

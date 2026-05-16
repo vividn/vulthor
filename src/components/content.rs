@@ -1,16 +1,8 @@
-// `ContentComponent` — third pane migration (Phase 0.2.3b, vu-iva).
+// `ContentComponent` — content pane.
 //
 // Owns the content-pane scroll position (`scroll_offset`). Translates
 // Content-pane keys (j/k/Up/Down/PageUp/PageDown) into messages, and
 // renders the headers + body + scrollbar against the selected email.
-//
-// **Sole writer of `scroll_offset`.** `AppRoot::apply_root` mirrors
-// `scroll_offset` into `app.selection.scroll_offset` after each
-// dispatch so legacy readers in `input.rs` and the web server keep
-// working until further refactors. The legacy `App::scroll` and the
-// Content branch in `input::handle_navigation` stay as safety nets
-// for tests that drive `handle_input` directly without going through
-// `AppRoot` — same pattern `MessagesComponent` adopted in vu-3ko.
 //
 // **`RefCell<ScrollbarState>`.** Ratatui's `render_stateful_widget`
 // needs `&mut state`, but `Component::render` takes `&self`. The

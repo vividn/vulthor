@@ -1,20 +1,19 @@
 // `AppRoot` — main-loop driver, sole owner of the TUI state.
 //
-// Phase 0.2.5 (vu-7r1): the legacy `App` god object is gone. AppRoot now
-// owns `Layout`, `status_message`, `should_quit`, etc. directly. The
-// `EmailStore` is the only thing shared across the TUI ↔ web boundary
-// (`Arc<Mutex<EmailStore>>`), and the focused pane travels via
-// `Arc<AtomicU8>` so the web server can decide between serving the
-// selected email and the welcome screen without locking the store.
+// AppRoot owns `Layout`, `status_message`, `should_quit`, etc.
+// directly. The `EmailStore` is the only thing shared across the
+// TUI ↔ web boundary (`Arc<Mutex<EmailStore>>`), and the focused pane
+// travels via `Arc<AtomicU8>` so the web server can decide between
+// serving the selected email and the welcome screen without locking
+// the store.
 //
 // Components remain canonical for the slice of state they own:
 //  - `FoldersComponent.folder_index` (mirrored into `layout.selection.folder_index`)
 //  - `MessagesComponent.email_index` (mirrored into `layout.selection.email_index`)
 //  - `ContentComponent.scroll_offset` (mirrored into `layout.selection.scroll_offset`)
 //
-// Backspace from Content/Attachments and attachment-pane navigation are
-// the last bits of legacy keymap behavior; AppRoot handles them inline
-// rather than introducing a tiny component for each.
+// Backspace from Content/Attachments and attachment-pane navigation
+// are handled inline by AppRoot rather than via a per-pane component.
 
 use std::collections::{HashSet, VecDeque};
 use std::io;
@@ -42,24 +41,22 @@ use super::{
 };
 
 pub struct AppRoot {
-    /// The single shared resource — the only `Arc<Mutex<_>>` left after
-    /// vu-7r1. The web server reads it; the TUI thread writes it under
-    /// the same lock during dispatch.
+    /// The single shared resource. The web server reads it; the TUI
+    /// thread writes it under the same lock during dispatch.
     email_store: Arc<Mutex<EmailStore>>,
     /// Published to the web server so it can answer "serve email vs.
     /// welcome" without locking the store. Updated on every focus
     /// change via `Msg::FocusChanged`.
     focused_pane: Arc<AtomicU8>,
 
-    /// User config (incl. `[accounts.*]`). Lives on AppRoot since
-    /// Phase 1.a (vu-nja); `Msg::AccountSelect` reads it to find the
-    /// maildir_path to rebuild the store against.
+    /// User config (incl. `[accounts.*]`). `Msg::AccountSelect` reads
+    /// it to find the maildir_path to rebuild the store against.
     config: Config,
     scanner: MaildirScanner,
     layout: Layout,
     status_message: Option<String>,
     should_quit: bool,
-    /// Replaces the legacy `AppState::Help` flag; toggled by '?'.
+    /// Toggled by '?'.
     help_visible: bool,
     /// Updated by the Messages pane during render; used to size
     /// off-thread header loads.
@@ -70,9 +67,9 @@ pub struct AppRoot {
     content: ContentComponent,
     accounts: AccountsComponent,
     draft: DraftComponent,
-    /// Modal "move to folder" picker (Phase 1.d, vu-rr6). When
-    /// `folder_picker.visible` is true, `process_event` routes every
-    /// key event to the picker first so the modal absorbs input.
+    /// Modal "move to folder" picker. When `folder_picker.visible` is
+    /// true, `process_event` routes every key event to the picker
+    /// first so the modal absorbs input.
     folder_picker: FolderPickerComponent,
     queue: VecDeque<Msg>,
     body_loader: BodyLoader,
@@ -80,9 +77,9 @@ pub struct AppRoot {
     folder_scanner: Option<FolderScannerHandle>,
     headers_loader: HeadersLoader,
     loading_folder_paths: HashSet<PathBuf>,
-    /// Session-only undo stack (vu-pas, Phase 1.f). Action-key handlers
-    /// push a `Mutation` after a successful filesystem op; `Msg::Undo`
-    /// pops and reverses. Lost on quit by design (VISION.md "Undo").
+    /// Session-only undo stack. Action-key handlers push a `Mutation`
+    /// after a successful filesystem op; `Msg::Undo` pops and reverses.
+    /// Lost on quit by design (VISION.md "Undo").
     undo_stack: Vec<Mutation>,
 }
 
@@ -161,10 +158,10 @@ impl AppRoot {
         self.focused_pane.clone()
     }
 
-    /// Clone of the body-loader request channel. The web server uses this to
-    /// dispatch body parses to the same off-thread worker the TUI feeds, so
-    /// no `fs::read` ever runs on an axum executor thread while holding the
-    /// store lock (`vu-9ie`, D1-D3).
+    /// Clone of the body-loader request channel. The web server uses
+    /// this to dispatch body parses to the same off-thread worker the
+    /// TUI feeds, so no `fs::read` ever runs on an axum executor thread
+    /// while holding the store lock.
     pub fn body_request_sender(&self) -> std::sync::mpsc::Sender<PathBuf> {
         self.body_loader.request_sender()
     }
@@ -276,7 +273,7 @@ impl AppRoot {
             }
             // 0. Modal picker, when visible, absorbs every key — global
             //    shortcuts included. This is what makes 'q' inside the
-            //    modal type into the filter instead of quitting (vu-rr6).
+            //    modal type into the filter instead of quitting.
             if self.folder_picker.visible {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
@@ -334,7 +331,7 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
-            // 5. Accounts-pane keys go to AccountsComponent (Phase 1.a, vu-nja).
+            // 5. Accounts-pane keys go to AccountsComponent.
             if matches!(self.layout.active_pane, ActivePane::Accounts) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
@@ -641,12 +638,12 @@ impl AppRoot {
             }
             Msg::ViewPrev => {
                 let old = self.layout.active_pane;
-                // Multi-account override (VISION.md § "Multi-Account",
-                // vu-nja): 'h' from the FolderMessages view surfaces
-                // the Accounts pane. Layout-level `prev_view` returns
-                // None there because single-account installs must
-                // keep the pane hidden; the multi-account policy
-                // lives here so layout stays pure.
+                // Multi-account override (VISION.md § "Multi-Account"):
+                // 'h' from the FolderMessages view surfaces the
+                // Accounts pane. Layout-level `prev_view` returns None
+                // there because single-account installs must keep the
+                // pane hidden; the multi-account policy lives here so
+                // layout stays pure.
                 if matches!(self.layout.current_view, View::FolderMessages)
                     && self.config.is_multi_account()
                 {
@@ -788,8 +785,7 @@ impl AppRoot {
     /// Perform an Archive-/Delete-/Move-style relocation on the cursor
     /// email. All three share the same filesystem shape — `<target>/cur/`,
     /// create-on-demand — and differ only in the destination directory
-    /// and the `Mutation` variant they record. Phase 1.c (vu-bti),
-    /// extended for Phase 1.d (vu-rr6) custom moves.
+    /// and the `Mutation` variant they record.
     fn apply_move_action(&mut self, kind: MoveKind) {
         let (src_path, subject) = {
             let store = self.email_store.lock().unwrap();
@@ -866,9 +862,9 @@ impl AppRoot {
         self.status_message = Some(format!("{}: {}", kind.verb_past(), label));
     }
 
-    /// Toggle the MailDir `F` flag on the cursor email. Phase 1.c
-    /// (vu-bti). Captures the *previous* flag state in the recorded
-    /// `Mutation::ToggleStar` so undo restores it directly.
+    /// Toggle the MailDir `F` flag on the cursor email. Captures the
+    /// *previous* flag state in the recorded `Mutation::ToggleStar`
+    /// so undo restores it directly.
     fn apply_toggle_star(&mut self) {
         let (src_path, subject, prev_flag) = {
             let store = self.email_store.lock().unwrap();
@@ -913,7 +909,6 @@ impl AppRoot {
     /// Move the cursor email from `<folder>/cur/` to `<folder>/new/`,
     /// flip its in-memory `is_unread` to true and bump the folder's
     /// `unread_count`. Idempotent when the file is already in `new/`.
-    /// Phase 1.e (vu-0o3).
     fn apply_mark_unread(&mut self) {
         let (src_path, subject) = {
             let store = self.email_store.lock().unwrap();
@@ -962,9 +957,9 @@ impl AppRoot {
         }
 
         {
-            // `update_email_read_state` does both the path swap and the
-            // `is_unread`/`unread_count` flip atomically (vu-rxi added
-            // the 3-arg signature); no separate `swap_email_path` call.
+            // `update_email_read_state` does both the path swap and
+            // the `is_unread`/`unread_count` flip atomically; no
+            // separate `swap_email_path` call.
             let mut store = self.email_store.lock().unwrap();
             store.update_email_read_state(&src_path, &dst_path, true);
         }
@@ -1001,7 +996,7 @@ impl AppRoot {
                     // Read-state mutations need the in-memory read flag
                     // and the folder's unread_count to track the file
                     // move. The plain path-swap in `swap_email_path`
-                    // would leave the unread badge stale (vu-rxi).
+                    // would leave the unread badge stale.
                     Mutation::MarkRead { .. } => {
                         store.update_email_read_state(&old, &new, true);
                     }
@@ -1029,11 +1024,11 @@ impl AppRoot {
     }
 
     /// Perform the auto mark-read move triggered by `Msg::MessageMarkRead`
-    /// (Enter on a message — vu-rxi, Phase 1.b). Plans the new/→cur/
-    /// transition under the store lock, releases the lock for the
-    /// `fs::rename`, then re-locks to update in-memory state and push
-    /// onto the undo stack. Idempotent: no plan ⇒ nothing happens, no
-    /// mutation is pushed, no status text is set.
+    /// (Enter on a message). Plans the new/→cur/ transition under the
+    /// store lock, releases the lock for the `fs::rename`, then re-locks
+    /// to update in-memory state and push onto the undo stack.
+    /// Idempotent: no plan ⇒ nothing happens, no mutation is pushed,
+    /// no status text is set.
     fn apply_mark_read(&mut self) {
         let idx = self.messages.email_index;
         let plan: Option<MarkReadPlan> = {
@@ -1067,8 +1062,8 @@ impl AppRoot {
     }
 
     /// Append a mutation to the session undo stack. Called by the
-    /// action-key handlers (vu-rxi, vu-bti, vu-3e0, vu-0o3) after they
-    /// have applied the underlying filesystem op.
+    /// action-key handlers after they have applied the underlying
+    /// filesystem op.
     pub fn push_mutation(&mut self, mutation: Mutation) {
         self.undo_stack.push(mutation);
     }
@@ -1079,7 +1074,7 @@ impl AppRoot {
     }
 
     /// Re-point the runtime at a new maildir root. Used by
-    /// `Msg::AccountSelect` (Phase 1.a, vu-nja).
+    /// `Msg::AccountSelect`.
     ///
     /// The shared `Arc<Mutex<EmailStore>>` keeps its identity — the
     /// web server's clone stays valid — and we overwrite its
@@ -1165,11 +1160,10 @@ impl AppRoot {
 
 static THEME: VulthorTheme = VulthorTheme;
 
-/// Phase 1.c (vu-bti). The MailDir-move action keys (`a`, `d`, `m`)
-/// share every step except the destination directory and the recorded
-/// mutation variant; this enum carries that delta. `Custom` lands the
-/// email at an arbitrary folder filesystem path — Phase 1.d (vu-rr6)
-/// uses it for the picker's "move to folder" target.
+/// The MailDir-move action keys (`a`, `d`, `m`) share every step except
+/// the destination directory and the recorded mutation variant; this
+/// enum carries that delta. `Custom` lands the email at an arbitrary
+/// folder filesystem path — the picker's "move to folder" target uses it.
 #[derive(Debug, Clone)]
 enum MoveKind {
     Archive,
@@ -1316,7 +1310,7 @@ mod tests {
     fn selection_change_dispatches_body_load_without_blocking() {
         let mut store = EmailStore::new(PathBuf::from("/tmp"));
         let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
-        let phantom_path = PathBuf::from("/definitely/does/not/exist/for/vu-6td.eml");
+        let phantom_path = PathBuf::from("/definitely/does/not/exist/for/body-load.eml");
         inbox.add_email(Email::new(phantom_path.clone()));
         inbox.is_loaded = true;
         store.root_folder.add_subfolder(inbox);
@@ -1843,7 +1837,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.a (vu-nja): multi-account view-progression + switching.
+    // Multi-account view-progression + switching.
     // -----------------------------------------------------------------
 
     fn multi_account_config(maildirs: &[(&str, &str)]) -> Config {
@@ -1990,13 +1984,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.c (vu-bti): direct action keys a/s/d for archive/star/delete.
+    // Direct action keys a/s/d for archive/star/delete.
     // -----------------------------------------------------------------
 
     /// Build an AppRoot pointed at `root_path` with a single INBOX
-    /// containing one real file on disk. Used by the Phase 1.c action
-    /// tests so they can verify both the filesystem move AND the
-    /// in-memory store state after the operation.
+    /// containing one real file on disk. Used by the action-key tests
+    /// so they can verify both the filesystem move AND the in-memory
+    /// store state after the operation.
     fn make_root_with_disk_inbox(root_path: PathBuf, filename: &str) -> (AppRoot, PathBuf) {
         let inbox_cur = root_path.join("INBOX").join("cur");
         std::fs::create_dir_all(&inbox_cur).unwrap();
@@ -2208,7 +2202,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.b (vu-rxi): mark-read on Enter — new/→cur/ move.
+    // Mark-read on Enter — new/→cur/ move.
     // -----------------------------------------------------------------
 
     /// Build an AppRoot whose INBOX contains a real file in `new/` and
@@ -2360,11 +2354,10 @@ mod tests {
 
     #[test]
     fn mark_unread_moves_file_cur_to_new_and_pushes_mutation() {
-        // Phase 1.e (vu-0o3). Pressing `U` on a cursor-selected email
-        // in `INBOX/cur/` must rename it into `INBOX/new/`, flip
-        // is_unread to true, bump unread_count, and record an undoable
-        // mutation. We seed the store with is_unread=false so the
-        // counter change is observable.
+        // Pressing `U` on a cursor-selected email in `INBOX/cur/` must
+        // rename it into `INBOX/new/`, flip is_unread to true, bump
+        // unread_count, and record an undoable mutation. We seed the
+        // store with is_unread=false so the counter change is observable.
         let temp = tempfile::TempDir::new().unwrap();
         let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-u1");
         root.layout.active_pane = ActivePane::Messages;
@@ -2481,8 +2474,8 @@ mod tests {
 
     #[test]
     fn capital_f_toggles_star_same_as_lowercase_s() {
-        // Phase 1.e (vu-0o3): `F` is a documented alias for `s`. Both
-        // must produce identical filesystem + store state.
+        // `F` is a documented alias for `s`. Both must produce
+        // identical filesystem + store state.
         let temp = tempfile::TempDir::new().unwrap();
         let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-f1:2,S");
         root.layout.active_pane = ActivePane::Messages;
@@ -2512,7 +2505,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.d (vu-rr6): folder-picker modal + 'm' move-to-folder.
+    // Folder-picker modal + 'm' move-to-folder.
     // -----------------------------------------------------------------
 
     #[test]

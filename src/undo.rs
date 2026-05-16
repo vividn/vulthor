@@ -1,11 +1,11 @@
-// Session-only undo stack (Phase 1.f, vu-pas).
+// Session-only undo stack.
 //
 // `Mutation` records each reversible action the user takes (mark-read,
 // archive, delete, move, toggle-star, mark-unread). The action-key
-// handlers (Phase 1.b–1.e) push mutations onto `AppRoot.undo_stack`
-// after performing their filesystem op; the `u` key pops the stack and
-// calls `Mutation::reverse`, which either renames the file back to
-// `from` or flips the Maildir `F` flag.
+// handlers push mutations onto `AppRoot.undo_stack` after performing
+// their filesystem op; the `u` key pops the stack and calls
+// `Mutation::reverse`, which either renames the file back to `from` or
+// flips the Maildir `F` flag.
 //
 // `reverse` is best-effort by design (VISION.md "Undo"): if the file
 // has been rewritten by `mbsync` or otherwise vanished from its
@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 /// `F`-flag state *before* the toggle so undo can restore it directly.
 ///
 /// Variants `MarkRead`, `MarkUnread`, and `ToggleStar` are not yet
-/// constructed in production code — the action-key handlers (vu-rxi,
-/// vu-0o3, vu-bti) will produce them. Keeping them here so the undo
-/// surface lands as one whole shape rather than dribbling in per key.
+/// constructed in production code — the action-key handlers will
+/// produce them. Keeping them here so the undo surface stays one whole
+/// shape rather than dribbling in per key.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mutation {
