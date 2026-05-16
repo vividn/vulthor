@@ -103,4 +103,9 @@ pub enum Msg {
     // Store mutations (handled by AppRoot/store owner)
     StoreLoadFolder(FolderPath),
     StoreLoadEmail(MessageId),
+
+    /// Pop the most recent `Mutation` off the session undo stack and
+    /// reverse it (vu-pas / Phase 1.f). No-op when the stack is empty.
+    /// AppRoot is the sole handler; components do not observe undo.
+    Undo,
 }

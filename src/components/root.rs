@@ -33,6 +33,7 @@ use crate::layout::{self, ActivePane, Layout, PaneSwitchDirection, View};
 use crate::maildir::MaildirScanner;
 use crate::theme::VulthorTheme;
 use crate::ui::UI;
+use crate::undo::{Mutation, Reversed};
 
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
@@ -71,6 +72,10 @@ pub struct AppRoot {
     folder_scanner: Option<FolderScannerHandle>,
     headers_loader: HeadersLoader,
     loading_folder_paths: HashSet<PathBuf>,
+    /// Session-only undo stack (vu-pas, Phase 1.f). Action-key handlers
+    /// push a `Mutation` after a successful filesystem op; `Msg::Undo`
+    /// pops and reverses. Lost on quit by design (VISION.md "Undo").
+    undo_stack: Vec<Mutation>,
 }
 
 impl AppRoot {
@@ -102,6 +107,7 @@ impl AppRoot {
             folder_scanner: None,
             headers_loader: HeadersLoader::spawn(scanner),
             loading_folder_paths: HashSet::new(),
+            undo_stack: Vec::new(),
         };
 
         // Pre-fetch the auto-selected folder's headers off-thread so the

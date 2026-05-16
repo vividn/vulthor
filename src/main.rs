@@ -6,6 +6,7 @@ mod layout;
 mod maildir;
 mod theme;
 mod ui;
+mod undo;
 mod web;
 
 #[cfg(test)]
