@@ -20,6 +20,12 @@ use std::path::{Path, PathBuf};
 /// action completed; `from`/`to` capture the pre- and post-action
 /// locations for path-move mutations. `ToggleStar.prev_flag` is the
 /// `F`-flag state *before* the toggle so undo can restore it directly.
+///
+/// Variants `MarkRead`, `MarkUnread`, and `ToggleStar` are not yet
+/// constructed in production code — the action-key handlers (vu-rxi,
+/// vu-0o3, vu-bti) will produce them. Keeping them here so the undo
+/// surface lands as one whole shape rather than dribbling in per key.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mutation {
     MarkRead {
@@ -256,7 +262,9 @@ mod tests {
         match m.reverse() {
             Reversed::FlagRestored { new, .. } => {
                 assert!(new.exists());
-                assert!(!new.to_string_lossy().contains('F'));
+                let fname = new.file_name().unwrap().to_string_lossy().into_owned();
+                let (_base, flags) = fname.split_once(":2,").unwrap();
+                assert!(!flags.contains('F'), "flags '{}' must not contain F", flags);
             }
             other => panic!("expected FlagRestored, got {:?}", other),
         }
@@ -276,7 +284,9 @@ mod tests {
         match m.reverse() {
             Reversed::FlagRestored { new, .. } => {
                 assert!(new.exists());
-                assert!(new.to_string_lossy().contains('F'));
+                let fname = new.file_name().unwrap().to_string_lossy().into_owned();
+                let (_base, flags) = fname.split_once(":2,").unwrap();
+                assert!(flags.contains('F'), "flags '{}' must contain F", flags);
             }
             other => panic!("expected FlagRestored, got {:?}", other),
         }

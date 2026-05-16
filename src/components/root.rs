@@ -492,6 +492,7 @@ impl AppRoot {
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), m) if m.is_empty() => Some(Msg::Quit),
             (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
+            (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
             (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
             (KeyCode::Tab, _) => Some(Msg::FocusNext),
             (KeyCode::BackTab, _) => Some(Msg::FocusPrev),
@@ -665,8 +666,53 @@ impl AppRoot {
             Msg::StatusClear => {
                 self.status_message = None;
             }
+            Msg::Undo => {
+                self.apply_undo();
+            }
             _ => {}
         }
+    }
+
+    /// Pop one mutation off the undo stack and reverse it. No-op when
+    /// the stack is empty; sets a status message on success and on the
+    /// best-effort "file moved" path. See `crate::undo` for the
+    /// reversal contract.
+    fn apply_undo(&mut self) {
+        let Some(mutation) = self.undo_stack.pop() else {
+            self.status_message = Some("Nothing to undo".into());
+            return;
+        };
+        match mutation.reverse() {
+            Reversed::PathRestored { old, new } => {
+                let store = self.email_store.clone();
+                let mut store = store.lock().unwrap();
+                store.swap_email_path(&old, &new);
+                self.status_message = Some("Undo: restored".into());
+            }
+            Reversed::FlagRestored { old, new } => {
+                if old != new {
+                    let store = self.email_store.clone();
+                    let mut store = store.lock().unwrap();
+                    store.swap_email_path(&old, &new);
+                }
+                self.status_message = Some("Undo: flag restored".into());
+            }
+            Reversed::Skipped => {
+                self.status_message = Some("Could not undo: file moved".into());
+            }
+        }
+    }
+
+    /// Append a mutation to the session undo stack. Called by the
+    /// action-key handlers (vu-rxi, vu-bti, vu-3e0, vu-0o3) after they
+    /// have applied the underlying filesystem op.
+    pub fn push_mutation(&mut self, mutation: Mutation) {
+        self.undo_stack.push(mutation);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn undo_stack_len(&self) -> usize {
+        self.undo_stack.len()
     }
 
     fn on_focus_change(&mut self, old: ActivePane, new: ActivePane) {
@@ -1161,6 +1207,174 @@ mod tests {
         root.process_event(enter).unwrap();
         assert_eq!(root.content.scroll_offset, 0);
         assert_eq!(root.layout.selection.scroll_offset, 0);
+    }
+
+    #[test]
+    fn u_key_dispatches_undo_msg() {
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        assert_eq!(
+            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            Some(Msg::Undo)
+        );
+    }
+
+    #[test]
+    fn undo_with_empty_stack_sets_status_and_is_noop() {
+        let mut root = make_root();
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert_eq!(root.undo_stack_len(), 0);
+        assert_eq!(root.status_message.as_deref(), Some("Nothing to undo"),);
+    }
+
+    #[test]
+    fn undo_pops_and_restores_archive_move() {
+        use crate::undo::Mutation;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let inbox = temp.path().join("INBOX/cur/msg1");
+        let archive = temp.path().join("Archive/cur/msg1");
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        fs::write(&archive, "body").unwrap();
+
+        let mut root = make_root();
+        root.push_mutation(Mutation::Archive {
+            msg: archive.clone(),
+            from: inbox.clone(),
+            to: archive.clone(),
+        });
+        assert_eq!(root.undo_stack_len(), 1);
+
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert_eq!(root.undo_stack_len(), 0);
+        assert!(inbox.exists(), "file restored to inbox");
+        assert!(!archive.exists(), "archive path is empty");
+        assert!(root.status_message.as_deref().unwrap().contains("Undo"));
+    }
+
+    #[test]
+    fn undo_sequence_of_three_actions_reverses_in_lifo_order() {
+        use crate::undo::Mutation;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let inbox_dir = temp.path().join("INBOX/cur");
+        let archive_dir = temp.path().join("Archive/cur");
+        let trash_dir = temp.path().join("Trash/cur");
+        for d in [&inbox_dir, &archive_dir, &trash_dir] {
+            fs::create_dir_all(d).unwrap();
+        }
+
+        // Pretend three actions already moved three files; we record
+        // mutations for each. Repeated `u` should put them all back.
+        let m1_from = inbox_dir.join("m1");
+        let m1_to = archive_dir.join("m1");
+        fs::write(&m1_to, "1").unwrap();
+        let m2_from = inbox_dir.join("m2");
+        let m2_to = trash_dir.join("m2");
+        fs::write(&m2_to, "2").unwrap();
+        let m3_from = inbox_dir.join("m3");
+        let m3_to = archive_dir.join("m3");
+        fs::write(&m3_to, "3").unwrap();
+
+        let mut root = make_root();
+        root.push_mutation(Mutation::Archive {
+            msg: m1_to.clone(),
+            from: m1_from.clone(),
+            to: m1_to.clone(),
+        });
+        root.push_mutation(Mutation::Delete {
+            msg: m2_to.clone(),
+            from: m2_from.clone(),
+            to: m2_to.clone(),
+        });
+        root.push_mutation(Mutation::Move {
+            msg: m3_to.clone(),
+            from: m3_from.clone(),
+            to: m3_to.clone(),
+        });
+
+        // LIFO: m3 first, then m2, then m1.
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert!(m3_from.exists() && !m3_to.exists());
+
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert!(m2_from.exists() && !m2_to.exists());
+
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert!(m1_from.exists() && !m1_to.exists());
+
+        assert_eq!(root.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn undo_of_missing_file_reports_status_and_pops_stack() {
+        use crate::undo::Mutation;
+        let mut root = make_root();
+        // Push a mutation whose `to` path doesn't exist on disk —
+        // simulates mbsync (or anything else) having rewritten the file.
+        root.push_mutation(Mutation::Archive {
+            msg: PathBuf::from("/nonexistent/Archive/cur/m1"),
+            from: PathBuf::from("/nonexistent/INBOX/cur/m1"),
+            to: PathBuf::from("/nonexistent/Archive/cur/m1"),
+        });
+        root.enqueue(Msg::Undo);
+        root.drain();
+        assert_eq!(
+            root.undo_stack_len(),
+            0,
+            "best-effort undo still pops the stack",
+        );
+        assert_eq!(
+            root.status_message.as_deref(),
+            Some("Could not undo: file moved"),
+        );
+    }
+
+    #[test]
+    fn undo_path_restore_updates_in_memory_email_path() {
+        use crate::undo::Mutation;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let inbox = temp.path().join("INBOX/cur/msg1");
+        let archive = temp.path().join("Archive/cur/msg1");
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        fs::write(&archive, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut folder = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        // The store tracks the email at its CURRENT (post-action) path.
+        folder.add_email(Email::new(archive.clone()));
+        folder.is_loaded = true;
+        store.root_folder.add_subfolder(folder);
+
+        let scanner = MaildirScanner::new(temp.path().to_path_buf());
+        let shared = Arc::new(Mutex::new(store));
+        let mut root = AppRoot::new(shared.clone(), scanner);
+
+        root.push_mutation(Mutation::Archive {
+            msg: archive.clone(),
+            from: inbox.clone(),
+            to: archive.clone(),
+        });
+        root.enqueue(Msg::Undo);
+        root.drain();
+
+        // Disk side: file is back in INBOX.
+        assert!(inbox.exists());
+        // Store side: the email entry's file_path was rewritten.
+        let store = shared.lock().unwrap();
+        let inbox_folder = &store.root_folder.subfolders[0];
+        assert_eq!(inbox_folder.emails[0].file_path, inbox);
     }
 
     #[test]

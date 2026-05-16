@@ -366,6 +366,7 @@ impl UI {
             Line::from("  l          - Switch to message/content view"),
             Line::from(""),
             Line::from("Other:"),
+            Line::from("  u          - Undo last action (session-only)"),
             Line::from("  ?          - Show this help"),
             Line::from("  q          - Quit application"),
             Line::from(""),

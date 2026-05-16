@@ -501,6 +501,36 @@ impl EmailStore {
         false
     }
 
+    /// Rewrite a single email's `file_path` after the file has moved on
+    /// disk (action-key handlers + `Msg::Undo`, vu-pas). Walks the
+    /// folder tree and updates the first matching email; returns true
+    /// if an email was found. Counts are not touched — moves between
+    /// folders should also update each folder's `total_count` /
+    /// `unread_count`, but that's the responsibility of the higher-level
+    /// "move email across folders" path that Phase 1.b–1.e will add.
+    pub fn swap_email_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> bool {
+        Self::swap_email_path_in_folder(&mut self.root_folder, old, new)
+    }
+
+    fn swap_email_path_in_folder(
+        folder: &mut Folder,
+        old: &std::path::Path,
+        new: &std::path::Path,
+    ) -> bool {
+        for email in &mut folder.emails {
+            if email.file_path == old {
+                email.file_path = new.to_path_buf();
+                return true;
+            }
+        }
+        for sub in &mut folder.subfolders {
+            if Self::swap_email_path_in_folder(sub, old, new) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn apply_loaded_body_to_folder(
         folder: &mut Folder,
         path: &std::path::Path,
