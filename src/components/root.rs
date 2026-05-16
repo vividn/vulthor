@@ -84,6 +84,19 @@ pub struct AppRoot {
     /// push a `Mutation` after a successful filesystem op; `Msg::Undo`
     /// pops and reverses. Lost on quit by design (VISION.md "Undo").
     undo_stack: Vec<Mutation>,
+    /// Editor-launch request staged by `Msg::DraftStart` /
+    /// `Msg::EditorRelaunch` (Phase 2.b, vu-0gj). Main loop polls
+    /// `take_pending_editor`, suspends the TUI, runs `$EDITOR`, and
+    /// hands the resulting `Compose` back via `deliver_editor_result`.
+    /// Kept on AppRoot so apply_root stays terminal-agnostic.
+    pending_editor: Option<PendingEditor>,
+}
+
+/// Editor launch payload — what to drop into `$EDITOR` and what to
+/// link the result back to.
+pub struct PendingEditor {
+    pub template: String,
+    pub original_message_id: super::MessageId,
 }
 
 impl AppRoot {
@@ -126,6 +139,7 @@ impl AppRoot {
             headers_loader: HeadersLoader::spawn(scanner),
             loading_folder_paths: HashSet::new(),
             undo_stack: Vec::new(),
+            pending_editor: None,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -347,6 +361,21 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
+            // 5.b Draft-pane keys go to DraftComponent (Phase 2.b, vu-0gj).
+            // Routed before residual-key handling so 'q' (discard) doesn't
+            // collide with the global Quit binding once the pane is focused.
+            if matches!(self.layout.active_pane, ActivePane::Draft) {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.draft.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain();
+                    return Ok(self.should_quit);
+                }
+            }
             // 6. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
             self.handle_residual_key(key);
             self.drain();
@@ -561,7 +590,14 @@ impl AppRoot {
 
     fn handle_global_key(key: KeyEvent, active_pane: &ActivePane) -> Option<Msg> {
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), m) if m.is_empty() => Some(Msg::Quit),
+            // 'q' is Quit *except* on the Draft pane, where it maps to
+            // ComposeDiscard. Same shape as the 'l' override below
+            // (Phase 2.b, vu-0gj).
+            (KeyCode::Char('q'), m)
+                if m.is_empty() && !matches!(active_pane, ActivePane::Draft) =>
+            {
+                Some(Msg::Quit)
+            }
             (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
             (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
             (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
@@ -635,7 +671,23 @@ impl AppRoot {
             }
             Msg::ViewNext => {
                 let old = self.layout.active_pane;
-                self.layout.next_view();
+                // Draft override (VISION.md § "Drafts & Reply-Later",
+                // vu-0gj): 'l' from the Content view surfaces the Draft
+                // pane when there is an in-flight draft. Layout-level
+                // `next_view` returns None from Content because the
+                // pane is hidden by default; the conditional policy
+                // lives here so layout stays pure.
+                if matches!(self.layout.current_view, View::Content)
+                    && self.draft.has_active_draft()
+                {
+                    self.layout.current_view = View::ContentDraft;
+                    self.layout.active_pane = self
+                        .layout
+                        .current_view
+                        .get_default_active_pane(self.layout.content_pane_hidden);
+                } else {
+                    self.layout.next_view();
+                }
                 let new = self.layout.active_pane;
                 self.on_focus_change(old, new);
             }
@@ -780,6 +832,24 @@ impl AppRoot {
             }
             Msg::Undo => {
                 self.apply_undo();
+            }
+            Msg::DraftStart(kind, msg_id) => {
+                self.apply_draft_start(*kind, msg_id.clone());
+            }
+            Msg::DraftEditorExited(compose) => {
+                self.apply_draft_editor_exited((**compose).clone());
+            }
+            Msg::EditorRelaunch => {
+                self.apply_editor_relaunch();
+            }
+            Msg::ComposeSend => {
+                self.apply_compose_send();
+            }
+            Msg::DraftSave => {
+                self.apply_draft_save();
+            }
+            Msg::ComposeDiscard => {
+                self.apply_compose_discard();
             }
             _ => {}
         }
