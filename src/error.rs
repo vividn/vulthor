@@ -1,10 +1,10 @@
-// First slice of the thiserror migration epic (vu-ri8).
+// Second slice of the thiserror migration epic (vu-ri8).
 //
-// This enum is intentionally narrow: it covers what `config.rs` and `email.rs`
-// produce today. Other modules still return `Box<dyn Error>` and will migrate
-// in follow-on tasks. `VulthorError` implements `std::error::Error`, so the
-// `?` operator coerces it to `Box<dyn Error>` at module boundaries — no
-// bridging code is needed at callers.
+// Covers what `config.rs`, `email.rs`, and `maildir.rs` produce today. Other
+// modules still return `Box<dyn Error>` and will migrate in follow-on tasks.
+// `VulthorError` implements `std::error::Error`, so the `?` operator coerces
+// it to `Box<dyn Error>` at module boundaries — no bridging code is needed at
+// callers.
 
 use std::path::PathBuf;
 use thiserror::Error;
@@ -13,6 +13,9 @@ use thiserror::Error;
 pub enum VulthorError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Directory walk error: {0}")]
+    WalkDir(#[from] walkdir::Error),
 
     #[error("Failed to parse TOML config: {0}")]
     ParseToml(#[from] toml::de::Error),
@@ -26,10 +29,11 @@ pub enum VulthorError {
     #[error("Invalid folder path")]
     InvalidFolderPath,
 
-    // Bridge variant for errors bubbling up from modules not yet migrated
-    // (e.g. maildir scanner). Remove once those modules return VulthorError.
-    #[error("MailDir error: {0}")]
-    MailDir(String),
+    #[error("MailDir path does not exist: {0}")]
+    MaildirPathNotFound(PathBuf),
+
+    #[error("MailDir path is not a directory: {0}")]
+    MaildirPathNotDirectory(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, VulthorError>;
@@ -76,10 +80,33 @@ mod tests {
     }
 
     #[test]
-    fn maildir_variant_wraps_message() {
-        let err = VulthorError::MailDir("scanner failed".to_string());
-        assert!(err.to_string().contains("MailDir error"));
-        assert!(err.to_string().contains("scanner failed"));
+    fn maildir_path_not_found_display_includes_path() {
+        let err = VulthorError::MaildirPathNotFound(PathBuf::from("/no/such/mail"));
+        let msg = err.to_string();
+        assert!(msg.contains("MailDir path does not exist"));
+        assert!(msg.contains("/no/such/mail"));
+    }
+
+    #[test]
+    fn maildir_path_not_directory_display_includes_path() {
+        let err = VulthorError::MaildirPathNotDirectory(PathBuf::from("/tmp/some-file"));
+        let msg = err.to_string();
+        assert!(msg.contains("MailDir path is not a directory"));
+        assert!(msg.contains("/tmp/some-file"));
+    }
+
+    #[test]
+    fn walkdir_error_converts_via_from() {
+        // walkdir::Error has no public constructor; build one by walking a
+        // non-existent path and unwrapping the iterator's error.
+        let err = walkdir::WalkDir::new("/definitely/does/not/exist/for/walkdir")
+            .into_iter()
+            .next()
+            .expect("walkdir should yield an error entry")
+            .unwrap_err();
+        let err: VulthorError = err.into();
+        assert!(matches!(err, VulthorError::WalkDir(_)));
+        assert!(err.to_string().contains("Directory walk error"));
     }
 
     #[test]

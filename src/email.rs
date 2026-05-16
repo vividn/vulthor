@@ -309,9 +309,7 @@ impl EmailStore {
         // Only load if the folder has no emails or is not loaded
         if !folder.is_loaded && folder.emails.is_empty() {
             let load_count = (visible_rows + 5).max(10); // At least 10, but typically visible + 5
-            scanner
-                .load_folder_emails_with_limit(folder, Some(load_count))
-                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
+            scanner.load_folder_emails_with_limit(folder, Some(load_count))?;
         }
         Ok(())
     }
@@ -338,9 +336,7 @@ impl EmailStore {
         let folder = self.get_current_folder_mut();
         // Only load if the folder has no emails or is not loaded
         if !folder.is_loaded && folder.emails.is_empty() {
-            scanner
-                .load_folder_emails_with_limit(folder, Some(limit))
-                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
+            scanner.load_folder_emails_with_limit(folder, Some(limit))?;
         }
         Ok(())
     }
@@ -355,9 +351,7 @@ impl EmailStore {
         // If user is near the end of loaded messages and folder is not fully loaded, load more
         if !folder.is_loaded && index + 5 >= folder.emails.len() {
             // Load the full folder
-            scanner
-                .load_folder_emails(folder)
-                .map_err(|e| VulthorError::MailDir(e.to_string()))?;
+            scanner.load_folder_emails(folder)?;
         }
         Ok(())
     }

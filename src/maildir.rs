@@ -1,4 +1,5 @@
 use crate::email::{Email, Folder};
+use crate::error::{Result, VulthorError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -14,19 +15,15 @@ impl MaildirScanner {
     }
 
     /// Scan the MailDir structure and build folder hierarchy (fast startup - structure only)
-    pub fn scan(&self) -> Result<Folder, Box<dyn std::error::Error>> {
+    pub fn scan(&self) -> Result<Folder> {
         if !self.root_path.exists() {
-            return Err(
-                format!("MailDir path does not exist: {}", self.root_path.display()).into(),
-            );
+            return Err(VulthorError::MaildirPathNotFound(self.root_path.clone()));
         }
 
         if !self.root_path.is_dir() {
-            return Err(format!(
-                "MailDir path is not a directory: {}",
-                self.root_path.display()
-            )
-            .into());
+            return Err(VulthorError::MaildirPathNotDirectory(
+                self.root_path.clone(),
+            ));
         }
 
         let mut root_folder = Folder::new("Mail".to_string(), self.root_path.clone());
@@ -36,11 +33,7 @@ impl MaildirScanner {
     }
 
     /// Scan folder structure only (no email loading) for fast startup
-    fn scan_folder_structure_only(
-        &self,
-        folder: &mut Folder,
-        path: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn scan_folder_structure_only(&self, folder: &mut Folder, path: &Path) -> Result<()> {
         // Look for subfolders only
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries {
@@ -70,10 +63,7 @@ impl MaildirScanner {
     }
 
     /// Load emails for a specific folder (lazy loading)
-    pub fn load_folder_emails(
-        &self,
-        folder: &mut Folder,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_folder_emails(&self, folder: &mut Folder) -> Result<()> {
         self.load_folder_emails_with_limit(folder, None)
     }
 
@@ -82,7 +72,7 @@ impl MaildirScanner {
         &self,
         folder: &mut Folder,
         limit: Option<usize>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         // If already fully loaded, nothing to do
         if folder.is_loaded {
             return Ok(());
@@ -129,7 +119,7 @@ impl MaildirScanner {
         folder: &mut Folder,
         dir_path: &Path,
         limit: Option<usize>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         if !dir_path.exists() || !dir_path.is_dir() {
             return Ok(()); // Skip if directory doesn't exist
         }
@@ -207,6 +197,36 @@ mod tests {
         assert_eq!(result.name, "Mail");
         assert!(result.emails.is_empty());
         assert!(result.subfolders.is_empty());
+    }
+
+    #[test]
+    fn test_maildir_scanner_missing_path_returns_typed_error() {
+        let missing = PathBuf::from("/definitely/does/not/exist/maildir");
+        let scanner = MaildirScanner::new(missing.clone());
+
+        let err = scanner
+            .scan()
+            .expect_err("scan of missing path should fail");
+        match err {
+            VulthorError::MaildirPathNotFound(p) => assert_eq!(p, missing),
+            other => panic!("expected MaildirPathNotFound, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_maildir_scanner_path_is_file_returns_typed_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("not_a_dir");
+        fs::write(&file_path, b"i am a file").unwrap();
+        let scanner = MaildirScanner::new(file_path.clone());
+
+        let err = scanner
+            .scan()
+            .expect_err("scan of non-directory path should fail");
+        match err {
+            VulthorError::MaildirPathNotDirectory(p) => assert_eq!(p, file_path),
+            other => panic!("expected MaildirPathNotDirectory, got {:?}", other),
+        }
     }
 
     #[test]
