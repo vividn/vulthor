@@ -362,6 +362,10 @@ impl Component for MessagesComponent {
             // `self.email_index`. We pass an empty id as a sentinel.
             KeyCode::Enter => Some(Msg::MessageOpen(String::new())),
             KeyCode::Backspace => Some(Msg::FolderExitParent),
+            // Phase 1.d (vu-3e0): 'm' opens the folder-picker modal for
+            // the email under the cursor. AppRoot snapshots the email
+            // and hands it to the modal in `apply_root`.
+            KeyCode::Char('m') => Some(Msg::ShowFolderPicker),
             _ => None,
         }
     }

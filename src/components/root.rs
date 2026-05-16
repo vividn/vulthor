@@ -17,6 +17,7 @@
 // rather than introducing a tiny component for each.
 
 use std::collections::{HashSet, VecDeque};
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -38,7 +39,7 @@ use crate::undo::{Mutation, Reversed};
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
     FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest, MAX_DISPATCH_DEPTH,
-    MessagesComponent, Msg,
+    MessagesComponent, ModalComponent, Msg,
 };
 
 pub struct AppRoot {
@@ -70,6 +71,10 @@ pub struct AppRoot {
     content: ContentComponent,
     accounts: AccountsComponent,
     draft: DraftComponent,
+    /// Folder-picker / future search modal (Phase 1.d, vu-3e0). When
+    /// `modal.is_visible()`, `process_event` routes every keystroke to
+    /// the modal before any pane handler or global shortcut runs.
+    modal: ModalComponent,
     queue: VecDeque<Msg>,
     body_loader: BodyLoader,
     loading_paths: HashSet<PathBuf>,
@@ -114,6 +119,7 @@ impl AppRoot {
             content: ContentComponent::new(),
             accounts: AccountsComponent::with_config(&config),
             draft: DraftComponent::new(),
+            modal: ModalComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -198,6 +204,9 @@ impl AppRoot {
     pub fn draft(&self) -> &DraftComponent {
         &self.draft
     }
+    pub fn modal(&self) -> &ModalComponent {
+        &self.modal
+    }
 
     /// Render one frame. Drains async replies first, then delegates to
     /// `ui::UI::draw` with borrowed state. Returns whether the loop
@@ -219,12 +228,14 @@ impl AppRoot {
         let content = &self.content;
         let accounts = &self.accounts;
         let draft = &self.draft;
+        let modal = &self.modal;
         let layout = &self.layout;
         let status = &self.status_message;
         let help = self.help_visible;
         terminal.draw(|f| {
             ui.draw(
                 f, &mut store, layout, status, help, folders, messages, content, accounts, draft,
+                modal,
             )
         })?;
         self.message_pane_visible_rows = self.messages.visible_rows.get();
@@ -253,6 +264,20 @@ impl AppRoot {
             if self.help_visible {
                 // Any key dismisses help.
                 self.help_visible = false;
+                return Ok(self.should_quit);
+            }
+            // 0. Modal eats everything while visible: no global keys,
+            //    no pane handlers. Phase 1.d (vu-3e0).
+            if self.modal.is_visible() {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.modal.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain();
+                }
                 return Ok(self.should_quit);
             }
             // 1. Global keys win unconditionally.
@@ -727,8 +752,99 @@ impl AppRoot {
             Msg::Undo => {
                 self.apply_undo();
             }
+            Msg::ShowFolderPicker => {
+                self.open_folder_picker_for_selected_email();
+            }
+            Msg::HideModal => {
+                self.modal.close();
+            }
+            Msg::MoveTo(src_id, dest_folder) => {
+                self.apply_move(src_id.clone(), dest_folder.clone());
+            }
             _ => {}
         }
+    }
+
+    /// Snapshot the currently-selected email and hand it to the modal.
+    /// No-op (with a status message) when there is no selection — `m`
+    /// from an empty folder shouldn't open an empty picker.
+    fn open_folder_picker_for_selected_email(&mut self) {
+        let store = self.email_store.clone();
+        let store = store.lock().unwrap();
+        let Some(email) = store.get_selected_email() else {
+            drop(store);
+            self.status_message = Some("No email selected".into());
+            return;
+        };
+        let source_path = email.file_path.clone();
+        let source_subject = if email.headers.subject.is_empty() {
+            "(No Subject)".to_string()
+        } else {
+            email.headers.subject.clone()
+        };
+        let root = &store.root_folder;
+        self.modal
+            .open_folder_picker(source_path, source_subject, root);
+    }
+
+    /// Move an email file across maildirs and update the in-memory store.
+    /// Preserves the source's `cur`/`new` subdir; pushes a `Mutation::Move`
+    /// for `u`-undo; closes the modal regardless of success. Status line
+    /// reports the outcome.
+    fn apply_move(&mut self, src_id: String, dest_folder: PathBuf) {
+        let src_path = PathBuf::from(&src_id);
+        // Read picker metadata before we close the modal — the status
+        // message reads its subject and the destination display name.
+        let subject = self
+            .modal
+            .folder_picker()
+            .map(|s| s.source_subject.clone())
+            .unwrap_or_default();
+        let dest_display = dest_folder
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let subdir = src_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("cur");
+        let filename = match src_path.file_name() {
+            Some(f) => f.to_owned(),
+            None => {
+                self.modal.close();
+                self.status_message = Some("Move failed: source has no filename".into());
+                return;
+            }
+        };
+        let target_path = dest_folder.join(subdir).join(&filename);
+
+        // mbsync provisions cur/new/tmp at folder creation; create_dir_all
+        // is belt-and-suspenders so manual maildirs (or freshly-made
+        // folders) still work.
+        if let Some(parent) = target_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        match fs::rename(&src_path, &target_path) {
+            Ok(()) => {
+                let mut store = self.email_store.lock().unwrap();
+                store.swap_email_path(&src_path, &target_path);
+                drop(store);
+                self.push_mutation(Mutation::Move {
+                    msg: target_path.clone(),
+                    from: src_path,
+                    to: target_path,
+                });
+                self.status_message = Some(format!("Moved: {} → {}", subject, dest_display));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Move failed: {}", e));
+            }
+        }
+        self.modal.close();
     }
 
     /// Pop one mutation off the undo stack and reverse it. No-op when
@@ -1658,5 +1774,275 @@ mod tests {
         assert_eq!(root.accounts.account_count(), 2);
         // BTreeMap order: alpha first.
         assert_eq!(root.accounts.current_account_id().as_deref(), Some("alpha"));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.d (vu-3e0): 'm' move-to-folder + folder-picker modal.
+    // -----------------------------------------------------------------
+
+    /// Build an AppRoot whose store has INBOX + Archive folders, each
+    /// containing the named files in `inbox_files`. The file at
+    /// `temp/INBOX/cur/<name>` exists on disk; the email entry's
+    /// `file_path` points at it.
+    fn make_root_for_move_test(
+        temp: &tempfile::TempDir,
+        inbox_files: &[&str],
+    ) -> (AppRoot, PathBuf) {
+        use crate::email::{Email, Folder};
+        use std::fs;
+
+        let root_path = temp.path().to_path_buf();
+        for sub in &["INBOX", "Archive"] {
+            fs::create_dir_all(root_path.join(sub).join("cur")).unwrap();
+            fs::create_dir_all(root_path.join(sub).join("new")).unwrap();
+            fs::create_dir_all(root_path.join(sub).join("tmp")).unwrap();
+        }
+
+        let mut store = EmailStore::new(root_path.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        for name in inbox_files {
+            let p = root_path.join("INBOX").join("cur").join(name);
+            fs::write(&p, "From: a@b.test\r\nSubject: hello\r\n\r\nbody").unwrap();
+            let mut email = Email::new(p);
+            email.headers.subject = format!("subj-{}", name);
+            inbox.add_email(email);
+        }
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        let archive = Folder::new("Archive".to_string(), root_path.join("Archive"));
+        store.root_folder.add_subfolder(archive);
+
+        store.current_folder = vec![0]; // inside INBOX
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path.clone());
+        let root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        (root, root_path)
+    }
+
+    #[test]
+    fn show_folder_picker_opens_modal_with_current_email() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, root_path) = make_root_for_move_test(&temp, &["m1"]);
+
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+
+        assert!(root.modal.is_visible());
+        let picker = root.modal.folder_picker().expect("folder picker open");
+        assert_eq!(
+            picker.source_path,
+            root_path.join("INBOX").join("cur").join("m1"),
+        );
+        assert_eq!(picker.source_subject, "subj-m1");
+    }
+
+    #[test]
+    fn show_folder_picker_with_no_selection_sets_status_and_no_modal() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Inbox with zero emails — no selection means no picker.
+        let (mut root, _) = make_root_for_move_test(&temp, &[]);
+        // After construction there is nothing selected.
+        {
+            let store = root.email_store_handle();
+            let mut store = store.lock().unwrap();
+            store.selected_email = None;
+        }
+
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+
+        assert!(!root.modal.is_visible());
+        assert_eq!(root.status_message.as_deref(), Some("No email selected"));
+    }
+
+    #[test]
+    fn hide_modal_closes_an_open_picker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _) = make_root_for_move_test(&temp, &["m1"]);
+
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+        assert!(root.modal.is_visible());
+
+        root.enqueue(Msg::HideModal);
+        root.drain();
+        assert!(!root.modal.is_visible());
+    }
+
+    #[test]
+    fn move_to_renames_file_swaps_path_pushes_mutation_sets_status() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, root_path) = make_root_for_move_test(&temp, &["m1"]);
+
+        let src = root_path.join("INBOX").join("cur").join("m1");
+        let dest_folder = root_path.join("Archive");
+        let dest_file = root_path.join("Archive").join("cur").join("m1");
+        assert!(src.exists());
+        assert!(!dest_file.exists());
+
+        // Open the modal first so apply_move can read the picker subject.
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+
+        root.enqueue(Msg::MoveTo(
+            src.to_string_lossy().into_owned(),
+            dest_folder.clone(),
+        ));
+        root.drain();
+
+        assert!(!src.exists(), "source file must be gone after move");
+        assert!(dest_file.exists(), "target file must exist after move");
+
+        // The in-memory email's path was rewritten.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, dest_file);
+
+        // Mutation pushed onto the session undo stack.
+        assert_eq!(root.undo_stack_len(), 1);
+
+        // Status reports "Moved: <subject> → <folder>" — the acceptance
+        // line from the bead.
+        let status = root.status_message.as_deref().unwrap_or("");
+        assert!(
+            status.starts_with("Moved: subj-m1 → Archive"),
+            "unexpected status: {}",
+            status,
+        );
+
+        // Modal closed regardless of how the move completed.
+        assert!(!root.modal.is_visible());
+    }
+
+    #[test]
+    fn move_to_preserves_new_subdir_when_source_is_in_new() {
+        // mbsync drops fresh mail into `new/`. A move from new/ must
+        // land in the target's new/, not cur/.
+        use std::fs;
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().to_path_buf();
+        for sub in &["INBOX", "Archive"] {
+            fs::create_dir_all(root_path.join(sub).join("cur")).unwrap();
+            fs::create_dir_all(root_path.join(sub).join("new")).unwrap();
+            fs::create_dir_all(root_path.join(sub).join("tmp")).unwrap();
+        }
+        let src = root_path.join("INBOX").join("new").join("m1");
+        fs::write(&src, "x").unwrap();
+
+        use crate::email::{Email, Folder};
+        let mut store = EmailStore::new(root_path.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        let mut email = Email::new(src.clone());
+        email.headers.subject = "fresh".into();
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.root_folder.add_subfolder(Folder::new(
+            "Archive".to_string(),
+            root_path.join("Archive"),
+        ));
+        store.current_folder = vec![0];
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path.clone());
+        let mut root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+        root.enqueue(Msg::MoveTo(
+            src.to_string_lossy().into_owned(),
+            root_path.join("Archive"),
+        ));
+        root.drain();
+
+        assert!(!src.exists());
+        assert!(root_path.join("Archive").join("new").join("m1").exists());
+        assert!(!root_path.join("Archive").join("cur").join("m1").exists());
+    }
+
+    #[test]
+    fn move_then_undo_restores_file_to_source() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, root_path) = make_root_for_move_test(&temp, &["m1"]);
+        let src = root_path.join("INBOX").join("cur").join("m1");
+        let dest_folder = root_path.join("Archive");
+
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+        root.enqueue(Msg::MoveTo(src.to_string_lossy().into_owned(), dest_folder));
+        root.drain();
+        assert_eq!(root.undo_stack_len(), 1);
+
+        root.enqueue(Msg::Undo);
+        root.drain();
+
+        assert!(src.exists(), "undo must put the file back in INBOX");
+        assert!(!root_path.join("Archive").join("cur").join("m1").exists());
+        // swap_email_path rewinds the in-memory path as well.
+        let store = root.email_store_handle();
+        let store = store.lock().unwrap();
+        assert_eq!(store.root_folder.subfolders[0].emails[0].file_path, src);
+    }
+
+    #[test]
+    fn move_to_failure_sets_status_and_closes_modal() {
+        // Source path doesn't exist on disk — fs::rename surfaces an
+        // error; apply_move must report it without panicking and must
+        // still close the modal.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, root_path) = make_root_for_move_test(&temp, &["m1"]);
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+        assert!(root.modal.is_visible());
+
+        let bogus = root_path.join("INBOX").join("cur").join("does-not-exist");
+        root.enqueue(Msg::MoveTo(
+            bogus.to_string_lossy().into_owned(),
+            root_path.join("Archive"),
+        ));
+        root.drain();
+
+        assert!(!root.modal.is_visible());
+        assert_eq!(root.undo_stack_len(), 0);
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Move failed:"),
+            "expected status to start with 'Move failed:', got {:?}",
+            root.status_message,
+        );
+    }
+
+    #[test]
+    fn modal_eats_keys_before_global_shortcuts() {
+        // While the picker is open, 'q' must NOT quit the app — the
+        // modal absorbs every keystroke. Typing characters appends to
+        // the filter.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _) = make_root_for_move_test(&temp, &["m1"]);
+        root.enqueue(Msg::ShowFolderPicker);
+        root.drain();
+
+        let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        root.process_event(q).unwrap();
+        assert!(!root.should_quit, "q must be swallowed by the modal");
+
+        let filter_now = root.modal.folder_picker().unwrap().filter.clone();
+        assert_eq!(filter_now, "q");
+    }
+
+    #[test]
+    fn m_key_from_messages_pane_opens_picker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _) = make_root_for_move_test(&temp, &["m1"]);
+        // Focus the Messages pane so its on_key handler runs.
+        root.layout.active_pane = ActivePane::Messages;
+
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        assert!(root.modal.is_visible());
     }
 }

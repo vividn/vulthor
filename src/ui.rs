@@ -1,6 +1,6 @@
 use crate::components::{
     AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FoldersComponent,
-    MessagesComponent,
+    MessagesComponent, ModalComponent,
 };
 use crate::config::Config;
 use crate::email::{EmailLoadState, EmailStore};
@@ -44,6 +44,7 @@ impl UI {
         content: &ContentComponent,
         accounts: &AccountsComponent,
         draft: &DraftComponent,
+        modal: &ModalComponent,
     ) {
         let size = f.area();
         if help_visible {
@@ -54,6 +55,9 @@ impl UI {
             f, store, layout, folders, messages, content, accounts, draft, size,
         );
         self.draw_status_bar(f, layout, status_message, size);
+        // Modal overlay draws last so it sits above panes and status bar.
+        // Phase 1.d (vu-3e0). No-op when no modal is open.
+        modal.render_overlay(f, size);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -365,8 +369,11 @@ impl UI {
             Line::from("  h          - Switch to folder/message view"),
             Line::from("  l          - Switch to message/content view"),
             Line::from(""),
-            Line::from("Other:"),
+            Line::from("Email Actions:"),
+            Line::from("  m          - Move email to folder (filterable picker)"),
             Line::from("  u          - Undo last action (session-only)"),
+            Line::from(""),
+            Line::from("Other:"),
             Line::from("  ?          - Show this help"),
             Line::from("  q          - Quit application"),
             Line::from(""),

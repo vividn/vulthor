@@ -20,6 +20,7 @@ mod folder_scanner;
 mod folders;
 mod headers_loader;
 mod messages;
+mod modal;
 mod msg;
 mod root;
 
@@ -32,6 +33,7 @@ pub use folder_scanner::FolderScannerHandle;
 pub use folders::FoldersComponent;
 pub use headers_loader::{HeadersLoader, LoadFolderRequest, LoadedFolder};
 pub use messages::MessagesComponent;
+pub use modal::ModalComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
 pub use root::AppRoot;
 

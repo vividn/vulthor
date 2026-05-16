@@ -78,6 +78,8 @@ maildir_path = "/home/user/Mail"
 
 ### Email Actions
 - `Alt+a` - View attachments (when email has attachments)
+- `m` - Move email to folder (opens filterable folder picker; Enter selects, Esc cancels)
+- `u` - Undo last action (session-only)
 
 ### General
 - `?` - Show help screen

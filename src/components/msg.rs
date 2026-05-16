@@ -118,4 +118,18 @@ pub enum Msg {
     /// reverse it (vu-pas / Phase 1.f). No-op when the stack is empty.
     /// AppRoot is the sole handler; components do not observe undo.
     Undo,
+
+    // Modal (Phase 1.d, vu-3e0)
+    /// Open the folder-picker modal targeting the currently-selected
+    /// email. AppRoot snapshots the email's path + subject and hands
+    /// them to the modal — variant carries no payload because the
+    /// selection lives on `MessagesComponent`.
+    ShowFolderPicker,
+    /// Dismiss whichever modal is currently open. No-op when none is.
+    HideModal,
+    /// Move the email at `MessageId` (its filesystem path, as a string)
+    /// into the maildir at `FolderPath`. Source's `cur`/`new` subdir is
+    /// preserved. AppRoot is the sole handler; the modal emits this
+    /// variant on Enter and then waits for AppRoot to close the modal.
+    MoveTo(MessageId, FolderPath),
 }
