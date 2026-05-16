@@ -21,3 +21,4 @@ thiserror = "2.0"
 tempfile = "3.0"
 
 [dev-dependencies]
+serde_json = "1.0"

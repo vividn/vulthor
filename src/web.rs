@@ -123,6 +123,8 @@ impl WebServer {
             .route("/vulthor_bird.png", get(serve_bird))
             .route("/vulthor_head.png", get(serve_head))
             .route("/vulthor_letters.png", get(serve_letters))
+            .route("/manifest.json", get(serve_manifest))
+            .route("/sw.js", get(serve_service_worker))
             .route("/events", get(email_events))
             .route("/api/current-email", get(get_current_email_json))
             .with_state(self.state.clone());
@@ -187,6 +189,73 @@ async fn serve_head() -> Response {
 async fn serve_letters() -> Response {
     let logo_bytes = include_bytes!("../assets/vulthor_letters.png");
     ([("content-type", "image/png")], logo_bytes).into_response()
+}
+
+/// PWA web app manifest (VISION.md §HTML Viewer §PWA bonus). Wired to
+/// `<link rel="manifest" href="/manifest.json">` in both rendered HTML
+/// shells. The single icon entry points at the bundled `vulthor_bird.png`
+/// with `sizes="any"` so Chrome/Edge accept it for the install prompt
+/// without a pre-rasterized multi-size set. `theme_color` /
+/// `background_color` track [`VulthorTheme::PRIMARY_HEX`] /
+/// [`VulthorTheme::DARK_HEX`] so a palette rotation flows through.
+async fn serve_manifest() -> Response {
+    let body = format!(
+        r#"{{
+  "name": "Vulthor",
+  "short_name": "Vulthor",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "{theme}",
+  "background_color": "{bg}",
+  "icons": [
+    {{
+      "src": "/vulthor_bird.png",
+      "sizes": "any",
+      "type": "image/png"
+    }}
+  ]
+}}"#,
+        theme = crate::theme::VulthorTheme::PRIMARY_HEX,
+        bg = crate::theme::VulthorTheme::DARK_HEX,
+    );
+    ([("content-type", "application/manifest+json")], body).into_response()
+}
+
+/// Minimal install-only service worker. It pre-caches the shell assets
+/// on `install` and falls back to the cache for those same paths if the
+/// network is unreachable; everything else is a straight network
+/// pass-through. We are not chasing offline mail — the goal is just to
+/// satisfy Chrome/Edge's installability heuristic so the OS-level
+/// "Install Vulthor" entry appears (see VISION.md).
+async fn serve_service_worker() -> Response {
+    let body = r#"const CACHE = 'vulthor-shell-v1';
+const SHELL = ['/', '/styles.css', '/vulthor_bird.png'];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(SHELL))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (SHELL.includes(url.pathname)) {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+  }
+});
+"#;
+    (
+        [("content-type", "application/javascript; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn email_events(
@@ -369,10 +438,20 @@ fn generate_email_html(email: &crate::email::Email) -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - {}</title>
     <link rel="stylesheet" href="/styles.css">
+    <link rel="manifest" href="/manifest.json">
+    <meta name='theme-color' content='#2c4f5d'>
     <script>
+        if ('serviceWorker' in navigator) {{
+            window.addEventListener('load', function() {{
+                navigator.serviceWorker.register('/sw.js').catch(function(err) {{
+                    console.log('SW registration failed:', err);
+                }});
+            }});
+        }}
+
         let currentEmailId = null;
         let isLoading = false;
-        
+
         const eventSource = new EventSource('/events');
         eventSource.addEventListener('email-changed', function(event) {{
             const newEmailId = event.data;
@@ -538,10 +617,20 @@ fn generate_welcome_html() -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - Email Client</title>
     <link rel="stylesheet" href="/styles.css">
+    <link rel="manifest" href="/manifest.json">
+    <meta name='theme-color' content='#2c4f5d'>
     <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                    console.log('SW registration failed:', err);
+                });
+            });
+        }
+
         let currentEmailId = null;
         let isLoading = false;
-        
+
         const eventSource = new EventSource('/events');
         eventSource.addEventListener('email-changed', function(event) {
             const newEmailId = event.data;
@@ -871,6 +960,142 @@ mod tests {
         assert_eq!(format_file_size(1024), "1.0 KB");
         assert_eq!(format_file_size(1536), "1.5 KB");
         assert_eq!(format_file_size(1048576), "1.0 MB");
+    }
+
+    // --- PWA install surface (vu-cyj) ---
+    //
+    // VISION.md §HTML Viewer §PWA bonus: the rendered shell must
+    // advertise a manifest and register a service worker so Chrome /
+    // Edge expose an "Install Vulthor" entry. These tests pin the
+    // four moving parts: the manifest route, the service-worker
+    // route, and the two HTML shells linking them.
+
+    use axum::body::to_bytes;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn manifest_route_returns_valid_json_with_pwa_fields() {
+        let response = serve_manifest().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.starts_with("application/manifest+json"),
+            "manifest content-type was {:?}",
+            content_type,
+        );
+
+        let body_bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let body = std::str::from_utf8(&body_bytes).unwrap();
+
+        // The Chrome/Edge installability heuristic needs these four
+        // fields plus at least one icon entry — assert each so a
+        // partial rewrite can't silently break the install prompt.
+        for required in [
+            "\"name\"",
+            "\"short_name\"",
+            "\"start_url\"",
+            "\"display\"",
+            "\"icons\"",
+            "/vulthor_bird.png",
+        ] {
+            assert!(
+                body.contains(required),
+                "manifest missing {}:\n{}",
+                required,
+                body,
+            );
+        }
+
+        // Theme colors must track the VulthorTheme palette, not be
+        // hardcoded in the route handler.
+        assert!(
+            body.contains(crate::theme::VulthorTheme::PRIMARY_HEX),
+            "manifest theme_color must use VulthorTheme::PRIMARY_HEX",
+        );
+        assert!(
+            body.contains(crate::theme::VulthorTheme::DARK_HEX),
+            "manifest background_color must use VulthorTheme::DARK_HEX",
+        );
+
+        // Round-trip through a JSON parse to catch syntactic damage
+        // (trailing commas, unbalanced braces) that a substring check
+        // would miss.
+        let parsed: serde::de::IgnoredAny =
+            serde::de::Deserialize::deserialize(&mut serde_json::Deserializer::from_str(body))
+                .expect("manifest must be valid JSON");
+        let _ = parsed;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn service_worker_route_serves_javascript_with_install_handler() {
+        let response = serve_service_worker().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.contains("javascript"),
+            "service worker content-type was {:?}",
+            content_type,
+        );
+
+        let body_bytes = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+        let body = std::str::from_utf8(&body_bytes).unwrap();
+
+        // The install handler with `caches.open(...).addAll(...)` is
+        // what registers the worker as "real" enough for the install
+        // prompt. Without these, the SW is a no-op and Chrome won't
+        // surface the install entry.
+        for token in [
+            "addEventListener('install'",
+            "caches.open",
+            "addAll",
+            "/styles.css",
+            "/vulthor_bird.png",
+        ] {
+            assert!(
+                body.contains(token),
+                "service worker missing `{}`:\n{}",
+                token,
+                body,
+            );
+        }
+    }
+
+    #[test]
+    fn welcome_html_head_advertises_pwa_install_hooks() {
+        let html = generate_welcome_html();
+        let head_end = html.find("</head>").expect("welcome HTML must have a head");
+        let head = &html[..head_end];
+        assert!(
+            head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
+            "welcome <head> must link the manifest",
+        );
+        assert!(
+            head.contains("navigator.serviceWorker.register('/sw.js')"),
+            "welcome <head> must register the service worker",
+        );
+    }
+
+    #[test]
+    fn email_html_head_advertises_pwa_install_hooks() {
+        let email = crate::email::Email::new(PathBuf::from("/tmp/fake.eml"));
+        let html = generate_email_html(&email);
+        let head_end = html.find("</head>").expect("email HTML must have a head");
+        let head = &html[..head_end];
+        assert!(
+            head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
+            "email <head> must link the manifest",
+        );
+        assert!(
+            head.contains("navigator.serviceWorker.register('/sw.js')"),
+            "email <head> must register the service worker",
+        );
     }
 
     #[test]

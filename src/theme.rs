@@ -46,4 +46,14 @@ impl VulthorTheme {
 
     /// Status bar background
     pub const STATUS_BG: Color = Self::DARK;
+
+    /// Hex form of [`Self::DARK`] (26,47,58) — used by web surfaces
+    /// (PWA manifest `background_color`) that need a CSS color string,
+    /// not a ratatui `Color`. Kept beside `DARK` so a future palette
+    /// rotation updates both at once.
+    pub const DARK_HEX: &'static str = "#1a2f3a";
+
+    /// Hex form of [`Self::PRIMARY`] (44,79,93) — paired with
+    /// [`Self::DARK_HEX`] for the PWA manifest `theme_color`.
+    pub const PRIMARY_HEX: &'static str = "#2c4f5d";
 }
