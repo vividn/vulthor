@@ -9,6 +9,21 @@ Read it before designing new features or making architectural decisions.
 This file covers the *how* — workflow, testing, code style. It does not
 duplicate vision content; if the two ever disagree, VISION.md wins.
 
+## Observation Log
+
+If you notice something worth fixing or rethinking that's **outside the scope
+of your current bead**, do not act on it — file it in `notes/observations/`
+so it can be reviewed later. This keeps your bead focused while preserving
+the insight.
+
+Format: `notes/observations/<YYYY-MM-DD>-<bead-id>-<short-slug>.md` with
+frontmatter (see `notes/observations/README.md` for the schema). Commit
+these as part of your bead's normal commits. Mayor patrol scans this
+directory periodically and converts worth-doing items into beads.
+
+**Do not**: stop your in-flight work to chase observations, file beads
+directly without going through the observation log, or skip the frontmatter.
+
 ## Project Overview
 
 Vulthor is a modern TUI (Terminal User Interface) email client with integrated HTML display capabilities. It targets daily-driver use: read, reply, archive, multi-account, with a local AI classifier suggesting actions. It pairs with `mbsync` (sync) and `notmuch` (search); it composes via `$EDITOR` and sends via `msmtp`. The web pane is a render-only HTML viewer, not a second UI.
