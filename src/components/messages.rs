@@ -323,6 +323,15 @@ impl Component for MessagesComponent {
                     self.email_index = target;
                 }
             }
+            Msg::MessageOpen(_) => {
+                // Enter on a message: pair the open with an auto
+                // mark-read (vu-rxi, Phase 1.b / VISION.md "Enter
+                // (auto mark-read)"). AppRoot derives the actual
+                // message id from `email_index` — we pass an empty
+                // sentinel the same way `on_key(Enter)` does for
+                // `MessageOpen` itself.
+                return vec![Msg::MessageMarkRead(String::new())];
+            }
             Msg::MessagesBlur => {
                 // Focus just moved Messages → Folders. Remember where
                 // the cursor was so the next `FoldersBlur` can restore it.
@@ -573,6 +582,26 @@ mod tests {
         assert_eq!(m.on_key(down, &ctx), Some(Msg::MessageMove(Dir::Down)));
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(m.on_key(up, &ctx), Some(Msg::MessageMove(Dir::Up)));
+    }
+
+    /// vu-rxi (Phase 1.b): the open path pairs with an auto mark-read.
+    /// MessagesComponent emits `MessageMarkRead` as a follow-up to
+    /// `MessageOpen` so a single Enter triggers both.
+    #[test]
+    fn message_open_returns_mark_read_follow_up() {
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+
+        let followups = m.handle_msg(&Msg::MessageOpen(String::new()), &ctx);
+        assert!(
+            followups
+                .iter()
+                .any(|x| matches!(x, Msg::MessageMarkRead(_))),
+            "Enter must dispatch MessageMarkRead alongside MessageOpen, got {:?}",
+            followups,
+        );
     }
 
     #[test]

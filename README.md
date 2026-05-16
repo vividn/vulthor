@@ -69,8 +69,9 @@ maildir_path = "/home/user/Mail"
 ### Navigation
 - `j` / `k` - Move up/down in current pane
 - `Alt+h` / `Alt+l` - Switch between panes
-- `Enter` - Select folder or email
+- `Enter` - Select folder, or open email (auto marks read)
 - `Backspace` - Go back to parent folder
+- `u` - Undo last mutation (session-only)
 
 ### Pane Control
 - `Alt+e` - Toggle folder pane visibility

@@ -27,7 +27,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::config::Config;
-use crate::email::{EmailLoadState, EmailStore};
+use crate::email::{EmailLoadState, EmailStore, MarkReadPlan};
 use crate::error::Result;
 use crate::layout::{self, ActivePane, Layout, PaneSwitchDirection, View};
 use crate::maildir::MaildirScanner;
@@ -691,6 +691,9 @@ impl AppRoot {
                     self.publish_focus();
                 }
             }
+            Msg::MessageMarkRead(_) => {
+                self.apply_mark_read();
+            }
             Msg::ContentScroll(_, _) => {
                 self.layout.selection.scroll_offset = self.content.scroll_offset;
             }
@@ -855,11 +858,26 @@ impl AppRoot {
             self.status_message = Some("Nothing to undo".into());
             return;
         };
-        match mutation.reverse() {
+        let reversed = mutation.reverse();
+        match reversed {
             Reversed::PathRestored { old, new } => {
                 let store = self.email_store.clone();
                 let mut store = store.lock().unwrap();
-                store.swap_email_path(&old, &new);
+                match &mutation {
+                    // Read-state mutations need the in-memory read flag
+                    // and the folder's unread_count to track the file
+                    // move. The plain path-swap in `swap_email_path`
+                    // would leave the unread badge stale (vu-rxi).
+                    Mutation::MarkRead { .. } => {
+                        store.update_email_read_state(&old, &new, true);
+                    }
+                    Mutation::MarkUnread { .. } => {
+                        store.update_email_read_state(&old, &new, false);
+                    }
+                    _ => {
+                        store.swap_email_path(&old, &new);
+                    }
+                }
                 self.status_message = Some("Undo: restored".into());
             }
             Reversed::FlagRestored { old, new } => {
@@ -872,6 +890,44 @@ impl AppRoot {
             }
             Reversed::Skipped => {
                 self.status_message = Some("Could not undo: file moved".into());
+            }
+        }
+    }
+
+    /// Perform the auto mark-read move triggered by `Msg::MessageMarkRead`
+    /// (Enter on a message — vu-rxi, Phase 1.b). Plans the new/→cur/
+    /// transition under the store lock, releases the lock for the
+    /// `fs::rename`, then re-locks to update in-memory state and push
+    /// onto the undo stack. Idempotent: no plan ⇒ nothing happens, no
+    /// mutation is pushed, no status text is set.
+    fn apply_mark_read(&mut self) {
+        let idx = self.messages.email_index;
+        let plan: Option<MarkReadPlan> = {
+            let store = self.email_store.lock().unwrap();
+            store.plan_mark_read(idx)
+        };
+        let Some(MarkReadPlan { from, to }) = plan else {
+            return;
+        };
+        // Make sure cur/ exists before the rename. Maildirs created by
+        // mbsync always have it, but tests and freshly-initialised
+        // accounts may not.
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::rename(&from, &to) {
+            Ok(()) => {
+                let mut store = self.email_store.lock().unwrap();
+                store.update_email_read_state(&from, &to, false);
+                drop(store);
+                self.push_mutation(Mutation::MarkRead {
+                    msg: to.clone(),
+                    from,
+                    to,
+                });
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Mark-read failed: {}", e));
             }
         }
     }
@@ -2009,6 +2065,157 @@ mod tests {
         let store = root.email_store_handle();
         let store = store.lock().unwrap();
         assert!(!store.root_folder.subfolders[0].emails[0].is_flagged);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.b (vu-rxi): mark-read on Enter — new/→cur/ move.
+    // -----------------------------------------------------------------
+
+    /// Build an AppRoot whose INBOX contains a real file in `new/` and
+    /// whose store has the matching email marked unread. Returns the
+    /// temp dir (kept alive by the caller), the shared store handle,
+    /// the new/ path, and the expected cur/ path. The current folder
+    /// is INBOX and the message cursor is on the unread email.
+    fn make_root_with_unread_email_in_new() -> (
+        tempfile::TempDir,
+        Arc<Mutex<EmailStore>>,
+        PathBuf,
+        PathBuf,
+        AppRoot,
+    ) {
+        use std::fs;
+        let temp = tempfile::TempDir::new().unwrap();
+        let new_path = temp.path().join("INBOX/new/msg1");
+        let cur_path = temp.path().join("INBOX/cur/msg1");
+        fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(cur_path.parent().unwrap()).unwrap();
+        fs::write(&new_path, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(new_path.clone());
+        email.is_unread = true;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+
+        let scanner = MaildirScanner::new(temp.path().to_path_buf());
+        let shared = Arc::new(Mutex::new(store));
+        let root = AppRoot::new(shared.clone(), scanner);
+        (temp, shared, new_path, cur_path, root)
+    }
+
+    /// Enter on a message in MessagesComponent must produce both an
+    /// open and an auto mark-read. The component returns
+    /// `MessageMarkRead` as a follow-up to `MessageOpen` so the
+    /// drain loop handles both in lockstep.
+    #[test]
+    fn message_open_dispatches_mark_read_follow_up() {
+        let (_temp, _shared, _new, _cur, mut root) = make_root_with_unread_email_in_new();
+        root.enqueue(Msg::MessageOpen(String::new()));
+        root.drain();
+        // After drain, the file should have been renamed and the
+        // mutation pushed — proving that MessageMarkRead actually
+        // ran in the same dispatch cycle as MessageOpen.
+        assert_eq!(root.undo_stack_len(), 1);
+    }
+
+    #[test]
+    fn mark_read_renames_file_from_new_to_cur() {
+        let (_temp, _shared, new_path, cur_path, mut root) = make_root_with_unread_email_in_new();
+        root.enqueue(Msg::MessageMarkRead(String::new()));
+        root.drain();
+        assert!(!new_path.exists(), "file must leave new/");
+        assert!(cur_path.exists(), "file must land in cur/");
+    }
+
+    #[test]
+    fn mark_read_updates_in_memory_state() {
+        let (_temp, shared, _new, cur_path, mut root) = make_root_with_unread_email_in_new();
+        root.enqueue(Msg::MessageMarkRead(String::new()));
+        root.drain();
+        let store = shared.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.unread_count, 0);
+        assert!(!inbox.emails[0].is_unread);
+        assert_eq!(inbox.emails[0].file_path, cur_path);
+    }
+
+    #[test]
+    fn mark_read_pushes_mark_read_mutation_to_undo_stack() {
+        let (_temp, _shared, new_path, cur_path, mut root) = make_root_with_unread_email_in_new();
+        root.enqueue(Msg::MessageMarkRead(String::new()));
+        root.drain();
+        assert_eq!(root.undo_stack_len(), 1);
+        assert_eq!(
+            root.undo_stack.last(),
+            Some(&Mutation::MarkRead {
+                msg: cur_path.clone(),
+                from: new_path,
+                to: cur_path,
+            })
+        );
+    }
+
+    #[test]
+    fn mark_read_is_noop_when_email_already_read() {
+        // Set up an email that's already in cur/ and not unread.
+        // Pressing Enter again must not rename anything, must not
+        // push a mutation, and must not touch the unread count.
+        use std::fs;
+        let temp = tempfile::TempDir::new().unwrap();
+        let cur_path = temp.path().join("INBOX/cur/msg1");
+        fs::create_dir_all(cur_path.parent().unwrap()).unwrap();
+        fs::write(&cur_path, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(cur_path.clone());
+        email.is_unread = false;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+
+        let scanner = MaildirScanner::new(temp.path().to_path_buf());
+        let shared = Arc::new(Mutex::new(store));
+        let mut root = AppRoot::new(shared.clone(), scanner);
+        root.enqueue(Msg::MessageMarkRead(String::new()));
+        root.drain();
+
+        assert_eq!(root.undo_stack_len(), 0);
+        let store = shared.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.unread_count, 0);
+        assert!(cur_path.exists());
+        assert!(!inbox.emails[0].is_unread);
+        assert_eq!(inbox.emails[0].file_path, cur_path);
+    }
+
+    #[test]
+    fn mark_read_undo_restores_file_and_unread_state() {
+        let (_temp, shared, new_path, cur_path, mut root) = make_root_with_unread_email_in_new();
+        root.enqueue(Msg::MessageMarkRead(String::new()));
+        root.drain();
+        // Sanity: mark-read landed.
+        assert_eq!(root.undo_stack_len(), 1);
+        assert!(cur_path.exists());
+
+        root.enqueue(Msg::Undo);
+        root.drain();
+
+        // Disk side: file is back in new/.
+        assert!(new_path.exists(), "undo must return file to new/");
+        assert!(!cur_path.exists(), "undo must clear cur/");
+        // Store side: unread flag and count restored, file_path rewound.
+        let store = shared.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.unread_count, 1);
+        assert!(inbox.emails[0].is_unread);
+        assert_eq!(inbox.emails[0].file_path, new_path);
+        // Stack drained.
+        assert_eq!(root.undo_stack_len(), 0);
     }
 
     #[test]

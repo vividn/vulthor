@@ -36,6 +36,30 @@ pub enum EmailLoadState {
     FullyLoaded,
 }
 
+/// Source and destination paths for a `new/`→`cur/` mark-read move
+/// (vu-rxi). Built by `EmailStore::plan_mark_read`; consumed by the
+/// AppRoot handler for `Msg::MessageMarkRead`, which performs the
+/// `fs::rename` and then calls `update_email_read_state` so the
+/// in-memory store stays consistent with disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkReadPlan {
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
+/// Translate a Maildir `…/<folder>/new/<name>` path into its
+/// `…/<folder>/cur/<name>` sibling. Returns `None` when the parent
+/// directory is not literally `new`, so callers naturally no-op for
+/// emails that are already in `cur/`.
+fn derive_cur_path(p: &std::path::Path) -> Option<PathBuf> {
+    let name = p.file_name()?;
+    let parent = p.parent()?;
+    if parent.file_name()? != "new" {
+        return None;
+    }
+    Some(parent.parent()?.join("cur").join(name))
+}
+
 #[derive(Debug, Clone)]
 pub struct Email {
     pub headers: EmailHeaders,
@@ -529,6 +553,74 @@ impl EmailStore {
     /// "move email across folders" path that Phase 1.b–1.e will add.
     pub fn swap_email_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> bool {
         Self::swap_email_path_in_folder(&mut self.root_folder, old, new)
+    }
+
+    /// Plan a mark-read transition for the email at `email_index` in the
+    /// current folder (vu-rxi, Phase 1.b). Returns `None` when the index
+    /// is out of range, the email is already read, or the file path is
+    /// not under a `new/` directory — making this method the single
+    /// idempotency gate for `Enter (auto mark-read)`.
+    pub fn plan_mark_read(&self, email_index: usize) -> Option<MarkReadPlan> {
+        let folder = self.get_current_folder();
+        let email = folder.emails.get(email_index)?;
+        if !email.is_unread {
+            return None;
+        }
+        let to = derive_cur_path(&email.file_path)?;
+        if to == email.file_path {
+            return None;
+        }
+        Some(MarkReadPlan {
+            from: email.file_path.clone(),
+            to,
+        })
+    }
+
+    /// Apply the in-memory side of a read-state flip after the
+    /// filesystem rename has succeeded. Finds the email by its
+    /// `current_path`, rewrites it to `new_path`, sets `is_unread`, and
+    /// adjusts the containing folder's `unread_count` only when the
+    /// flag actually changes. Returns true on match.
+    pub fn update_email_read_state(
+        &mut self,
+        current_path: &std::path::Path,
+        new_path: &std::path::Path,
+        new_is_unread: bool,
+    ) -> bool {
+        Self::update_email_read_state_in_folder(
+            &mut self.root_folder,
+            current_path,
+            new_path,
+            new_is_unread,
+        )
+    }
+
+    fn update_email_read_state_in_folder(
+        folder: &mut Folder,
+        current_path: &std::path::Path,
+        new_path: &std::path::Path,
+        new_is_unread: bool,
+    ) -> bool {
+        for email in &mut folder.emails {
+            if email.file_path == current_path {
+                if email.is_unread != new_is_unread {
+                    if new_is_unread {
+                        folder.unread_count += 1;
+                    } else {
+                        folder.unread_count = folder.unread_count.saturating_sub(1);
+                    }
+                    email.is_unread = new_is_unread;
+                }
+                email.file_path = new_path.to_path_buf();
+                return true;
+            }
+        }
+        for sub in &mut folder.subfolders {
+            if Self::update_email_read_state_in_folder(sub, current_path, new_path, new_is_unread) {
+                return true;
+            }
+        }
+        false
     }
 
     fn swap_email_path_in_folder(
@@ -1223,5 +1315,124 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         let applied =
             store.apply_loaded_body(&PathBuf::from("/tmp/b"), "x".to_string(), None, Vec::new());
         assert!(!applied);
+    }
+
+    // --- vu-rxi (Phase 1.b): mark-read planning + in-memory state. ---
+
+    fn store_with_unread_in_new(root: PathBuf) -> EmailStore {
+        let mut store = EmailStore::new(root.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root.join("INBOX"));
+        let mut email = Email::new(root.join("INBOX/new/msg1"));
+        email.is_unread = true;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store
+    }
+
+    #[test]
+    fn plan_mark_read_returns_some_for_unread_email_in_new_dir() {
+        let store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        let plan = store.plan_mark_read(0).expect("plan exists");
+        assert_eq!(plan.from, PathBuf::from("/tmp/mr/INBOX/new/msg1"));
+        assert_eq!(plan.to, PathBuf::from("/tmp/mr/INBOX/cur/msg1"));
+    }
+
+    #[test]
+    fn plan_mark_read_returns_none_when_already_read() {
+        let mut store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        store.get_current_folder_mut().emails[0].is_unread = false;
+        assert!(store.plan_mark_read(0).is_none());
+    }
+
+    #[test]
+    fn plan_mark_read_returns_none_when_index_out_of_range() {
+        let store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        assert!(store.plan_mark_read(99).is_none());
+    }
+
+    #[test]
+    fn plan_mark_read_returns_none_for_email_not_in_new_dir() {
+        // is_unread=true but file_path is already under cur/. Defensive:
+        // mbsync may set seen-state via flags only; we still gate on the
+        // directory because the move is the operation we know how to do.
+        let mut store = EmailStore::new(PathBuf::from("/tmp/mr"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/mr/INBOX"));
+        let mut email = Email::new(PathBuf::from("/tmp/mr/INBOX/cur/msg1"));
+        email.is_unread = true;
+        inbox.add_email(email);
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        assert!(store.plan_mark_read(0).is_none());
+    }
+
+    #[test]
+    fn update_email_read_state_flips_unread_and_swaps_path_and_decrements_count() {
+        let mut store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        let before = store.get_current_folder().unread_count;
+        let found = store.update_email_read_state(
+            &PathBuf::from("/tmp/mr/INBOX/new/msg1"),
+            &PathBuf::from("/tmp/mr/INBOX/cur/msg1"),
+            false,
+        );
+        assert!(found);
+        let folder = store.get_current_folder();
+        assert_eq!(folder.unread_count, before - 1);
+        assert!(!folder.emails[0].is_unread);
+        assert_eq!(
+            folder.emails[0].file_path,
+            PathBuf::from("/tmp/mr/INBOX/cur/msg1")
+        );
+    }
+
+    #[test]
+    fn update_email_read_state_to_unread_increments_count_and_swaps_path() {
+        // Inverse direction used by undo: file went cur/→new/, restore
+        // is_unread and bump the count.
+        let mut store = EmailStore::new(PathBuf::from("/tmp/mr"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/mr/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/mr/INBOX/cur/msg1")));
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+
+        let found = store.update_email_read_state(
+            &PathBuf::from("/tmp/mr/INBOX/cur/msg1"),
+            &PathBuf::from("/tmp/mr/INBOX/new/msg1"),
+            true,
+        );
+        assert!(found);
+        let folder = store.get_current_folder();
+        assert_eq!(folder.unread_count, 1);
+        assert!(folder.emails[0].is_unread);
+        assert_eq!(
+            folder.emails[0].file_path,
+            PathBuf::from("/tmp/mr/INBOX/new/msg1"),
+        );
+    }
+
+    #[test]
+    fn update_email_read_state_idempotent_when_flag_unchanged() {
+        // Calling twice with the same `new_is_unread` must not
+        // double-decrement the unread count (would underflow without
+        // the saturating sub guard).
+        let mut store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        let first = PathBuf::from("/tmp/mr/INBOX/new/msg1");
+        let second = PathBuf::from("/tmp/mr/INBOX/cur/msg1");
+        store.update_email_read_state(&first, &second, false);
+        let after_first = store.get_current_folder().unread_count;
+        // Repeat with the same target state — only the path-swap is real work.
+        store.update_email_read_state(&second, &second, false);
+        assert_eq!(store.get_current_folder().unread_count, after_first);
+    }
+
+    #[test]
+    fn update_email_read_state_returns_false_for_unknown_path() {
+        let mut store = store_with_unread_in_new(PathBuf::from("/tmp/mr"));
+        assert!(!store.update_email_read_state(
+            &PathBuf::from("/no/such/msg"),
+            &PathBuf::from("/no/such/elsewhere"),
+            false,
+        ));
     }
 }
