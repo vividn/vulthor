@@ -805,8 +805,10 @@ mod tests {
 
         // Navigate to INBOX and load emails
         store.enter_folder_by_path(&[0]); // Enter first folder (should be INBOX)
+        // `None` limit = explicit "load every message" mode for test
+        // setup; production scroll path uses paged loads (vu-5jt).
         scanner
-            .load_folder_emails(store.get_current_folder_mut())
+            .load_folder_emails_with_limit(store.get_current_folder_mut(), None)
             .unwrap();
 
         // Initially no email selected
@@ -863,5 +865,68 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert!(email.headers.subject.contains("🚀"));
         assert!(email.body_text.contains("世界"));
         assert!(email.body_text.contains("🎉"));
+    }
+
+    /// vu-5jt acceptance: a single `load_more_messages_if_needed` call
+    /// must NOT fully load a large folder. Pre-fix this was unbounded
+    /// and froze the TUI on big archives (AUDIT-BLOCKING-IO.md §B2).
+    /// After the fix, one j-scroll trigger loads at most one chunk
+    /// (SCROLL_LOAD_CHUNK = 50) of additional headers.
+    #[test]
+    fn load_more_messages_if_needed_is_bounded_per_call() {
+        use crate::maildir::MaildirScanner;
+
+        // Build a 200-message INBOX directly so we don't rely on the
+        // test fixture's curated content.
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("INBOX/cur")).unwrap();
+        fs::create_dir_all(root.join("INBOX/new")).unwrap();
+        fs::create_dir_all(root.join("INBOX/tmp")).unwrap();
+        for i in 0..200 {
+            let body = format!(
+                "From: a@b.test\r\nTo: c@d.test\r\nSubject: msg {}\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\nMessage-ID: <{}@b.test>\r\n\r\nb\r\n",
+                i, i
+            );
+            fs::write(root.join(format!("INBOX/cur/{:06}.eml", i)), body).unwrap();
+        }
+
+        let scanner = MaildirScanner::new(root.to_path_buf());
+        let mut store = EmailStore::new(root.to_path_buf());
+        store.root_folder = scanner.scan().unwrap();
+        store.enter_folder_by_path(&[0]); // INBOX
+
+        // Seed initial bounded load (mirrors the Enter-into-folder path).
+        store
+            .ensure_current_folder_loaded_with_limit(&scanner, 10)
+            .unwrap();
+        let initial = store.get_current_folder().emails.len();
+        assert_eq!(initial, 10);
+
+        // Simulate one j-scroll at the loaded tail: index near
+        // emails.len() triggers load_more_messages_if_needed.
+        store
+            .load_more_messages_if_needed(&scanner, initial - 1)
+            .unwrap();
+
+        let after = store.get_current_folder().emails.len();
+        assert!(
+            after > initial,
+            "should have loaded at least one chunk past the seed",
+        );
+        assert!(
+            after < 200,
+            "must NOT have fully loaded the folder (was {}, total 200)",
+            after,
+        );
+        assert!(
+            after <= initial + 50,
+            "one scroll trigger must load at most SCROLL_LOAD_CHUNK=50 more (got {} new)",
+            after - initial,
+        );
+        assert!(
+            !store.get_current_folder().is_loaded,
+            "partial load must not mark folder fully loaded",
+        );
     }
 }

@@ -80,11 +80,7 @@ impl MaildirScanner {
     /// Cost is O(dir_size) per call (one WalkDir pass with `is_file`
     /// stats) plus O(chunk_size) parses. For large folders the per-call
     /// latency is bounded by the parse work, not by total folder size.
-    pub fn load_more_folder_emails(
-        &self,
-        folder: &mut Folder,
-        chunk_size: usize,
-    ) -> Result<usize> {
+    pub fn load_more_folder_emails(&self, folder: &mut Folder, chunk_size: usize) -> Result<usize> {
         if folder.is_loaded || chunk_size == 0 {
             return Ok(0);
         }
@@ -97,8 +93,7 @@ impl MaildirScanner {
             return Ok(0);
         }
 
-        let loaded: HashSet<PathBuf> =
-            folder.emails.iter().map(|e| e.file_path.clone()).collect();
+        let loaded: HashSet<PathBuf> = folder.emails.iter().map(|e| e.file_path.clone()).collect();
 
         let mut budget = chunk_size;
         let cur_added = self.scan_more_in_dir(folder, &cur_path, &loaded, budget)?;
@@ -134,7 +129,7 @@ impl MaildirScanner {
         let is_new = dir_path
             .file_name()
             .and_then(|name| name.to_str())
-            .map_or(false, |name| name == "new");
+            .is_some_and(|name| name == "new");
 
         let mut added = 0;
         for entry in WalkDir::new(dir_path).min_depth(1).max_depth(1) {
