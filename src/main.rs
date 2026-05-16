@@ -1,4 +1,5 @@
 mod components;
+mod compose;
 mod config;
 mod email;
 mod error;

@@ -34,6 +34,23 @@ pub enum VulthorError {
 
     #[error("MailDir path is not a directory: {0}")]
     MaildirPathNotDirectory(PathBuf),
+
+    // Phase 2.a (vu-537) — compose / send pipeline.
+    #[error("Editor process failed: {0}")]
+    ComposeEditorFailed(String),
+
+    #[error("Failed to parse composed message: {0}")]
+    ComposeParseFailed(String),
+
+    #[error("Send failed: {0}")]
+    SendFailed(String),
+
+    #[error("Failed to write to Sent folder ({path}): {source}")]
+    SentFolderWriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, VulthorError>;
