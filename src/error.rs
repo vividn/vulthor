@@ -64,6 +64,24 @@ pub enum VulthorError {
 
     #[error("notmuch query failed: {stderr}")]
     NotmuchQueryFailed { stderr: String },
+
+    // Phase 4.b — [keybindings] overrides.
+    #[error("Keybinding conflict on '{key}': both '{action_a}' and '{action_b}' are bound to it")]
+    KeybindingConflict {
+        key: String,
+        action_a: String,
+        action_b: String,
+    },
+
+    #[error("Invalid key string '{key}' for action '{action}': {reason}")]
+    KeybindingInvalidKey {
+        key: String,
+        action: String,
+        reason: String,
+    },
+
+    #[error("Unknown action '{action}' in [keybindings]")]
+    KeybindingUnknownAction { action: String },
 }
 
 /// Crate-wide result alias: every fallible Vulthor API returns

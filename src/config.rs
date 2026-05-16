@@ -65,6 +65,24 @@ pub struct Config {
     /// (alphabetical) iteration order for the Accounts pane.
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountConfig>,
+    /// `[keybindings]` overrides. Each entry rebinds one of the
+    /// canonical action names (see `crate::keymap::Action::name`) to
+    /// a user-chosen key string. Empty by default — every action
+    /// keeps its VISION.md default until the user opts in.
+    #[serde(default)]
+    pub keybindings: KeybindingsConfig,
+}
+
+/// Wrapper around the raw `[keybindings]` table. The inner
+/// `BTreeMap<String, String>` is `action_name -> key_string`; both
+/// fields are owned strings so the user's literal input is preserved
+/// for error messages out of `crate::keymap::resolve_keymap`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct KeybindingsConfig {
+    /// `action_name -> key_string` map. Resolver flips this into a
+    /// materialised `KeyEvent -> Action` table at app startup.
+    pub inner: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -75,6 +93,7 @@ impl Default for Config {
                 .unwrap_or_else(|| PathBuf::from("./Mail")),
             default_account: None,
             accounts: BTreeMap::new(),
+            keybindings: KeybindingsConfig::default(),
         }
     }
 }
