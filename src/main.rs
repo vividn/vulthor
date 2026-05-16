@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
 
     let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
+    app_root.set_web_port(args.port);
 
     let web_server = WebServer::new(
         args.port,

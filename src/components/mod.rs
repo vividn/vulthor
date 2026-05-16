@@ -15,6 +15,7 @@ mod folder_picker;
 mod folder_scanner;
 mod folders;
 mod headers_loader;
+mod html_viewer;
 mod messages;
 mod msg;
 mod root;

@@ -93,6 +93,17 @@ pub struct AppRoot {
     /// terminal — `main.rs` does — and we need the TUI suspended
     /// around the call so the editor takes over stdio.
     pending_editor: Option<PendingEditorLaunch>,
+    /// Port the embedded web server is listening on. AppRoot needs
+    /// this to build the URL the chromeless HTML viewer (`v`)
+    /// launches into. Defaults to 8080 to match `CliArgs::port` so
+    /// tests that never set it explicitly still produce a valid URL;
+    /// `main.rs` overrides via [`Self::set_web_port`] after parsing.
+    web_port: u16,
+    /// Live handle to the chromeless HTML viewer child process when
+    /// one is running. `Some` between the first `v` press (launch)
+    /// and the second `v` press (terminate). Owned here — not on the
+    /// `html_viewer` module — so the AppRoot destructor reaps it.
+    html_viewer_child: Option<std::process::Child>,
 }
 
 /// Reply-template editor invocation parked between AppRoot dispatch
@@ -147,6 +158,8 @@ impl AppRoot {
             loading_folder_paths: HashSet::new(),
             undo_stack: Vec::new(),
             pending_editor: None,
+            web_port: 8080,
+            html_viewer_child: None,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -175,6 +188,13 @@ impl AppRoot {
     /// Hand the root the off-thread folder scanner started in `main`.
     pub fn attach_folder_scanner(&mut self, handle: FolderScannerHandle) {
         self.folder_scanner = Some(handle);
+    }
+
+    /// Tell AppRoot which port the embedded web server is listening
+    /// on. `main.rs` calls this right after parsing `CliArgs::port`
+    /// so the `v`-key viewer launches against the right URL.
+    pub fn set_web_port(&mut self, port: u16) {
+        self.web_port = port;
     }
 
     /// Clone of the focused-pane signal the web server reads.
@@ -619,6 +639,9 @@ impl AppRoot {
             }
             (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
             (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
+            // 'v' toggles the chromeless HTML viewer. Routed through
+            // `apply_root` because the child PID lives on AppRoot.
+            (KeyCode::Char('v'), m) if m.is_empty() => Some(Msg::ToggleHtmlViewer),
             (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
             (KeyCode::Tab, _) => Some(Msg::FocusNext),
             (KeyCode::BackTab, _) => Some(Msg::FocusPrev),
@@ -877,7 +900,53 @@ impl AppRoot {
             Msg::DraftEditRelaunch => {
                 self.apply_draft_edit_relaunch();
             }
+            Msg::ToggleHtmlViewer => {
+                self.apply_toggle_html_viewer();
+            }
             _ => {}
+        }
+    }
+
+    /// Toggle the chromeless HTML viewer. First press detects a
+    /// browser, spawns it pointed at the embedded web server, and
+    /// stashes the `Child` on `self`. Second press hands the child
+    /// to [`super::html_viewer::terminate`] (SIGTERM with a 1s
+    /// escalation to SIGKILL). Status-bar messages surface every
+    /// branch so the user always has feedback.
+    fn apply_toggle_html_viewer(&mut self) {
+        // If a viewer is in flight, but the child has already exited
+        // on its own (user closed the window), treat the slot as
+        // empty so this press launches a fresh viewer.
+        if let Some(child) = self.html_viewer_child.as_mut()
+            && let Ok(Some(_status)) = child.try_wait()
+        {
+            self.html_viewer_child = None;
+        }
+
+        if let Some(mut child) = self.html_viewer_child.take() {
+            match super::html_viewer::terminate(&mut child, Duration::from_secs(1)) {
+                Ok(()) => self.status_message = Some("HTML viewer closed".into()),
+                Err(e) => self.status_message = Some(format!("HTML viewer close failed: {}", e)),
+            }
+            return;
+        }
+
+        let Some(browser) = super::html_viewer::detect_browser(super::html_viewer::binary_on_path)
+        else {
+            self.status_message =
+                Some("No browser found — install chromium, chrome, or firefox".into());
+            return;
+        };
+
+        let url = format!("http://127.0.0.1:{}", self.web_port);
+        match super::html_viewer::launch(browser, &url) {
+            Ok(child) => {
+                self.html_viewer_child = Some(child);
+                self.status_message = Some(format!("HTML viewer launched ({})", browser.binary()));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to launch {}: {}", browser.binary(), e));
+            }
         }
     }
 
@@ -1577,6 +1646,16 @@ mod tests {
         AppRoot::new(Arc::new(Mutex::new(store)), scanner)
     }
 
+    /// Process-wide lock guarding tests that mutate `PATH`. `cargo
+    /// test` runs threads in parallel and `std::env::set_var` is
+    /// process-global; without this, two tests racing on `PATH`
+    /// trample each other.
+    fn path_lock() -> &'static std::sync::Mutex<()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     fn make_root_with_folders(names: &[&str]) -> AppRoot {
         let mut store = EmailStore::new(PathBuf::from("/tmp"));
         for name in names {
@@ -1627,6 +1706,90 @@ mod tests {
         assert_eq!(
             AppRoot::handle_global_key(key, &ActivePane::Messages),
             Some(Msg::ViewNext)
+        );
+    }
+
+    #[test]
+    fn handle_global_key_v_toggles_html_viewer() {
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        assert_eq!(
+            AppRoot::handle_global_key(key, &ActivePane::Messages),
+            Some(Msg::ToggleHtmlViewer)
+        );
+        // Modifiers must NOT trigger the viewer — leaves keys like
+        // Ctrl-V free for future bindings without surprise behavior.
+        let with_ctrl = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert!(AppRoot::handle_global_key(with_ctrl, &ActivePane::Messages).is_none());
+    }
+
+    /// Toggling the viewer when no browser is on `PATH` must surface
+    /// the install hint via the status bar and leave AppRoot in a
+    /// no-op state — never crash. We force the empty-PATH condition
+    /// by stashing the real `PATH`, blanking it for the duration of
+    /// the test, and restoring it afterward.
+    #[test]
+    fn toggle_html_viewer_with_no_browser_sets_status_and_does_not_crash() {
+        // SAFETY: `set_var` is `unsafe` under Rust 2024. The test
+        // serializes against other PATH-mutating tests via the
+        // `path_lock` mutex above; we restore PATH on the way out.
+        let _guard = path_lock().lock().unwrap();
+        let original = std::env::var_os("PATH");
+        unsafe { std::env::set_var("PATH", "") };
+
+        let mut root = make_root();
+        root.enqueue(Msg::ToggleHtmlViewer);
+        assert!(root.drain());
+        assert!(
+            root.html_viewer_child.is_none(),
+            "no child must be spawned when PATH is empty",
+        );
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .contains("No browser found"),
+            "status: {:?}",
+            root.status_message,
+        );
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("PATH", v) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+
+    /// Second press while a child is alive must kill it and clear
+    /// the slot. We stub the child by spawning `sleep 60` directly
+    /// (mirroring the html_viewer terminate test) so we don't need
+    /// a real browser on the host.
+    #[test]
+    fn toggle_html_viewer_second_press_kills_running_child() {
+        use std::process::{Command, Stdio};
+        // Serialize against `toggle_html_viewer_with_no_browser_*`
+        // — that test blanks `PATH`, which would otherwise race with
+        // the `sleep` spawn below.
+        let _guard = path_lock().lock().unwrap();
+        let mut root = make_root();
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep(1) must exist on the test host");
+        root.html_viewer_child = Some(child);
+
+        root.enqueue(Msg::ToggleHtmlViewer);
+        assert!(root.drain());
+
+        assert!(
+            root.html_viewer_child.is_none(),
+            "second press must clear the child slot",
+        );
+        assert_eq!(
+            root.status_message.as_deref(),
+            Some("HTML viewer closed"),
+            "status must confirm the close",
         );
     }
 

@@ -158,4 +158,12 @@ pub enum Msg {
     /// reverse it. No-op when the stack is empty. AppRoot is the sole
     /// handler; components do not observe undo.
     Undo,
+
+    /// Toggle the external chromeless HTML viewer (VISION.md § HTML
+    /// Viewer). When no child is running, AppRoot launches the first
+    /// browser found on `PATH` pointed at the embedded web server.
+    /// When a child *is* running, AppRoot signals it to exit.
+    /// Bound to `v` globally. Components do not observe this message;
+    /// only AppRoot reacts.
+    ToggleHtmlViewer,
 }
