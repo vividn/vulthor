@@ -426,6 +426,56 @@ impl EmailStore {
         Self::apply_loaded_body_to_folder(&mut self.root_folder, path, &mut payload)
     }
 
+    /// Apply a folder-headers load result (from the off-thread headers loader)
+    /// to the folder anywhere in the tree whose filesystem path matches
+    /// `fs_path`. Returns true if a folder was found.
+    ///
+    /// Late replies that arrive after the user has already loaded the folder
+    /// some other way are dropped (no overwrite of `is_loaded` or `emails`).
+    /// `fully_loaded = true` flips `Folder::is_loaded` so AppRoot stops
+    /// re-requesting on every selection change.
+    pub fn apply_loaded_folder(
+        &mut self,
+        fs_path: &std::path::Path,
+        emails: Vec<Email>,
+        fully_loaded: bool,
+    ) -> bool {
+        let mut payload = Some(emails);
+        Self::apply_loaded_folder_to(&mut self.root_folder, fs_path, &mut payload, fully_loaded)
+    }
+
+    fn apply_loaded_folder_to(
+        folder: &mut Folder,
+        fs_path: &std::path::Path,
+        payload: &mut Option<Vec<Email>>,
+        fully_loaded: bool,
+    ) -> bool {
+        if folder.path == fs_path {
+            if let Some(emails) = payload.take() {
+                // Drop the reply when the folder already has headers — either
+                // a synchronous fallback path loaded it, or a previous reply
+                // already landed. Either way, we don't want to clobber it.
+                if !folder.is_loaded && folder.emails.is_empty() {
+                    let unread = emails.iter().filter(|e| e.is_unread).count();
+                    let total = emails.len();
+                    folder.emails = emails;
+                    folder.unread_count = unread;
+                    folder.total_count = total;
+                }
+                if fully_loaded {
+                    folder.is_loaded = true;
+                }
+            }
+            return true;
+        }
+        for sub in &mut folder.subfolders {
+            if Self::apply_loaded_folder_to(sub, fs_path, payload, fully_loaded) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn apply_loaded_body_to_folder(
         folder: &mut Folder,
         path: &std::path::Path,
@@ -1031,6 +1081,55 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         assert_eq!(email.body_html.as_deref(), Some("<p>body</p>"));
         assert_eq!(email.attachments.len(), 1);
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
+    }
+
+    /// Phase 0.3.3 (vu-kx9): `apply_loaded_folder` writes the worker's
+    /// header batch into the matching subfolder and flips `is_loaded` when
+    /// the worker reported a fully-scanned folder. Counts (`unread_count`,
+    /// `total_count`) are derived from the new email list.
+    #[test]
+    fn apply_loaded_folder_writes_emails_to_matching_subfolder() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp/mail"));
+        let inbox_path = PathBuf::from("/tmp/mail/INBOX");
+        let inbox = Folder::new("INBOX".to_string(), inbox_path.clone());
+        store.root_folder.add_subfolder(inbox);
+
+        let mut a = Email::new(PathBuf::from("/tmp/mail/INBOX/cur/a"));
+        a.is_unread = true;
+        let b = Email::new(PathBuf::from("/tmp/mail/INBOX/cur/b"));
+        let applied = store.apply_loaded_folder(&inbox_path, vec![a, b], false);
+        assert!(applied);
+
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails.len(), 2);
+        assert_eq!(inbox.unread_count, 1);
+        assert_eq!(inbox.total_count, 2);
+        assert!(
+            !inbox.is_loaded,
+            "fully_loaded=false must leave is_loaded untouched (partial load)",
+        );
+
+        // A second reply with fully_loaded=true must flip is_loaded without
+        // overwriting the existing email list (the "already populated"
+        // short-circuit prevents lost state on a stale late reply).
+        let applied2 = store.apply_loaded_folder(&inbox_path, Vec::new(), true);
+        assert!(applied2);
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails.len(), 2, "must not clobber existing headers");
+        assert!(inbox.is_loaded);
+    }
+
+    /// Phase 0.3.3 (vu-kx9): replies for unknown filesystem paths (e.g. the
+    /// folder was removed while loading) return `false` so AppRoot can drop
+    /// the reply without panicking.
+    #[test]
+    fn apply_loaded_folder_returns_false_for_unknown_path() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        store
+            .root_folder
+            .add_subfolder(Folder::new("a".to_string(), PathBuf::from("/tmp/a")));
+        let applied = store.apply_loaded_folder(&PathBuf::from("/tmp/b"), Vec::new(), true);
+        assert!(!applied);
     }
 
     /// Phase 0.3.2 (vu-6td): `apply_loaded_body` returns `false` when no
