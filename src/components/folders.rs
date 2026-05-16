@@ -257,28 +257,21 @@ mod tests {
     }
 
     #[test]
-    fn on_key_maps_jk_to_folder_move() {
+    fn on_key_arrows_map_to_folder_move() {
+        // `j`/`k`/Enter now resolve via `AppRoot::action_to_msg`
+        // (centralised keymap dispatch) so `[keybindings]` overrides
+        // reach the runtime. This component still owns arrow-key
+        // navigation because those keys are not in the keymap.
         let store = store_with_folders(&["A"]);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut comp = FoldersComponent::with_index(0);
 
-        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(comp.on_key(j, &ctx), Some(Msg::FolderMove(Dir::Down)));
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(comp.on_key(down, &ctx), Some(Msg::FolderMove(Dir::Down)));
 
-        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(comp.on_key(k, &ctx), Some(Msg::FolderMove(Dir::Up)));
-    }
-
-    #[test]
-    fn on_key_enter_emits_folder_enter() {
-        let store = store_with_folders(&["A"]);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut comp = FoldersComponent::with_index(0);
-
-        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(comp.on_key(enter, &ctx), Some(Msg::FolderEnter));
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(comp.on_key(up, &ctx), Some(Msg::FolderMove(Dir::Up)));
     }
 
     #[test]

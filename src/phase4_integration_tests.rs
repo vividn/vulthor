@@ -54,6 +54,8 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 use crate::components::AppRoot;
+use crate::components::ReplyKind;
+use crate::components::draft::DraftStatus;
 use crate::config::Config;
 use crate::email::{Email, EmailStore, Folder};
 use crate::error::VulthorError;
@@ -400,6 +402,260 @@ fn inotify_create_under_cur_invalidates_folder_within_one_second() {
     assert!(
         observed,
         "inotify MailDirChanged must invalidate INBOX within 1s of the cur/ create",
+    );
+}
+
+// ---- 2b. [keybindings] dispatch-through-override end-to-end ----------
+//
+// These tests close the gap that vu-otn fixes: an override resolved into
+// the keymap must actually reach the runtime when the user presses the
+// new key. We seed a real INBOX file on disk, rebind the action to a
+// non-default key, drive that key through `process_event`, and observe
+// the side effect (file moved, draft started, undo stack popped).
+
+/// Seed a Messages-pane AppRoot at `<root>/INBOX/cur/<filename>` with
+/// the cursor on the one email. Shared by every override-dispatch test
+/// below so the setup boilerplate stays in one place. Mirrors the
+/// in-tree `make_root_with_disk_inbox` helper used by `root.rs` tests.
+fn override_root(
+    maildir: &std::path::Path,
+    filename: &str,
+    overrides: &[(&str, &str)],
+) -> (AppRoot, PathBuf) {
+    let inbox_cur = maildir.join("INBOX").join("cur");
+    std::fs::create_dir_all(&inbox_cur).unwrap();
+    let src = inbox_cur.join(filename);
+    // Real headers so reply-template tests have something to work with.
+    std::fs::write(
+        &src,
+        "From: Alice <alice@example.com>\r\n\
+         To: Tester <tester@example.com>\r\n\
+         Subject: Lunch tomorrow?\r\n\
+         Message-ID: <orig-1@example.com>\r\n\
+         Date: Sat, 16 May 2026 12:00:00 +0000\r\n\
+         \r\n\
+         hi\r\n",
+    )
+    .unwrap();
+
+    let mut store = EmailStore::new(maildir.to_path_buf());
+    let mut inbox = Folder::new("INBOX".into(), maildir.join("INBOX"));
+    let mut email = Email::new(src.clone());
+    let _ = email.parse_headers_only();
+    inbox.add_email(email);
+    inbox.is_loaded = true;
+    store.root_folder.add_subfolder(inbox);
+    store.enter_folder_by_path(&[0]);
+    store.select_email(0);
+
+    let mut cfg = Config {
+        maildir_path: maildir.to_path_buf(),
+        ..Config::default()
+    };
+    for (action, key) in overrides {
+        cfg.keybindings
+            .inner
+            .insert((*action).to_string(), (*key).to_string());
+    }
+
+    let scanner = MaildirScanner::new(maildir.to_path_buf());
+    let mut root = AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, cfg);
+    root.set_active_pane_for_test(ActivePane::Messages);
+    (root, src)
+}
+
+/// Convenience: build a `KeyEvent` from a single ASCII char with no
+/// modifiers. Capital letters work too — `Keymap::normalize` strips
+/// SHIFT at lookup time.
+fn key(c: char) -> crossterm::event::Event {
+    crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char(c),
+        crossterm::event::KeyModifiers::NONE,
+    ))
+}
+
+#[test]
+fn keybindings_override_archive_drives_through_process_event_to_disk_move() {
+    // Override `archive` to `x` (and free `e`'s prior owner `draft_edit`
+    // — the conflict path is asserted in test #5). Pressing `x` in the
+    // Messages pane must walk:
+    //   process_event → keymap.lookup_single('x') → Action::Archive
+    //   → action_to_msg → Msg::Archive → apply_move_action(Archive).
+    // The on-disk file lands in `<maildir>/Archive/cur/`.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, src) = override_root(tmp.path(), "msg-arch", &[("archive", "x")]);
+
+    root.process_event(key('x')).unwrap();
+
+    let archive = tmp.path().join("Archive").join("cur").join("msg-arch");
+    assert!(
+        archive.exists(),
+        "override 'x' must move file to Archive/cur"
+    );
+    assert!(!src.exists(), "original INBOX/cur entry must be gone");
+    assert_eq!(root.undo_stack_len(), 1);
+
+    // The default `a` must no longer trigger Archive — the override
+    // displaced it. Same regression the unit test catches at the keymap
+    // layer, asserted here at the dispatch layer.
+    let (mut root2, src2) = override_root(tmp.path(), "msg-arch2", &[("archive", "x")]);
+    root2.process_event(key('a')).unwrap();
+    assert!(
+        src2.exists(),
+        "default 'a' must be inert after archive is rebound",
+    );
+    assert_eq!(root2.undo_stack_len(), 0);
+}
+
+#[test]
+fn keybindings_override_star_drives_through_process_event_to_filename_flag() {
+    // Star toggles the maildir `F` flag on the cursor email's filename.
+    // Override `star` to `y`; pressing `y` must rename the file from
+    // `:2,S` to `:2,FS`.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, src) = override_root(tmp.path(), "msg-star:2,S", &[("star", "y")]);
+
+    root.process_event(key('y')).unwrap();
+
+    let starred = tmp.path().join("INBOX").join("cur").join("msg-star:2,FS");
+    assert!(starred.exists(), "override 'y' must add the F flag");
+    assert!(!src.exists());
+    let store = root.email_store_handle();
+    let store = store.lock().unwrap();
+    assert!(store.root_folder.subfolders[0].emails[0].is_flagged);
+}
+
+#[test]
+fn keybindings_override_delete_drives_through_process_event_to_trash() {
+    // Delete moves the file to `<maildir>/Trash/cur/`. Override `delete`
+    // to `z`; pressing `z` must land the file under Trash and push an
+    // undo entry.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, src) = override_root(tmp.path(), "msg-del", &[("delete", "z")]);
+
+    root.process_event(key('z')).unwrap();
+
+    let trash = tmp.path().join("Trash").join("cur").join("msg-del");
+    assert!(trash.exists(), "override 'z' must move file to Trash/cur");
+    assert!(!src.exists());
+    assert_eq!(root.undo_stack_len(), 1);
+}
+
+#[test]
+fn keybindings_override_reply_all_drives_through_process_event_to_draft_start() {
+    // ReplyAll defaults to `r`. Rebind to `w` (free in the default
+    // keymap) and verify the runtime starts the draft with reply-all
+    // semantics — the original To recipient must appear on the new To
+    // line, distinguishing from sender-only reply.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-r", &[("reply_all", "w")]);
+
+    root.process_event(key('w')).unwrap();
+
+    assert!(
+        root.has_pending_editor(),
+        "override 'w' must park an editor"
+    );
+    let state = root.draft().state().expect("draft started");
+    assert_eq!(state.reply_kind, ReplyKind::ReplyAll);
+    assert!(
+        state.compose.to.contains("Tester <tester@example.com>"),
+        "reply-all must include the original To recipient, got {:?}",
+        state.compose.to,
+    );
+}
+
+#[test]
+fn keybindings_override_forward_drives_through_process_event_to_draft_start() {
+    // Forward defaults to `f`. Rebind to `i` and verify the runtime
+    // builds a forward template (empty To, `Fwd:` subject prefix).
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-fwd", &[("forward", "i")]);
+
+    root.process_event(key('i')).unwrap();
+
+    assert!(root.has_pending_editor());
+    let state = root.draft().state().expect("draft started");
+    assert_eq!(state.reply_kind, ReplyKind::Forward);
+    assert_eq!(state.compose.to, "");
+    assert_eq!(state.compose.subject, "Fwd: Lunch tomorrow?");
+}
+
+#[test]
+fn keybindings_override_reply_later_drives_through_process_event_to_draft_ready() {
+    // ReplyLater (default `R`) writes an empty-body draft straight to
+    // `<maildir>/Drafts/cur/` without launching an editor. Rebind to
+    // `t` and verify the draft surfaces in `ReadyToSend`.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-rl", &[("reply_later", "t")]);
+
+    root.process_event(key('t')).unwrap();
+
+    assert!(
+        !root.has_pending_editor(),
+        "reply-later must not park an editor",
+    );
+    let state = root.draft().state().expect("draft started");
+    assert_eq!(state.reply_kind, ReplyKind::ReplyLater);
+    assert_eq!(state.status, DraftStatus::ReadyToSend);
+    assert!(
+        tmp.path()
+            .join("Drafts")
+            .join("cur")
+            .read_dir()
+            .map(|it| it.count() == 1)
+            .unwrap_or(false),
+        "exactly one reply-later draft file must land in Drafts/cur/",
+    );
+}
+
+#[test]
+fn keybindings_override_undo_drives_through_process_event_to_stack_pop() {
+    // Undo defaults to `u`. Rebind to `b`; first archive to push a
+    // mutation, then pressing `b` must restore the file to INBOX/cur.
+    let tmp = TempDir::new().unwrap();
+    // Rebind BOTH archive (so we can push a mutation we control without
+    // its default `a`-key) and undo. Archive on `c` keeps the test self
+    // contained.
+    let (mut root, src) = override_root(tmp.path(), "msg-undo", &[("archive", "c"), ("undo", "b")]);
+
+    root.process_event(key('c')).unwrap();
+    let archive = tmp.path().join("Archive").join("cur").join("msg-undo");
+    assert!(archive.exists() && !src.exists());
+    assert_eq!(root.undo_stack_len(), 1);
+
+    root.process_event(key('b')).unwrap();
+    assert!(src.exists(), "override 'b' must restore the file to INBOX");
+    assert!(!archive.exists());
+    assert_eq!(root.undo_stack_len(), 0);
+}
+
+#[test]
+fn default_gr_sequence_still_emits_reply_after_dispatch_centralisation() {
+    // Regression: vu-otn introduces a pending-sequence pre-empt that
+    // routes the second key of a `g`-prefix sequence into the component
+    // BEFORE the central keymap dispatch. If the pre-empt is wrong,
+    // the second key (`r`) would hit the keymap as a single-key
+    // ReplyAll and the sequence (`gr` → Reply) would silently break.
+    //
+    // No overrides — exercises the default keymap end-to-end.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-gr", &[]);
+
+    root.process_event(key('g')).unwrap();
+    assert!(
+        !root.has_pending_editor(),
+        "lone 'g' must arm the prefix, not launch anything",
+    );
+    assert!(root.draft().state().is_none());
+
+    root.process_event(key('r')).unwrap();
+
+    let state = root.draft().state().expect("gr must start a Reply draft");
+    assert_eq!(
+        state.reply_kind,
+        ReplyKind::Reply,
+        "gr must dispatch reply-sender, not reply-all",
     );
 }
 

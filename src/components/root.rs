@@ -36,7 +36,7 @@ use crate::ui::UI;
 use crate::undo::{Mutation, Reversed};
 
 use super::{
-    AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
+    AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, Dir, DraftComponent,
     FolderPickerComponent, FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest,
     MAILDIR_WATCH_DEBOUNCE, MAX_DISPATCH_DEPTH, MaildirWatcherComponent, MessagesComponent, Msg,
     ReplyKind, SearchComponent, notmuch_available, parse_notmuch_files_output,
@@ -899,9 +899,7 @@ impl AppRoot {
             // `Star` (`s`) and `ToggleFlag` (`F`) are VISION.md aliases
             // for the same maildir-F-flag toggle. Both surface as
             // `Msg::ToggleStar` so the rebind story stays uniform.
-            Action::Star | Action::ToggleFlag
-                if matches!(active_pane, ActivePane::Messages) =>
-            {
+            Action::Star | Action::ToggleFlag if matches!(active_pane, ActivePane::Messages) => {
                 Some(Msg::ToggleStar(String::new()))
             }
             Action::Delete if matches!(active_pane, ActivePane::Messages) => {

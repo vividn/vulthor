@@ -738,16 +738,18 @@ mod tests {
     }
 
     #[test]
-    fn on_key_jk_maps_to_message_move() {
+    fn on_key_arrows_map_to_message_move() {
+        // `j`/`k` go through `AppRoot::action_to_msg` (centralised
+        // keymap dispatch) so `[keybindings]` overrides reach the
+        // runtime — see the integration tests in
+        // `phase4_integration_tests.rs`. This component still owns
+        // arrow-key navigation because those keys are not in the
+        // keymap.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 
-        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(j, &ctx), Some(Msg::MessageMove(Dir::Down)));
-        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(k, &ctx), Some(Msg::MessageMove(Dir::Up)));
         let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         assert_eq!(m.on_key(down, &ctx), Some(Msg::MessageMove(Dir::Down)));
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
@@ -774,117 +776,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn on_key_enter_emits_message_open() {
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
+    // Action keys (Enter / a / s / d / m / F / U / Backspace / r / R /
+    // f) are no longer claimed by this component — they resolve through
+    // the central `AppRoot::action_to_msg` keymap dispatch. Coverage
+    // for those bindings lives in `phase4_integration_tests.rs` and the
+    // existing `archive_action_*` / `r_key_dispatches_*` / `q_in_draft_*`
+    // tests in `root.rs::tests`, which drive the full
+    // `process_event → keymap → action_to_msg → apply_root` path.
 
-        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert!(matches!(m.on_key(enter, &ctx), Some(Msg::MessageOpen(_))));
-    }
-
-    #[test]
-    fn on_key_a_s_d_emit_action_messages() {
-        // Direct action keys map to mutation messages carrying an
-        // empty MessageId sentinel.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert!(matches!(m.on_key(a, &ctx), Some(Msg::Archive(_))));
-        let s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
-        assert!(matches!(m.on_key(s, &ctx), Some(Msg::ToggleStar(_))));
-        let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
-        assert!(matches!(m.on_key(d, &ctx), Some(Msg::Delete(_))));
-    }
-
-    #[test]
-    fn on_key_m_emits_open_folder_picker() {
-        // 'm' surfaces the modal folder picker.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-        let key = KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(key, &ctx), Some(Msg::OpenFolderPicker));
-    }
-
-    #[test]
-    fn on_key_capital_f_emits_toggle_star_alias() {
-        // VISION.md lists `F` as a capital-letter alias for `s`. Both
-        // forms — bare and SHIFT-modified, since terminals vary — must
-        // produce ToggleStar.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let f_bare = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE);
-        assert!(matches!(m.on_key(f_bare, &ctx), Some(Msg::ToggleStar(_))));
-        let f_shift = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
-        assert!(matches!(m.on_key(f_shift, &ctx), Some(Msg::ToggleStar(_))));
-    }
-
-    #[test]
-    fn on_key_capital_u_emits_mark_unread() {
-        // `U` marks the cursor email unread.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let u_bare = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE);
-        assert!(matches!(m.on_key(u_bare, &ctx), Some(Msg::MarkUnread(_))));
-        let u_shift = KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT);
-        assert!(matches!(m.on_key(u_shift, &ctx), Some(Msg::MarkUnread(_))));
-    }
-
-    #[test]
-    fn on_key_lowercase_u_does_not_emit_mark_unread() {
-        // Capital-letter bindings must not collide with lowercase
-        // global keys (`u` is the session-undo key in `AppRoot`). The
-        // Messages component returns None for plain `u` so the global
-        // handler can claim it.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let u = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(u, &ctx), None);
-    }
-
-    #[test]
-    fn on_key_backspace_emits_folder_exit_parent() {
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
-        assert_eq!(m.on_key(backspace, &ctx), Some(Msg::FolderExitParent));
-    }
-
-    // --- Phase 2.d: reply key bindings. ---
-
-    #[test]
-    fn on_key_r_emits_reply_all_draft_start() {
-        // Bare 'r' (no preceding 'g') is the default reply-all binding.
-        let store = store_with_one_folder(1);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
-        assert_eq!(
-            m.on_key(r, &ctx),
-            Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new())),
-        );
-    }
+    // --- Phase 2.d: reply sequence (component-local) ---
 
     #[test]
     fn on_key_gr_two_key_sequence_emits_reply_sender_draft_start() {
@@ -910,10 +810,12 @@ mod tests {
     }
 
     #[test]
-    fn on_key_g_then_other_key_clears_prefix_and_falls_through() {
-        // The prefix must not poison subsequent keystrokes. After a
-        // stray `g`, a different key (here `j`) must work normally and
-        // pending_g must be cleared.
+    fn on_key_g_then_other_key_clears_prefix_without_emitting() {
+        // After a stray `g`, a non-sequence key (here `j`) must clear
+        // pending_g and return None from this component — AppRoot then
+        // re-runs the key through the central keymap dispatch (which
+        // resolves `j` → MessageMove). This test only asserts the
+        // component-local side: prefix cleared, nothing emitted.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
@@ -924,42 +826,25 @@ mod tests {
         assert!(m.pending_g);
 
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(j, &ctx), Some(Msg::MessageMove(Dir::Down)));
+        assert_eq!(
+            m.on_key(j, &ctx),
+            None,
+            "non-sequence key after `g` must defer back to centralised dispatch",
+        );
         assert!(!m.pending_g);
     }
 
     #[test]
-    fn on_key_capital_r_emits_reply_later_draft_start() {
-        // 'R' (capital) creates an empty-body reply-later placeholder.
-        let store = store_with_one_folder(1);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
+    fn has_pending_sequence_reflects_g_prefix_state() {
+        // `AppRoot::process_event` reads this getter to decide whether
+        // to route the next key into the component BEFORE the central
+        // keymap dispatch.
         let mut m = MessagesComponent::new();
-
-        let r_bare = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE);
-        assert_eq!(
-            m.on_key(r_bare, &ctx),
-            Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
-        );
-        let r_shift = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT);
-        assert_eq!(
-            m.on_key(r_shift, &ctx),
-            Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
-        );
-    }
-
-    #[test]
-    fn on_key_f_emits_forward_draft_start() {
-        let store = store_with_one_folder(1);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let f = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
-        assert_eq!(
-            m.on_key(f, &ctx),
-            Some(Msg::DraftStart(ReplyKind::Forward, String::new())),
-        );
+        assert!(!m.has_pending_sequence());
+        m.pending_g = true;
+        assert!(m.has_pending_sequence());
+        m.pending_g = false;
+        assert!(!m.has_pending_sequence());
     }
 
     #[test]

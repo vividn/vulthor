@@ -297,16 +297,10 @@ mod tests {
         assert_eq!(c.scroll_offset, 5);
     }
 
-    #[test]
-    fn on_key_jk_maps_to_content_scroll() {
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
-        let mut c = ContentComponent::new();
-        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(c.on_key(j, &ctx), Some(Msg::ContentScroll(Dir::Down, 1)));
-        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(c.on_key(k, &ctx), Some(Msg::ContentScroll(Dir::Up, 1)));
-    }
+    // `j`/`k` now resolve via `AppRoot::action_to_msg` (centralised
+    // keymap dispatch) so `[keybindings]` overrides reach the runtime.
+    // This component still owns arrow + PageUp/PageDown navigation
+    // because those keys are not in the keymap.
 
     #[test]
     fn on_key_arrows_map_to_single_line_scroll() {
