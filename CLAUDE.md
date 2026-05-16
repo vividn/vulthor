@@ -2,15 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Read VISION.md first
+
+**`VISION.md` is the source of truth for *what* Vulthor is building toward.**
+Read it before designing new features or making architectural decisions.
+This file covers the *how* — workflow, testing, code style. It does not
+duplicate vision content; if the two ever disagree, VISION.md wins.
+
 ## Project Overview
 
-Vulthor is a modern TUI (Terminal User Interface) email client with integrated HTML display capabilities. The application is designed to:
+Vulthor is a modern TUI (Terminal User Interface) email client with integrated HTML display capabilities. It targets daily-driver use: read, reply, archive, multi-account, with a local AI classifier suggesting actions. It pairs with `mbsync` (sync) and `notmuch` (search); it composes via `$EDITOR` and sends via `msmtp`. The web pane is a render-only HTML viewer, not a second UI.
 
-- Load configuration files specifying local MailDir locations
-- Navigate through emails in folders using vim-style key bindings
-- Serve HTML versions of selected emails on a specified port (via `-p` flag)
-- Support multiple email accounts (future)
-- Integrate with notmuch for search functionality (future)
+See VISION.md for the full scope, anti-goals, view progression, action keymap, AI design, and roadmap phases.
 
 ## Architecture Decisions & Future Direction
 
@@ -20,12 +23,13 @@ Vulthor is a modern TUI (Terminal User Interface) email client with integrated H
 - **Error Handling**: Uses `Box<dyn Error>` for simplicity
 - **Performance**: Lazy loading of emails for fast startup
 
-### Future Architecture Goals
-1. **Component-Based State Management**: Migrate from global AppState to independent components with message passing
-2. **Full Async**: Long-term goal to unify everything under async for better performance
-3. **Custom Error Types**: Migrate to thiserror-based error handling for better error context
-4. **Account Management**: Add panel to left of folders for multiple MailDir sources
-5. **Search Integration**: Delegate to notmuch for powerful search capabilities
+### Phase-0 Refactor (prerequisite for feature work)
+Per VISION.md, three refactors land **before** new features:
+1. **Custom error types via `thiserror`** — replace `Box<dyn Error>`.
+2. **Component-based state management** — replace global `App` + `AppState` enum with independent components (Accounts, Folders, Messages, Content, Draft) communicating via a message bus.
+3. **Non-blocking I/O in the TUI thread** — move MailDir scans and email parsing off the main thread via `tokio::task::spawn_blocking` or `tokio::fs`.
+
+Do not start feature work (multi-account, compose, etc.) until Phase 0 is landed. See VISION.md for full rationale.
 
 ## Development Philosophy
 
