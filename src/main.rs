@@ -127,8 +127,64 @@ async fn run_app(
         if app_root.tick()? {
             break;
         }
+        // Phase 2.b (vu-0gj): if a draft asked for $EDITOR, suspend the
+        // TUI, hand the terminal to the editor, then restore and post
+        // the parsed Compose back into the dispatch queue. Done between
+        // tick and render so the next frame already shows the new view.
+        if let Some(pending) = app_root.take_pending_editor() {
+            run_editor_modal(terminal, app_root, &pending.template);
+        }
     }
     Ok(())
+}
+
+/// Hand the terminal off to `$EDITOR`, restore TUI state, deliver the
+/// parsed Compose (or an error message) back to AppRoot. Errors here
+/// are surfaced as status messages rather than propagated, so a
+/// misconfigured editor never crashes the TUI.
+fn run_editor_modal(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app_root: &mut AppRoot,
+    template: &str,
+) {
+    // 1. Suspend the TUI so the editor owns the terminal.
+    if let Err(e) = disable_raw_mode() {
+        app_root.deliver_editor_error(format!("disable raw mode: {}", e));
+        return;
+    }
+    if let Err(e) = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    ) {
+        app_root.deliver_editor_error(format!("leave alt screen: {}", e));
+        return;
+    }
+
+    // 2. Run the editor.
+    let result = compose::launch_editor(template);
+
+    // 3. Restore TUI state — even on editor error — so the user lands
+    // back in a usable interface.
+    let re_enter = enable_raw_mode().and_then(|()| {
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )
+    });
+    let _ = terminal.clear();
+
+    // 4. Deliver the outcome. Restore-failure is reported but does not
+    // overwrite an editor-launch failure (both are unlikely; we keep
+    // the editor message because it's the user's actionable signal).
+    match result {
+        Ok(compose) => app_root.deliver_editor_result(compose),
+        Err(e) => app_root.deliver_editor_error(e.to_string()),
+    }
+    if let Err(e) = re_enter {
+        app_root.deliver_editor_error(format!("restore TUI: {}", e));
+    }
 }
 
 #[cfg(test)]

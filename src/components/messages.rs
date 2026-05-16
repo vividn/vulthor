@@ -430,6 +430,15 @@ impl Component for MessagesComponent {
             KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
             // Mark the cursor email unread.
             KeyCode::Char('U') => Some(Msg::MarkUnread(String::new())),
+            // Reply: stage an editor launch. AppRoot resolves the
+            // cursor message and stages `pending_editor`. Phase 2.d
+            // (vu-l1y) will add `gr`/`f`/`R` for ReplyAll/Forward/
+            // ReplyLater; for now `r` covers the simple-reply path so
+            // the Draft-pane round-trip is exercisable end-to-end.
+            KeyCode::Char('r') => Some(Msg::DraftStart(
+                crate::components::ReplyKind::Reply,
+                String::new(),
+            )),
             _ => None,
         }
     }

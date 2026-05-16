@@ -137,10 +137,26 @@ pub enum Msg {
     // Content
     ContentScroll(Dir, usize),
 
-    // Draft
+    // Draft (Phase 2)
+    /// Begin a new draft for the cursor email. AppRoot stages an editor
+    /// template (kind-specific quoted body etc.) and main.rs suspends the
+    /// TUI to launch `$EDITOR`; on success a `DraftEditorExited` is
+    /// enqueued with the resulting [`crate::compose::Compose`].
     DraftStart(ReplyKind, MessageId),
-    DraftEditorExited,
-    DraftSend,
+    /// Editor exited cleanly; payload is the parsed [`crate::compose::Compose`].
+    /// AppRoot installs it on `DraftComponent::state`, switches the view to
+    /// `ContentDraft`, and parks the status at `ReadyToSend`.
+    DraftEditorExited(Box<crate::compose::Compose>),
+    /// Re-enter `$EDITOR` against the in-flight draft. Phase 2.b 'e' key.
+    EditorRelaunch,
+    /// Pipe the current draft through msmtp and file a Sent copy. 'S' key.
+    ComposeSend,
+    /// Persist the current draft to `<maildir>/Drafts/cur/`. 'D' key.
+    DraftSave,
+    /// Drop the in-flight draft and return to the Content view. 'q'/Esc.
+    ComposeDiscard,
+    /// Local scroll inside the Draft pane body. Phase 2.b j/k.
+    DraftScroll(Dir, usize),
 
     // Store mutations (handled by AppRoot/store owner)
     StoreLoadFolder(FolderPath),

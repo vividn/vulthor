@@ -104,6 +104,7 @@ impl View {
             }
         } else {
             match self {
+                View::ContentDraft => Some(View::Content),
                 View::Content => Some(View::MessagesContent),
                 View::MessagesContent => Some(View::FolderMessages),
                 View::FolderMessages => None,
@@ -373,7 +374,12 @@ mod tests {
         assert_eq!(View::FolderMessages.prev_view(false), None);
         assert_eq!(View::Content.next_view(false), None);
         assert_eq!(View::ContentDraft.next_view(false), None);
-        assert_eq!(View::ContentDraft.prev_view(false), None);
+        // Phase 2.b (vu-0gj) wired ContentDraft → Content for `h` so the
+        // user can step back from the Draft pane into the email body.
+        // The forward direction (`l` from Content → ContentDraft) is a
+        // conditional policy in AppRoot, not layout — only triggers
+        // when there's an in-flight draft.
+        assert_eq!(View::ContentDraft.prev_view(false), Some(View::Content));
     }
 
     #[test]

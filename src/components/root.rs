@@ -81,6 +81,19 @@ pub struct AppRoot {
     /// after a successful filesystem op; `Msg::Undo` pops and reverses.
     /// Lost on quit by design (VISION.md "Undo").
     undo_stack: Vec<Mutation>,
+    /// Editor-launch request staged by `Msg::DraftStart` /
+    /// `Msg::EditorRelaunch` (Phase 2.b, vu-0gj). Main loop polls
+    /// `take_pending_editor`, suspends the TUI, runs `$EDITOR`, and
+    /// hands the resulting `Compose` back via `deliver_editor_result`.
+    /// Kept on AppRoot so apply_root stays terminal-agnostic.
+    pending_editor: Option<PendingEditor>,
+}
+
+/// Editor launch payload — what to drop into `$EDITOR` and what to
+/// link the result back to.
+pub struct PendingEditor {
+    pub template: String,
+    pub original_message_id: super::MessageId,
 }
 
 impl AppRoot {
@@ -123,6 +136,7 @@ impl AppRoot {
             headers_loader: HeadersLoader::spawn(scanner),
             loading_folder_paths: HashSet::new(),
             undo_stack: Vec::new(),
+            pending_editor: None,
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -344,6 +358,21 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
+            // 5.b Draft-pane keys go to DraftComponent (Phase 2.b, vu-0gj).
+            // Routed before residual-key handling so 'q' (discard) doesn't
+            // collide with the global Quit binding once the pane is focused.
+            if matches!(self.layout.active_pane, ActivePane::Draft) {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.draft.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain();
+                    return Ok(self.should_quit);
+                }
+            }
             // 6. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
             self.handle_residual_key(key);
             self.drain();
@@ -558,7 +587,14 @@ impl AppRoot {
 
     fn handle_global_key(key: KeyEvent, active_pane: &ActivePane) -> Option<Msg> {
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), m) if m.is_empty() => Some(Msg::Quit),
+            // 'q' is Quit *except* on the Draft pane, where it maps to
+            // ComposeDiscard. Same shape as the 'l' override below
+            // (Phase 2.b, vu-0gj).
+            (KeyCode::Char('q'), m)
+                if m.is_empty() && !matches!(active_pane, ActivePane::Draft) =>
+            {
+                Some(Msg::Quit)
+            }
             (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
             (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
             (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
@@ -636,7 +672,23 @@ impl AppRoot {
             }
             Msg::ViewNext => {
                 let old = self.layout.active_pane;
-                self.layout.next_view();
+                // Draft override (VISION.md § "Drafts & Reply-Later",
+                // vu-0gj): 'l' from the Content view surfaces the Draft
+                // pane when there is an in-flight draft. Layout-level
+                // `next_view` returns None from Content because the
+                // pane is hidden by default; the conditional policy
+                // lives here so layout stays pure.
+                if matches!(self.layout.current_view, View::Content)
+                    && self.draft.has_active_draft()
+                {
+                    self.layout.current_view = View::ContentDraft;
+                    self.layout.active_pane = self
+                        .layout
+                        .current_view
+                        .get_default_active_pane(self.layout.content_pane_hidden);
+                } else {
+                    self.layout.next_view();
+                }
                 let new = self.layout.active_pane;
                 self.on_focus_change(old, new);
             }
@@ -781,6 +833,24 @@ impl AppRoot {
             }
             Msg::Undo => {
                 self.apply_undo();
+            }
+            Msg::DraftStart(kind, msg_id) => {
+                self.apply_draft_start(*kind, msg_id.clone());
+            }
+            Msg::DraftEditorExited(compose) => {
+                self.apply_draft_editor_exited((**compose).clone());
+            }
+            Msg::EditorRelaunch => {
+                self.apply_editor_relaunch();
+            }
+            Msg::ComposeSend => {
+                self.apply_compose_send();
+            }
+            Msg::DraftSave => {
+                self.apply_draft_save();
+            }
+            Msg::ComposeDiscard => {
+                self.apply_compose_discard();
             }
             _ => {}
         }
@@ -1065,6 +1135,260 @@ impl AppRoot {
         }
     }
 
+    /// Stage an editor launch for the cursor message. The main loop
+    /// polls `take_pending_editor`, suspends the TUI, runs `$EDITOR`,
+    /// and posts back a `Msg::DraftEditorExited`. Phase 2.b (vu-l1y will
+    /// replace `default_template` with kind-aware templates that quote
+    /// the original body and pre-fill Cc/References).
+    fn apply_draft_start(&mut self, _kind: super::ReplyKind, msg_id: super::MessageId) {
+        let (in_reply_to, subject) = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => {
+                    let irt = if e.headers.message_id.is_empty() {
+                        None
+                    } else {
+                        Some(e.headers.message_id.clone())
+                    };
+                    let subj = if e.headers.subject.is_empty() {
+                        String::new()
+                    } else if e.headers.subject.to_lowercase().starts_with("re:") {
+                        e.headers.subject.clone()
+                    } else {
+                        format!("Re: {}", e.headers.subject)
+                    };
+                    (irt, subj)
+                }
+                None => {
+                    self.status_message = Some("No message selected".to_string());
+                    return;
+                }
+            }
+        };
+
+        let account = self.resolve_active_account();
+        let mut compose = crate::compose::Compose::new();
+        compose.from = account
+            .as_ref()
+            .map(|a| a.email.clone())
+            .unwrap_or_default();
+        compose.signature = account.as_ref().and_then(|a| a.signature.clone());
+        compose.in_reply_to = in_reply_to;
+        compose.subject = subject;
+
+        let template = crate::compose::default_template(&compose);
+        self.pending_editor = Some(PendingEditor {
+            template,
+            original_message_id: msg_id,
+        });
+        // Footer hint while the editor takes over the terminal.
+        self.status_message = Some("Opening $EDITOR…".to_string());
+    }
+
+    /// Install a freshly-edited Compose on the Draft pane, switch to the
+    /// ContentDraft view, and focus the Draft pane.
+    fn apply_draft_editor_exited(&mut self, compose: crate::compose::Compose) {
+        // Recover the original message id from the pending editor slot.
+        // The main loop clears `pending_editor` by calling
+        // `take_pending_editor` before launch, but reinstates it via
+        // `deliver_editor_result`'s msg_id; here we read from the pane
+        // first (relaunch case) and fall back to the cursor message.
+        let original_id = self
+            .draft
+            .state
+            .as_ref()
+            .map(|s| s.original_message_id.clone())
+            .unwrap_or_else(|| {
+                let store = self.email_store.lock().unwrap();
+                let folder = store.get_current_folder();
+                folder
+                    .emails
+                    .get(self.messages.email_index)
+                    .map(|e| {
+                        if e.headers.message_id.is_empty() {
+                            e.file_path.to_string_lossy().into_owned()
+                        } else {
+                            e.headers.message_id.clone()
+                        }
+                    })
+                    .unwrap_or_default()
+            });
+
+        if self.draft.has_active_draft() {
+            self.draft.replace_compose(compose);
+        } else {
+            self.draft.install_compose(original_id, compose);
+        }
+        let old = self.layout.active_pane;
+        self.layout.current_view = View::ContentDraft;
+        self.layout.active_pane = self
+            .layout
+            .current_view
+            .get_default_active_pane(self.layout.content_pane_hidden);
+        let new = self.layout.active_pane;
+        self.on_focus_change(old, new);
+        self.status_message = Some("Draft ready — S send  D save  e edit  q discard".to_string());
+    }
+
+    /// Re-enter $EDITOR against the in-flight draft body. Stages a
+    /// fresh template from the current Compose; main loop runs it.
+    fn apply_editor_relaunch(&mut self) {
+        let Some(state) = self.draft.state.as_ref() else {
+            self.status_message = Some("No draft to edit".to_string());
+            return;
+        };
+        let template = crate::compose::default_template(&state.compose);
+        self.pending_editor = Some(PendingEditor {
+            template,
+            original_message_id: state.original_message_id.clone(),
+        });
+        self.status_message = Some("Opening $EDITOR…".to_string());
+    }
+
+    /// Pipe the in-flight draft through msmtp and file a Sent copy.
+    /// Clears the pane on success; marks Failed on error so the user
+    /// can retry without losing the draft.
+    fn apply_compose_send(&mut self) {
+        let Some(state) = self.draft.state.as_ref() else {
+            self.status_message = Some("No draft to send".to_string());
+            return;
+        };
+        let compose = state.compose.clone();
+        let Some(account) = self.resolve_active_account() else {
+            self.draft.mark_failed("no account configured".to_string());
+            self.status_message = Some("Cannot send: no account configured".to_string());
+            return;
+        };
+
+        self.draft.mark_sending();
+        match crate::compose::send(&compose, &account) {
+            Ok(sent_path) => {
+                self.draft.clear();
+                let old = self.layout.active_pane;
+                self.layout.current_view = if self.layout.content_pane_hidden {
+                    View::Messages
+                } else {
+                    View::MessagesContent
+                };
+                self.layout.active_pane = self
+                    .layout
+                    .current_view
+                    .get_default_active_pane(self.layout.content_pane_hidden);
+                let new = self.layout.active_pane;
+                self.on_focus_change(old, new);
+                self.status_message = Some(format!(
+                    "Sent → {}",
+                    sent_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| sent_path.display().to_string())
+                ));
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                self.draft.mark_failed(reason.clone());
+                self.status_message = Some(format!("Send failed: {}", reason));
+            }
+        }
+    }
+
+    /// Persist the in-flight draft to `<maildir>/Drafts/cur/`. Leaves
+    /// the pane state intact so the user can keep editing.
+    fn apply_draft_save(&mut self) {
+        let Some(state) = self.draft.state.as_ref() else {
+            self.status_message = Some("No draft to save".to_string());
+            return;
+        };
+        let account = self.resolve_active_account();
+        let maildir_root = account
+            .as_ref()
+            .map(|a| a.maildir_path.clone())
+            .unwrap_or_else(|| self.config.maildir_path.clone());
+
+        let drafts_dir = maildir_root.join("Drafts").join("cur");
+        if let Err(e) = std::fs::create_dir_all(&drafts_dir) {
+            let reason = format!("create {}: {}", drafts_dir.display(), e);
+            self.status_message = Some(format!("Draft save failed: {}", reason));
+            return;
+        }
+        let rfc822 = state.compose.serialize_rfc822();
+        let filename = draft_filename();
+        let path = drafts_dir.join(&filename);
+        match std::fs::write(&path, rfc822) {
+            Ok(()) => {
+                self.status_message = Some(format!("Draft saved → {}", filename));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Draft save failed: {}", e));
+            }
+        }
+    }
+
+    /// Drop the in-flight draft and return to Content. Mirrors the
+    /// ComposeDiscard handling done by `DraftComponent` itself, but
+    /// owns the layout side of the transition.
+    fn apply_compose_discard(&mut self) {
+        // The pane's own handle_msg already cleared `state`; if the
+        // user pressed 'q' from outside the pane we still want the
+        // pane cleared. Idempotent.
+        self.draft.clear();
+        let old = self.layout.active_pane;
+        self.layout.current_view = if self.layout.content_pane_hidden {
+            View::Messages
+        } else {
+            View::Content
+        };
+        self.layout.active_pane = self
+            .layout
+            .current_view
+            .get_default_active_pane(self.layout.content_pane_hidden);
+        let new = self.layout.active_pane;
+        self.on_focus_change(old, new);
+    }
+
+    /// Resolve the AccountConfig to use for outgoing mail. Returns the
+    /// configured default account when accounts are configured; falls
+    /// back to a synthetic single-account `AccountConfig` keyed by the
+    /// store's maildir_path so single-account installs without an
+    /// `[accounts]` block can still send (provided the user's msmtp
+    /// default profile is named "default").
+    fn resolve_active_account(&self) -> Option<crate::config::AccountConfig> {
+        if let Some(idx) = self.config.default_account_index() {
+            let ordered = self.config.ordered_accounts();
+            return Some(ordered[idx].1.clone());
+        }
+        // No `[accounts.*]` configured — synthesize one so send() has
+        // something to chew on. msmtp will use its own default profile.
+        Some(crate::config::AccountConfig {
+            name: "default".to_string(),
+            email: String::new(),
+            maildir_path: self.config.maildir_path.clone(),
+            smtp_command: None,
+            signature: None,
+        })
+    }
+
+    /// Main-loop hook: take ownership of any pending editor launch.
+    /// Returns `None` when there is nothing to do.
+    pub fn take_pending_editor(&mut self) -> Option<PendingEditor> {
+        self.pending_editor.take()
+    }
+
+    /// Main-loop hook: deliver a parsed Compose back into the dispatch
+    /// queue after `$EDITOR` exits.
+    pub fn deliver_editor_result(&mut self, compose: crate::compose::Compose) {
+        self.queue
+            .push_back(Msg::DraftEditorExited(Box::new(compose)));
+    }
+
+    /// Main-loop hook: surface an editor failure as a status message.
+    /// Does not crash the TUI — the user keeps their draft (if any).
+    pub fn deliver_editor_error(&mut self, reason: String) {
+        self.status_message = Some(format!("Editor failed: {}", reason));
+    }
+
     /// Append a mutation to the session undo stack. Called by the
     /// action-key handlers after they have applied the underlying
     /// filesystem op.
@@ -1075,6 +1399,21 @@ impl AppRoot {
     #[cfg(test)]
     pub(crate) fn undo_stack_len(&self) -> usize {
         self.undo_stack.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_pending_editor(&self) -> bool {
+        self.pending_editor.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_pending_editor_for_test(&mut self) -> Option<PendingEditor> {
+        self.pending_editor.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn draft_state_for_test(&self) -> Option<&super::DraftComponent> {
+        Some(&self.draft)
     }
 
     /// Re-point the runtime at a new maildir root. Used by
@@ -1163,6 +1502,16 @@ impl AppRoot {
 }
 
 static THEME: VulthorTheme = VulthorTheme;
+
+/// MailDir-2 filename for a saved draft. `D` = Draft info flag.
+fn draft_filename() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = now.as_secs();
+    let micros = now.subsec_micros();
+    let pid = std::process::id();
+    format!("{}.M{}P{}.vulthor:2,D", secs, micros, pid)
+}
 
 /// The MailDir-move action keys (`a`, `d`, `m`) share every step except
 /// the destination directory and the recorded mutation variant; this
@@ -3048,5 +3397,356 @@ mod tests {
             let inbox = &store.root_folder.subfolders[0];
             assert_eq!(inbox.emails[0].file_path, src);
         }
+    }
+
+    // ---- Phase 2.b: Draft pre-send pane (vu-0gj) ---------------------
+
+    use super::super::draft::DraftStatus;
+    use crate::compose::Compose;
+    use crate::config::AccountConfig;
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Write a `msmtp`-shaped shell stub into `dir` that captures stdin
+    /// and exits with `code`. Returns the script path so callers can
+    /// embed it directly into `AccountConfig.smtp_command`.
+    fn write_stub_msmtp(dir: &std::path::Path, code: i32) -> (PathBuf, PathBuf) {
+        let script = dir.join("msmtp_stub");
+        let captured = dir.join("captured.eml");
+        let body = format!(
+            "#!/bin/sh\ncat > '{}'\nexit {}\n",
+            captured.display(),
+            code,
+        );
+        std::fs::write(&script, body).unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+        (script, captured)
+    }
+
+    fn make_root_with_account(maildir: PathBuf, smtp_command: String) -> AppRoot {
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            "test".to_string(),
+            AccountConfig {
+                name: "test".to_string(),
+                email: "tester@example.com".to_string(),
+                maildir_path: maildir.clone(),
+                smtp_command: Some(smtp_command),
+                signature: None,
+            },
+        );
+        let cfg = Config {
+            maildir_path: maildir.clone(),
+            default_account: Some("test".to_string()),
+            accounts,
+        };
+        let store = EmailStore::new(maildir.clone());
+        let scanner = MaildirScanner::new(maildir);
+        AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, cfg)
+    }
+
+    fn seed_inbox_with_one_email(root: &mut AppRoot, root_path: &std::path::Path) {
+        let inbox_cur = root_path.join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_cur.join("msg1");
+        std::fs::write(&src, "body").unwrap();
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        let mut email = Email::new(src);
+        email.headers.subject = "Hello world".to_string();
+        email.headers.message_id = "<orig@host>".to_string();
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        let handle = root.email_store_handle();
+        let mut store = handle.lock().unwrap();
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+    }
+
+    #[test]
+    fn draft_start_stages_pending_editor_with_in_reply_to_and_resubject() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        root.enqueue(Msg::DraftStart(
+            crate::components::ReplyKind::Reply,
+            String::new(),
+        ));
+        root.drain();
+
+        let pending = root
+            .take_pending_editor_for_test()
+            .expect("pending editor staged");
+        assert!(pending.template.contains("In-Reply-To: <orig@host>"));
+        assert!(pending.template.contains("Subject: Re: Hello world"));
+    }
+
+    #[test]
+    fn draft_start_does_not_double_prefix_re() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        let inbox_cur = temp.path().join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_cur.join("msg1");
+        std::fs::write(&src, "body").unwrap();
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(src);
+        email.headers.subject = "Re: existing thread".to_string();
+        email.headers.message_id = "<orig@host>".to_string();
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        {
+            let handle = root.email_store_handle();
+            let mut store = handle.lock().unwrap();
+            store.root_folder.add_subfolder(inbox);
+            store.enter_folder_by_path(&[0]);
+            store.select_email(0);
+        }
+
+        root.enqueue(Msg::DraftStart(
+            crate::components::ReplyKind::Reply,
+            String::new(),
+        ));
+        root.drain();
+
+        let pending = root.take_pending_editor_for_test().unwrap();
+        assert!(pending.template.contains("Subject: Re: existing thread"));
+        assert!(!pending.template.contains("Re: Re:"));
+    }
+
+    #[test]
+    fn draft_editor_exited_installs_compose_and_switches_view() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        let compose = Compose {
+            to: "a@b".into(),
+            subject: "Re: hi".into(),
+            body: "thanks\n".into(),
+            in_reply_to: Some("<orig@host>".into()),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+
+        let draft = root.draft_state_for_test().unwrap();
+        assert!(draft.has_active_draft());
+        let state = draft.state.as_ref().unwrap();
+        assert_eq!(state.compose.subject, "Re: hi");
+        assert_eq!(state.status, DraftStatus::ReadyToSend);
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+    }
+
+    #[test]
+    fn compose_send_with_stub_smtp_writes_sent_and_clears_pane() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (stub, captured) = write_stub_msmtp(temp.path(), 0);
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            format!("{} -a test", stub.display()),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        // Install a draft directly via the EditorExited path.
+        let compose = Compose {
+            from: "tester@example.com".into(),
+            to: "a@b".into(),
+            subject: "ping".into(),
+            body: "hello\n".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+        assert!(root.draft_state_for_test().unwrap().has_active_draft());
+
+        root.enqueue(Msg::ComposeSend);
+        root.drain();
+
+        // Pane cleared, view returned to messages-content.
+        assert!(!root.draft_state_for_test().unwrap().has_active_draft());
+        assert_eq!(root.layout.current_view, View::MessagesContent);
+
+        // msmtp received the wire bytes.
+        let bytes = std::fs::read_to_string(&captured).unwrap();
+        assert!(bytes.contains("Subject: ping"));
+        // Sent copy on disk.
+        let sent_dir = temp.path().join("Sent").join("cur");
+        let entries: Vec<_> = std::fs::read_dir(&sent_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "exactly one Sent copy");
+    }
+
+    #[test]
+    fn compose_send_failure_marks_pane_failed_and_preserves_draft() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (stub, _captured) = write_stub_msmtp(temp.path(), 1);
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            format!("{} -a test", stub.display()),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        let compose = Compose {
+            from: "tester@example.com".into(),
+            to: "a@b".into(),
+            subject: "ping".into(),
+            body: "hello\n".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+
+        root.enqueue(Msg::ComposeSend);
+        root.drain();
+
+        // Draft preserved so user can retry.
+        let draft = root.draft_state_for_test().unwrap();
+        assert!(draft.has_active_draft(), "draft must survive send failure");
+        assert!(
+            matches!(
+                draft.state.as_ref().unwrap().status,
+                DraftStatus::Failed(_)
+            ),
+            "status must be Failed(reason)"
+        );
+        // No Sent copy on failure.
+        assert!(!temp.path().join("Sent").exists());
+    }
+
+    #[test]
+    fn draft_save_writes_compose_to_drafts_cur() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        let compose = Compose {
+            from: "tester@example.com".into(),
+            to: "a@b".into(),
+            subject: "draft".into(),
+            body: "stash\n".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+
+        root.enqueue(Msg::DraftSave);
+        root.drain();
+
+        let drafts_dir = temp.path().join("Drafts").join("cur");
+        let entries: Vec<_> = std::fs::read_dir(&drafts_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "draft saved to Drafts/cur/");
+        let entry = entries.into_iter().next().unwrap().unwrap();
+        let body = std::fs::read_to_string(entry.path()).unwrap();
+        assert!(body.contains("Subject: draft"));
+        // DraftSave preserves the in-flight pane state.
+        assert!(root.draft_state_for_test().unwrap().has_active_draft());
+    }
+
+    #[test]
+    fn compose_discard_clears_pane_and_returns_to_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        let compose = Compose {
+            subject: "x".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+
+        root.enqueue(Msg::ComposeDiscard);
+        root.drain();
+
+        assert!(!root.draft_state_for_test().unwrap().has_active_draft());
+        assert_eq!(root.layout.current_view, View::Content);
+    }
+
+    #[test]
+    fn editor_relaunch_restages_pending_editor_with_current_compose() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        let compose = Compose {
+            subject: "v1".into(),
+            body: "first pass\n".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+        // Clear any pending_editor that may have been left over.
+        let _ = root.take_pending_editor_for_test();
+
+        root.enqueue(Msg::EditorRelaunch);
+        root.drain();
+
+        assert!(root.has_pending_editor());
+        let pending = root.take_pending_editor_for_test().unwrap();
+        assert!(pending.template.contains("Subject: v1"));
+        assert!(pending.template.contains("first pass"));
+    }
+
+    #[test]
+    fn view_next_from_content_with_active_draft_moves_to_content_draft() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_account(
+            temp.path().to_path_buf(),
+            "/bin/true".to_string(),
+        );
+        seed_inbox_with_one_email(&mut root, temp.path());
+
+        // Install a draft, switch back to Content first.
+        let compose = Compose {
+            subject: "x".into(),
+            ..Compose::new()
+        };
+        root.enqueue(Msg::DraftEditorExited(Box::new(compose)));
+        root.drain();
+        root.layout.current_view = View::Content;
+        root.layout.active_pane = ActivePane::Content;
+
+        root.enqueue(Msg::ViewNext);
+        root.drain();
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+    }
+
+    #[test]
+    fn view_next_from_content_without_draft_is_unchanged() {
+        let mut root = make_root();
+        root.layout.current_view = View::Content;
+        root.layout.active_pane = ActivePane::Content;
+
+        root.enqueue(Msg::ViewNext);
+        root.drain();
+
+        assert!(matches!(
+            root.layout.current_view,
+            View::Content | View::MessagesContent
+        ));
     }
 }

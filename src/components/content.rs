@@ -190,6 +190,13 @@ impl Component for ContentComponent {
             KeyCode::Up => Some(Msg::ContentScroll(Dir::Up, 1)),
             KeyCode::PageDown => Some(Msg::ContentScroll(Dir::Down, PAGE_SCROLL_STEP)),
             KeyCode::PageUp => Some(Msg::ContentScroll(Dir::Up, PAGE_SCROLL_STEP)),
+            // Reply from Content. Mirrors the Messages-pane binding so
+            // the user can press 'r' anywhere a message is in focus.
+            // vu-l1y will extend with gr/f/R.
+            KeyCode::Char('r') => Some(Msg::DraftStart(
+                crate::components::ReplyKind::Reply,
+                String::new(),
+            )),
             _ => None,
         }
     }
