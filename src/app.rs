@@ -390,9 +390,14 @@ impl App {
         match self.active_pane {
             ActivePane::Folders => None, // Show welcome screen when browsing folders
             ActivePane::Messages | ActivePane::Content | ActivePane::Attachments => {
-                // Serve email when focused on email-related panes
-                // Use fully loaded version for web serving to include body content
-                self.email_store.get_selected_email()
+                // Best-effort full load so the response includes body content,
+                // but don't withhold the email from the web pane if loading
+                // fails — the pane→serving contract is determined by pane +
+                // selection, not by I/O success.
+                if let Some(email) = self.email_store.get_selected_email_mut() {
+                    let _ = email.ensure_fully_loaded();
+                }
+                self.email_store.get_selected_email_headers()
             }
         }
     }
