@@ -1,9 +1,8 @@
-mod app;
 mod components;
 mod config;
 mod email;
 mod error;
-mod input;
+mod layout;
 mod maildir;
 mod theme;
 mod ui;
@@ -12,7 +11,6 @@ mod web;
 #[cfg(test)]
 mod test_fixtures;
 
-use app::{App, SharedAppState};
 use clap::Parser;
 use components::{AppRoot, FolderScannerHandle};
 use config::{CliArgs, Config};
@@ -34,10 +32,8 @@ use web::WebServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse command line arguments
     let args = CliArgs::parse();
 
-    // Load configuration
     let mut config = match Config::load(args.config_path).await {
         Ok(config) => config,
         Err(e) => {
@@ -47,32 +43,30 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Override maildir path if provided via CLI
     if let Some(maildir_path) = args.maildir_path {
         config.maildir_path = maildir_path;
     }
 
-    // Phase 0.3.4 (vu-w9i): the folder-structure scan moved off the
-    // main thread. We start the worker here but do NOT block on it;
-    // the TUI comes up immediately and renders a splash until the
-    // scan reply lands inside `AppRoot::drain_scanned_folders`.
+    // Phase 0.3.4 (vu-w9i): folder-structure scan runs off the main thread.
+    // We start the worker but do NOT block; the TUI comes up immediately and
+    // renders a splash until the scan reply lands in `drain_scanned_folders`.
     let scanner = MaildirScanner::new(config.maildir_path.clone());
     let folder_scanner_handle = FolderScannerHandle::spawn(config.maildir_path.clone());
 
     let mut email_store = EmailStore::new(config.maildir_path.clone());
     email_store.scanning_folders = true;
-    let app = App::new(email_store, scanner);
-    let shared_app_state: SharedAppState = Arc::new(Mutex::new(app));
+    let email_store: Arc<Mutex<EmailStore>> = Arc::new(Mutex::new(email_store));
 
-    // Start web server in background
-    let web_server = WebServer::new(args.port, shared_app_state.clone());
+    let mut app_root = AppRoot::new(email_store.clone(), scanner);
+    app_root.attach_folder_scanner(folder_scanner_handle);
+
+    let web_server = WebServer::new(args.port, email_store.clone(), app_root.focused_pane());
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start().await {
             eprintln!("Web server error: {}", e);
         }
     });
 
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -87,8 +81,6 @@ async fn main() -> Result<()> {
     );
     println!("Press 'q' to quit, '?' for help");
 
-    let mut app_root = AppRoot::new(shared_app_state.clone());
-    app_root.attach_folder_scanner(folder_scanner_handle);
     let result = run_app(&mut terminal, &mut ui, &mut app_root).await;
 
     disable_raw_mode()?;
@@ -129,7 +121,6 @@ async fn run_app(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::AppState;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -145,10 +136,10 @@ mod tests {
 
         let mut email_store = EmailStore::new(config.maildir_path.clone());
         email_store.root_folder = root_folder;
-        let app = App::new(email_store, scanner);
+        let store = Arc::new(Mutex::new(email_store));
+        let app_root = AppRoot::new(store, scanner);
 
-        assert!(!app.should_quit);
-        assert!(matches!(app.state, AppState::FolderView));
+        assert!(!app_root.should_quit());
     }
 
     #[tokio::test]

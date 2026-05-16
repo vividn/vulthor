@@ -402,6 +402,27 @@ impl EmailStore {
         self.get_selected_email()
     }
 
+    /// Resolve the email the web pane should serve given the TUI's currently
+    /// focused pane. Returns `None` for top-level browse panes (Folders,
+    /// Accounts) so the web pane shows the welcome screen instead; for the
+    /// email-bearing panes (Messages/Content/Attachments/Draft) we best-
+    /// effort full-load the selected email so the response includes a body.
+    /// Body parsing happens on the web request thread, not the TUI, so this
+    /// is OK to call from the axum handler.
+    ///
+    /// `vu-7r1`: replaces the legacy `App::get_current_email_for_web`. The
+    /// focused-pane signal travels from AppRoot to the web server via an
+    /// `Arc<AtomicU8>` (see `crate::layout::ActivePane::{to_u8, from_u8}`).
+    pub fn current_email_for_web(&mut self, pane: crate::layout::ActivePane) -> Option<&Email> {
+        if !pane.serves_email() {
+            return None;
+        }
+        if let Some(email) = self.get_selected_email_mut() {
+            let _ = email.ensure_fully_loaded();
+        }
+        self.get_selected_email_headers()
+    }
+
     /// Get currently selected email mutably
     pub fn get_selected_email_mut(&mut self) -> Option<&mut Email> {
         let selected = self.selected_email;

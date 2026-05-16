@@ -51,6 +51,10 @@ pub enum Msg {
     ToggleContentPane,
     FocusNext,
     FocusPrev,
+    /// AppRoot publishes the new focused pane after every focus change.
+    /// The web server reads this signal via `Arc<AtomicU8>` and decides
+    /// between serving the selected email and the welcome screen. vu-7r1.
+    FocusChanged(crate::layout::ActivePane),
 
     // Accounts (Phase 1, scaffold now)
     AccountSelect(AccountId),

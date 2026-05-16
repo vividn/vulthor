@@ -1,14 +1,14 @@
-use crate::app::{ActivePane, App, AppState, View};
 use crate::components::{
     AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FoldersComponent,
     MessagesComponent,
 };
 use crate::config::Config;
-use crate::email::EmailLoadState;
+use crate::email::{EmailLoadState, EmailStore};
+use crate::layout::{self, ActivePane, Layout, View};
 use crate::theme::VulthorTheme;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout as RLayout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
@@ -35,7 +35,10 @@ impl UI {
     pub fn draw(
         &mut self,
         f: &mut Frame,
-        app: &mut App,
+        store: &mut EmailStore,
+        layout: &Layout,
+        status_message: &Option<String>,
+        help_visible: bool,
         folders: &FoldersComponent,
         messages: &MessagesComponent,
         content: &ContentComponent,
@@ -43,22 +46,22 @@ impl UI {
         draft: &DraftComponent,
     ) {
         let size = f.area();
-
-        match app.state {
-            AppState::Help => {
-                self.draw_help_screen(f, size);
-            }
-            _ => {
-                self.draw_main_layout(f, app, folders, messages, content, accounts, draft, size);
-            }
+        if help_visible {
+            self.draw_help_screen(f, size);
+            return;
         }
+        self.draw_main_layout(
+            f, store, layout, folders, messages, content, accounts, draft, size,
+        );
+        self.draw_status_bar(f, layout, status_message, size);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn draw_main_layout(
         &mut self,
         f: &mut Frame,
-        app: &mut App,
+        store: &mut EmailStore,
+        lay: &Layout,
         folders: &FoldersComponent,
         messages: &MessagesComponent,
         content: &ContentComponent,
@@ -66,158 +69,138 @@ impl UI {
         draft: &DraftComponent,
         area: Rect,
     ) {
-        match app.current_view {
+        match lay.current_view {
             View::FolderMessages => {
-                // Two panes: folders and messages
-                let chunks = Layout::default()
+                let chunks = RLayout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
-                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
+                let is_folders_active = matches!(lay.active_pane, ActivePane::Folders);
+                let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
 
                 let theme = VulthorTheme;
                 let config = Config::default();
                 let ctx = Ctx {
                     theme: &theme,
                     config: &config,
-                    store: &app.email_store,
+                    store,
                 };
                 folders.render(f, chunks[0], is_folders_active, &ctx);
-                Self::draw_messages_pane(f, app, messages, chunks[1], is_messages_active);
+                Self::draw_messages_pane(f, store, lay, messages, chunks[1], is_messages_active);
             }
             View::MessagesContent => {
-                // Two panes: messages and content
-                let chunks = Layout::default()
+                let chunks = RLayout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
-                let is_content_active = matches!(app.active_pane, ActivePane::Content);
+                let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
+                let is_content_active = matches!(lay.active_pane, ActivePane::Content);
 
-                Self::draw_messages_pane(f, app, messages, chunks[0], is_messages_active);
-                Self::render_content_pane(f, app, content, chunks[1], is_content_active);
+                Self::draw_messages_pane(f, store, lay, messages, chunks[0], is_messages_active);
+                Self::render_content_pane(f, store, content, chunks[1], is_content_active);
             }
             View::Content => {
-                // Single pane: content only
-                let is_content_active = matches!(app.active_pane, ActivePane::Content);
-                Self::render_content_pane(f, app, content, area, is_content_active);
+                let is_content_active = matches!(lay.active_pane, ActivePane::Content);
+                Self::render_content_pane(f, store, content, area, is_content_active);
             }
             View::Messages => {
-                // Single pane: messages only (when content hidden)
-                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
-                Self::draw_messages_pane(f, app, messages, area, is_messages_active);
+                let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
+                Self::draw_messages_pane(f, store, lay, messages, area, is_messages_active);
             }
             View::MessagesAttachments => {
-                // Two panes: messages and attachments
-                let chunks = Layout::default()
+                let chunks = RLayout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_messages_active = matches!(app.active_pane, ActivePane::Messages);
-                let is_attachments_active = matches!(app.active_pane, ActivePane::Attachments);
+                let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
+                let is_attachments_active = matches!(lay.active_pane, ActivePane::Attachments);
 
-                Self::draw_messages_pane(f, app, messages, chunks[0], is_messages_active);
-                self.draw_attachments_pane(f, app, chunks[1], is_attachments_active);
+                Self::draw_messages_pane(f, store, lay, messages, chunks[0], is_messages_active);
+                self.draw_attachments_pane(f, store, lay, chunks[1], is_attachments_active);
             }
-            // Phase 0.2.4 scaffolds (vu-501). The View variants exist so
-            // Phase 1/2 can wire them into the h/l navigation chain
-            // without re-shuffling enum slots. Until then the runtime
-            // does not put `current_view` into either of these states,
-            // but `ui.rs` paints the placeholders so tests (and a
-            // forced View injection) render meaningfully.
             View::AccountsFolders => {
-                let chunks = Layout::default()
+                let chunks = RLayout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_accounts_active = matches!(app.active_pane, ActivePane::Accounts);
-                let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
+                let is_accounts_active = matches!(lay.active_pane, ActivePane::Accounts);
+                let is_folders_active = matches!(lay.active_pane, ActivePane::Folders);
 
                 let theme = VulthorTheme;
                 let config = Config::default();
                 let ctx = Ctx {
                     theme: &theme,
                     config: &config,
-                    store: &app.email_store,
+                    store,
                 };
                 accounts.render(f, chunks[0], is_accounts_active, &ctx);
                 folders.render(f, chunks[1], is_folders_active, &ctx);
             }
             View::ContentDraft => {
-                let chunks = Layout::default()
+                let chunks = RLayout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(area);
 
-                let is_content_active = matches!(app.active_pane, ActivePane::Content);
-                let is_draft_active = matches!(app.active_pane, ActivePane::Draft);
+                let is_content_active = matches!(lay.active_pane, ActivePane::Content);
+                let is_draft_active = matches!(lay.active_pane, ActivePane::Draft);
 
-                Self::render_content_pane(f, app, content, chunks[0], is_content_active);
+                Self::render_content_pane(f, store, content, chunks[0], is_content_active);
                 let theme = VulthorTheme;
                 let config = Config::default();
                 let ctx = Ctx {
                     theme: &theme,
                     config: &config,
-                    store: &app.email_store,
+                    store,
                 };
                 draft.render(f, chunks[1], is_draft_active, &ctx);
             }
         }
-
-        // Draw status bar
-        self.draw_status_bar(f, app, area);
     }
 
-    /// Delegate Messages-pane drawing to `MessagesComponent`. Stays a
-    /// `UI`-side helper so the view-aware folder pick (`FolderMessages`
-    /// shows the *selected* folder; every other view shows the current
-    /// one) lives next to the rest of the layout decisions in `ui.rs`.
     fn draw_messages_pane(
         f: &mut Frame,
-        app: &mut App,
+        store: &EmailStore,
+        lay: &Layout,
         messages: &MessagesComponent,
         area: Rect,
         is_active: bool,
     ) {
-        let folder_to_display = match app.current_view {
-            View::FolderMessages => app
-                .get_selected_folder()
-                .unwrap_or_else(|| app.email_store.get_current_folder()),
-            _ => app.email_store.get_current_folder(),
-        };
-
-        let folder_path = match app.current_view {
+        let selected_folder = match lay.current_view {
             View::FolderMessages => {
-                let root_folder = &app.email_store.root_folder;
-                if let Some(path_indices) = crate::input::get_folder_path_from_display_index(
-                    root_folder,
-                    app.selection.folder_index,
-                ) {
-                    app.email_store.get_folder_path_for_indices(&path_indices)
+                let root = &store.root_folder;
+                let folder_path =
+                    layout::get_folder_path_from_display_index(root, lay.selection.folder_index);
+                folder_path.and_then(|p| store.get_folder_at_path(&p))
+            }
+            _ => None,
+        };
+        let folder_to_display = selected_folder.unwrap_or_else(|| store.get_current_folder());
+
+        let folder_path_str = match lay.current_view {
+            View::FolderMessages => {
+                let root = &store.root_folder;
+                if let Some(path_indices) =
+                    layout::get_folder_path_from_display_index(root, lay.selection.folder_index)
+                {
+                    store.get_folder_path_for_indices(&path_indices)
                 } else {
-                    app.email_store.get_folder_path()
+                    store.get_folder_path()
                 }
             }
-            _ => app.email_store.get_folder_path(),
+            _ => store.get_folder_path(),
         };
 
-        messages.render_with_folder(f, area, is_active, folder_to_display, &folder_path);
+        messages.render_with_folder(f, area, is_active, folder_to_display, &folder_path_str);
     }
 
-    /// Delegate Content-pane drawing to `ContentComponent`. The pane
-    /// pulls the selected email straight from `Ctx::store`, so unlike
-    /// the Messages pane there's no view-specific folder pick to wire
-    /// through here — `ui.rs` only builds the `Ctx` and hands off.
-    /// Phase 0.2.3b (vu-iva) removed the inline `draw_content_pane`
-    /// that mutated `app.selection.scroll_offset`.
     fn render_content_pane(
         f: &mut Frame,
-        app: &App,
+        store: &EmailStore,
         content: &ContentComponent,
         area: Rect,
         is_active: bool,
@@ -227,21 +210,27 @@ impl UI {
         let ctx = Ctx {
             theme: &theme,
             config: &config,
-            store: &app.email_store,
+            store,
         };
         content.render(f, area, is_active, &ctx);
     }
 
-    fn draw_attachments_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
+    fn draw_attachments_pane(
+        &mut self,
+        f: &mut Frame,
+        store: &EmailStore,
+        lay: &Layout,
+        area: Rect,
+        is_active: bool,
+    ) {
         let border_style = if is_active {
             Style::default().fg(VulthorTheme::ACCENT_LIGHT)
         } else {
             Style::default()
         };
 
-        if let Some(email) = app.email_store.get_selected_email() {
+        if let Some(email) = store.get_selected_email() {
             if !email.attachments.is_empty() {
-                // Create attachment list
                 let attachment_items: Vec<ListItem> = email
                     .attachments
                     .iter()
@@ -279,15 +268,11 @@ impl UI {
                         .add_modifier(Modifier::BOLD),
                 );
 
-                // Update selection state
                 self.attachment_list_state
-                    .select(Some(app.selection.attachment_index));
+                    .select(Some(lay.selection.attachment_index));
 
                 f.render_stateful_widget(list, area, &mut self.attachment_list_state);
             } else {
-                // `email.attachments` is populated as a side effect of full-body parse.
-                // Distinguish "still loading" from "no attachments" so the user doesn't
-                // see a false negative for a multipart message in flight.
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .style(border_style)
@@ -304,7 +289,6 @@ impl UI {
                 f.render_widget(paragraph, area);
             }
         } else {
-            // No email selected
             let block = Block::default()
                 .borders(Borders::ALL)
                 .style(border_style)
@@ -318,7 +302,13 @@ impl UI {
         }
     }
 
-    fn draw_status_bar(&mut self, f: &mut Frame, app: &App, area: Rect) {
+    fn draw_status_bar(
+        &mut self,
+        f: &mut Frame,
+        lay: &Layout,
+        status_message: &Option<String>,
+        area: Rect,
+    ) {
         let status_area = Rect {
             x: area.x,
             y: area.bottom() - 1,
@@ -328,10 +318,9 @@ impl UI {
 
         let mut status_text = vec![];
 
-        // Add key bindings help
         let help_text = {
             let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
-            let content_toggle = if app.content_pane_hidden {
+            let content_toggle = if lay.content_pane_hidden {
                 " | M-c: Show Content"
             } else {
                 " | M-c: Hide Content"
@@ -344,11 +333,10 @@ impl UI {
             Style::default().fg(VulthorTheme::GRAY_DARK),
         ));
 
-        // Add status message if present
-        if let Some(ref message) = app.status_message {
+        if let Some(message) = status_message {
             status_text.push(Span::raw(" | "));
             status_text.push(Span::styled(
-                message,
+                message.clone(),
                 Style::default().fg(VulthorTheme::WARNING),
             ));
         }

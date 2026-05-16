@@ -1,5 +1,6 @@
-use crate::app::SharedAppState;
+use crate::email::EmailStore;
 use crate::error::Result;
+use crate::layout::ActivePane;
 use axum::{
     Router,
     extract::State,
@@ -10,9 +11,27 @@ use axum::{
 use futures::stream::{self, Stream};
 use serde::Serialize;
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
+
+/// State threaded through axum handlers. vu-7r1: web server no longer
+/// shares the legacy `App` god object — it holds only the email store
+/// (locked when reading the current selection) and an atomic encoding
+/// of the focused pane (no lock needed for the focus check).
+#[derive(Clone)]
+pub struct WebState {
+    pub email_store: Arc<Mutex<EmailStore>>,
+    pub focused_pane: Arc<AtomicU8>,
+}
+
+impl WebState {
+    fn focused_pane(&self) -> ActivePane {
+        ActivePane::from_u8(self.focused_pane.load(Ordering::Relaxed))
+    }
+}
 
 #[derive(Serialize)]
 struct EmailData {
@@ -35,12 +54,22 @@ struct AttachmentData {
 
 pub struct WebServer {
     port: u16,
-    app_state: SharedAppState,
+    state: WebState,
 }
 
 impl WebServer {
-    pub fn new(port: u16, app_state: SharedAppState) -> Self {
-        Self { port, app_state }
+    pub fn new(
+        port: u16,
+        email_store: Arc<Mutex<EmailStore>>,
+        focused_pane: Arc<AtomicU8>,
+    ) -> Self {
+        Self {
+            port,
+            state: WebState {
+                email_store,
+                focused_pane,
+            },
+        }
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -53,7 +82,7 @@ impl WebServer {
             .route("/vulthor_letters.png", get(serve_letters))
             .route("/events", get(email_events))
             .route("/api/current-email", get(get_current_email_json))
-            .with_state(self.app_state.clone());
+            .with_state(self.state.clone());
 
         let addr = format!("127.0.0.1:{}", self.port);
         println!("Web server starting on http://{}", addr);
@@ -65,9 +94,10 @@ impl WebServer {
     }
 }
 
-async fn serve_email(State(app_state): State<SharedAppState>) -> Response {
-    let mut app = match app_state.lock() {
-        Ok(app) => app,
+async fn serve_email(State(state): State<WebState>) -> Response {
+    let pane = state.focused_pane();
+    let mut store = match state.email_store.lock() {
+        Ok(s) => s,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -77,7 +107,7 @@ async fn serve_email(State(app_state): State<SharedAppState>) -> Response {
         }
     };
 
-    if let Some(email) = app.get_current_email_for_web() {
+    if let Some(email) = store.current_email_for_web(pane) {
         let html = generate_email_html(email);
         Html(html).into_response()
     } else {
@@ -110,22 +140,21 @@ async fn serve_letters() -> Response {
 }
 
 async fn email_events(
-    State(app_state): State<SharedAppState>,
+    State(state): State<WebState>,
 ) -> Sse<impl Stream<Item = std::result::Result<axum::response::sse::Event, Infallible>>> {
     let stream = stream::unfold(None, move |last_email_id| {
-        let app_state = app_state.clone();
+        let state = state.clone();
         async move {
             loop {
-                sleep(Duration::from_millis(200)).await; // Faster polling for better responsiveness
+                sleep(Duration::from_millis(200)).await;
 
                 let current_email_id = {
-                    let mut app = app_state.lock().ok()?;
-                    // Create a unique identifier that changes when displayable content changes
-                    let folder_index = app.selection.folder_index;
-                    let email_index = app.selection.email_index;
-                    let has_email = app.get_current_email_for_web().is_some();
-
-                    format!("{}:{}:{}", folder_index, email_index, has_email)
+                    let pane = state.focused_pane();
+                    let mut store = state.email_store.lock().ok()?;
+                    let folder_indices = store.current_folder.clone();
+                    let email_index = store.selected_email.unwrap_or(usize::MAX);
+                    let has_email = store.current_email_for_web(pane).is_some();
+                    format!("{:?}:{}:{}", folder_indices, email_index, has_email)
                 };
 
                 if last_email_id.as_ref() != Some(&current_email_id) {
@@ -145,9 +174,10 @@ async fn email_events(
     )
 }
 
-async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Response {
-    let mut app = match app_state.lock() {
-        Ok(app) => app,
+async fn get_current_email_json(State(state): State<WebState>) -> Response {
+    let pane = state.focused_pane();
+    let mut store = match state.email_store.lock() {
+        Ok(s) => s,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -166,11 +196,11 @@ async fn get_current_email_json(State(app_state): State<SharedAppState>) -> Resp
         }
     };
 
-    let folder_index = app.selection.folder_index;
-    let email_index = app.selection.email_index;
-    let current_email = app.get_current_email_for_web();
+    let folder_indices = store.current_folder.clone();
+    let email_index = store.selected_email.unwrap_or(usize::MAX);
+    let current_email = store.current_email_for_web(pane);
     let has_email = current_email.is_some();
-    let email_id = format!("{}:{}:{}", folder_index, email_index, has_email);
+    let email_id = format!("{:?}:{}:{}", folder_indices, email_index, has_email);
 
     if let Some(email) = current_email {
         let body_content = if let Some(html) = &email.body_html {

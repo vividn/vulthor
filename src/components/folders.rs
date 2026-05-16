@@ -179,7 +179,7 @@ impl Component for FoldersComponent {
                 // *already* inside the selected folder, 'l' advances the
                 // view; otherwise it enters the folder. This preserves
                 // the pre-refactor UX (see `input.rs` legacy branch).
-                let path = crate::input::get_folder_path_from_display_index(
+                let path = crate::layout::get_folder_path_from_display_index(
                     &ctx.store.root_folder,
                     self.folder_index,
                 );
