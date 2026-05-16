@@ -315,10 +315,7 @@ impl MaildirScanner {
                     continue;
                 }
                 let fname = file.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                if fname.starts_with('.')
-                    || fname.ends_with(".lock")
-                    || fname.ends_with(".tmp")
-                {
+                if fname.starts_with('.') || fname.ends_with(".lock") || fname.ends_with(".tmp") {
                     continue;
                 }
                 let Ok(content) = fs::read(&file) else {
@@ -363,20 +360,22 @@ impl MaildirScanner {
 /// whitespace. `mail-parser` usually returns the bare id but defensively
 /// strip in case a malformed draft slips through.
 fn normalize_msg_id(s: &str) -> String {
-    s.trim().trim_start_matches('<').trim_end_matches('>').to_string()
+    s.trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string()
 }
 
 fn first_message_id(h: &HeaderValue) -> Option<String> {
     match h {
         HeaderValue::Text(s) => {
             let n = normalize_msg_id(s);
-            if n.is_empty() {
-                None
-            } else {
-                Some(n)
-            }
+            if n.is_empty() { None } else { Some(n) }
         }
-        HeaderValue::TextList(list) => list.first().map(|s| normalize_msg_id(s)).filter(|s| !s.is_empty()),
+        HeaderValue::TextList(list) => list
+            .first()
+            .map(|s| normalize_msg_id(s))
+            .filter(|s| !s.is_empty()),
         _ => None,
     }
 }
@@ -385,13 +384,12 @@ fn last_message_id(h: &HeaderValue) -> Option<String> {
     match h {
         HeaderValue::Text(s) => {
             let n = normalize_msg_id(s);
-            if n.is_empty() {
-                None
-            } else {
-                Some(n)
-            }
+            if n.is_empty() { None } else { Some(n) }
         }
-        HeaderValue::TextList(list) => list.last().map(|s| normalize_msg_id(s)).filter(|s| !s.is_empty()),
+        HeaderValue::TextList(list) => list
+            .last()
+            .map(|s| normalize_msg_id(s))
+            .filter(|s| !s.is_empty()),
         _ => None,
     }
 }

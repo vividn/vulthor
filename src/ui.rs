@@ -200,7 +200,14 @@ impl UI {
             _ => store.get_folder_path(),
         };
 
-        messages.render_with_folder(f, area, is_active, folder_to_display, &folder_path_str);
+        messages.render_with_folder(
+            f,
+            area,
+            is_active,
+            folder_to_display,
+            &folder_path_str,
+            &store.drafts,
+        );
     }
 
     fn render_content_pane(

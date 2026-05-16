@@ -77,6 +77,7 @@ impl MessagesComponent {
         focused: bool,
         folder_to_display: &Folder,
         folder_path: &str,
+        drafts: &HashMap<String, DraftInfo>,
     ) {
         // Track the actual visible row count so `handle_msg(MessageMove)`
         // can emit `StoreLoadMore` ahead of the user reaching the tail.
@@ -90,6 +91,7 @@ impl MessagesComponent {
             &folder_to_display.emails,
             area.width.saturating_sub(2) as usize,
             is_sent_folder,
+            drafts,
         );
 
         let style = if focused {
@@ -207,12 +209,55 @@ impl MessagesComponent {
         }
     }
 
+    /// Pick the chip character for an original message based on the
+    /// drafts index (Phase 2.c, vu-nof). `Some('✏')` for an in-progress
+    /// reply, `Some('⏰')` for an empty reply-later placeholder, `None`
+    /// when there's no draft for this id. Pulled out of the renderer so
+    /// it can be tested without a full Frame.
+    pub fn chip_for_message_id(
+        drafts: &HashMap<String, DraftInfo>,
+        message_id: &str,
+    ) -> Option<char> {
+        if message_id.is_empty() {
+            return None;
+        }
+        let info = drafts.get(message_id)?;
+        Some(if info.body_empty { '⏰' } else { '✏' })
+    }
+
     fn build_email_list_with_truncation(
         emails: &[Email],
         available_width: usize,
         is_sent_folder: bool,
+        drafts: &HashMap<String, DraftInfo>,
     ) -> Vec<ListItem<'static>> {
+        emails
+            .iter()
+            .map(|email| {
+                ListItem::new(Line::from(Self::build_email_row_spans(
+                    email,
+                    available_width,
+                    is_sent_folder,
+                    drafts,
+                )))
+            })
+            .collect()
+    }
+
+    /// Build the row's spans for one email. Extracted from
+    /// `build_email_list_with_truncation` so the test suite can inspect
+    /// the rendered glyphs and column widths without going through the
+    /// private `ListItem.content` field.
+    fn build_email_row_spans(
+        email: &Email,
+        available_width: usize,
+        is_sent_folder: bool,
+        drafts: &HashMap<String, DraftInfo>,
+    ) -> Vec<Span<'static>> {
         const UNREAD_WIDTH: usize = 2;
+        // `✏`/`⏰` plus trailing space — reserved even when no chip
+        // present so the From column stays vertically aligned.
+        const CHIP_WIDTH: usize = 2;
         const DATE_WIDTH: usize = 10;
         const ATTACHMENT_WIDTH: usize = 3;
         const SEPARATORS: usize = 8;
@@ -221,61 +266,65 @@ impl MessagesComponent {
         let max_from_width = (available_width * 30) / 100;
         let from_width = min_from_width.max(max_from_width).min(25);
 
-        emails
-            .iter()
-            .map(|email| {
-                let mut style = Style::default();
-                if email.is_unread {
-                    style = style.add_modifier(Modifier::BOLD);
-                }
+        let mut style = Style::default();
+        if email.is_unread {
+            style = style.add_modifier(Modifier::BOLD);
+        }
 
-                let subject_width = available_width
-                    .saturating_sub(UNREAD_WIDTH)
-                    .saturating_sub(from_width)
-                    .saturating_sub(DATE_WIDTH)
-                    .saturating_sub(ATTACHMENT_WIDTH)
-                    .saturating_sub(SEPARATORS);
+        let subject_width = available_width
+            .saturating_sub(UNREAD_WIDTH)
+            .saturating_sub(CHIP_WIDTH)
+            .saturating_sub(from_width)
+            .saturating_sub(DATE_WIDTH)
+            .saturating_sub(ATTACHMENT_WIDTH)
+            .saturating_sub(SEPARATORS);
 
-                let mut spans = vec![];
-                spans.push(Span::styled(if email.is_unread { "•" } else { " " }, style));
-                spans.push(Span::raw(" "));
+        let mut spans = vec![];
+        spans.push(Span::styled(if email.is_unread { "•" } else { " " }, style));
+        spans.push(Span::raw(" "));
 
-                let sender = if is_sent_folder {
-                    Self::extract_email_address(&email.headers.to)
-                } else {
-                    Self::extract_email_address(&email.headers.from)
-                };
-                let truncated_sender = Self::truncate_with_ellipsis(&sender, from_width);
-                let padded_sender = Self::pad_to_width(&truncated_sender, from_width);
-                spans.push(Span::styled(padded_sender, style));
-                spans.push(Span::raw("  "));
+        // Chip slot. Always emits CHIP_WIDTH wide so absent chips don't
+        // shift the From column off by one.
+        let chip_text = match Self::chip_for_message_id(drafts, &email.headers.message_id) {
+            Some(c) => Self::pad_to_width(&c.to_string(), CHIP_WIDTH),
+            None => " ".repeat(CHIP_WIDTH),
+        };
+        spans.push(Span::styled(chip_text, style));
 
-                let subject = if email.headers.subject.is_empty() {
-                    "(No Subject)"
-                } else {
-                    &email.headers.subject
-                };
-                let truncated_subject = Self::truncate_with_ellipsis(subject, subject_width);
-                let padded_subject = Self::pad_to_width(&truncated_subject, subject_width);
-                spans.push(Span::styled(padded_subject, style));
-                spans.push(Span::raw("  "));
+        let sender = if is_sent_folder {
+            Self::extract_email_address(&email.headers.to)
+        } else {
+            Self::extract_email_address(&email.headers.from)
+        };
+        let truncated_sender = Self::truncate_with_ellipsis(&sender, from_width);
+        let padded_sender = Self::pad_to_width(&truncated_sender, from_width);
+        spans.push(Span::styled(padded_sender, style));
+        spans.push(Span::raw("  "));
 
-                spans.push(Span::styled(
-                    if email.has_attachments() {
-                        "📎"
-                    } else {
-                        "  "
-                    },
-                    style,
-                ));
-                spans.push(Span::raw(" "));
+        let subject = if email.headers.subject.is_empty() {
+            "(No Subject)"
+        } else {
+            &email.headers.subject
+        };
+        let truncated_subject = Self::truncate_with_ellipsis(subject, subject_width);
+        let padded_subject = Self::pad_to_width(&truncated_subject, subject_width);
+        spans.push(Span::styled(padded_subject, style));
+        spans.push(Span::raw("  "));
 
-                let date_str = Self::format_email_date(&email.headers.date);
-                spans.push(Span::styled(date_str, style));
+        spans.push(Span::styled(
+            if email.has_attachments() {
+                "📎"
+            } else {
+                "  "
+            },
+            style,
+        ));
+        spans.push(Span::raw(" "));
 
-                ListItem::new(Line::from(spans))
-            })
-            .collect()
+        let date_str = Self::format_email_date(&email.headers.date);
+        spans.push(Span::styled(date_str, style));
+
+        spans
     }
 }
 
@@ -816,13 +865,14 @@ mod tests {
         };
         email.is_unread = true;
         let emails = vec![email];
+        let drafts = HashMap::new();
 
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 80, false).len(),
+            MessagesComponent::build_email_list_with_truncation(&emails, 80, false, &drafts).len(),
             1
         );
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 80, true).len(),
+            MessagesComponent::build_email_list_with_truncation(&emails, 80, true, &drafts).len(),
             1
         );
     }
@@ -839,9 +889,136 @@ mod tests {
         };
         email.is_unread = false;
         let emails = vec![email];
+        let drafts = HashMap::new();
         assert_eq!(
-            MessagesComponent::build_email_list_with_truncation(&emails, 60, false).len(),
+            MessagesComponent::build_email_list_with_truncation(&emails, 60, false, &drafts).len(),
             1
+        );
+    }
+
+    // --- Phase 2.c (vu-nof): chip selection contract. ---
+
+    fn draft(body_empty: bool) -> DraftInfo {
+        DraftInfo {
+            path: PathBuf::from("/tmp/drafts/cur/x"),
+            body_empty,
+        }
+    }
+
+    /// In-progress draft (non-empty body) maps to the `✏` chip;
+    /// reply-later marker (empty body) maps to `⏰`. Lookup by the
+    /// original message's `message_id`.
+    #[test]
+    fn chip_for_message_id_returns_pencil_for_in_progress_drafts() {
+        let mut drafts = HashMap::new();
+        drafts.insert("orig-1@example.com".to_string(), draft(false));
+        assert_eq!(
+            MessagesComponent::chip_for_message_id(&drafts, "orig-1@example.com"),
+            Some('✏'),
+        );
+    }
+
+    #[test]
+    fn chip_for_message_id_returns_alarm_for_reply_later_drafts() {
+        let mut drafts = HashMap::new();
+        drafts.insert("orig-2@example.com".to_string(), draft(true));
+        assert_eq!(
+            MessagesComponent::chip_for_message_id(&drafts, "orig-2@example.com"),
+            Some('⏰'),
+        );
+    }
+
+    /// Without a matching draft, no chip is rendered — and an empty
+    /// message-id must never match (Phase 1.x action-key handlers pass
+    /// an empty-id sentinel before resolving cursor position).
+    #[test]
+    fn chip_for_message_id_returns_none_when_no_draft_or_empty_id() {
+        let mut drafts = HashMap::new();
+        drafts.insert("orig-3@example.com".to_string(), draft(false));
+        assert_eq!(
+            MessagesComponent::chip_for_message_id(&drafts, "nobody@example.com"),
+            None,
+        );
+        assert_eq!(MessagesComponent::chip_for_message_id(&drafts, ""), None);
+    }
+
+    /// Render-path integration: the chip slot is reserved-width, so an
+    /// email *without* a draft and an email *with* a draft must produce
+    /// list rows of the same total visible width. (Same available width
+    /// in, same row width out — alignment guarantee.)
+    #[test]
+    fn build_email_list_reserves_chip_width_even_without_chip() {
+        fn email_for(id: &str) -> Email {
+            let mut e = Email::new(PathBuf::from(format!("/tmp/{}", id)));
+            e.headers = EmailHeaders {
+                from: "a@b.test".to_string(),
+                to: "c@d.test".to_string(),
+                subject: "subject line".to_string(),
+                date: "2024-01-15T10:30:00+00:00".to_string(),
+                message_id: id.to_string(),
+            };
+            e
+        }
+        let with_match = email_for("orig-1@x");
+        let without = email_for("orig-2@x");
+
+        let mut drafts = HashMap::new();
+        drafts.insert("orig-1@x".to_string(), draft(false));
+
+        let with_spans = MessagesComponent::build_email_row_spans(&with_match, 80, false, &drafts);
+        let without_spans = MessagesComponent::build_email_row_spans(&without, 80, false, &drafts);
+
+        let width = |spans: &[Span<'static>]| -> usize {
+            spans.iter().map(|s| s.content.as_ref().width()).sum()
+        };
+        assert_eq!(
+            width(&with_spans),
+            width(&without_spans),
+            "chip-present and chip-absent rows must render at the same width \
+             so the From column stays aligned",
+        );
+    }
+
+    /// The chip character actually shows up in the rendered spans for
+    /// emails that have a matching draft, and the right glyph is used
+    /// per body_empty.
+    #[test]
+    fn build_email_list_emits_pencil_and_alarm_glyphs_per_draft_kind() {
+        fn email_for(id: &str) -> Email {
+            let mut e = Email::new(PathBuf::from(format!("/tmp/{}", id)));
+            e.headers = EmailHeaders {
+                from: "a@b.test".to_string(),
+                to: "c@d.test".to_string(),
+                subject: "s".to_string(),
+                date: "2024-01-15T10:30:00+00:00".to_string(),
+                message_id: id.to_string(),
+            };
+            e
+        }
+        let in_progress = email_for("orig-1@x");
+        let later = email_for("orig-2@x");
+
+        let mut drafts = HashMap::new();
+        drafts.insert("orig-1@x".to_string(), draft(false));
+        drafts.insert("orig-2@x".to_string(), draft(true));
+
+        let row_text = |email: &Email| -> String {
+            MessagesComponent::build_email_row_spans(email, 80, false, &drafts)
+                .into_iter()
+                .map(|s| s.content.into_owned())
+                .collect::<String>()
+        };
+        let in_progress_row = row_text(&in_progress);
+        let later_row = row_text(&later);
+        assert!(
+            in_progress_row.contains('✏'),
+            "in-progress draft must render ✏ chip, row was {:?}",
+            in_progress_row,
+        );
+        assert!(
+            later_row.contains('⏰'),
+            "reply-later draft must render ⏰ chip, row was {:?}",
+            later_row,
         );
     }
 }
