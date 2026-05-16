@@ -2657,4 +2657,359 @@ mod tests {
         assert!(!dst.exists(), "undo must clear the Projects path");
         assert_eq!(root.undo_stack_len(), 0);
     }
+
+    // -----------------------------------------------------------------
+    // Phase 1.g (vu-2y8): integration tests for full action workflows.
+    //
+    // These tests drive AppRoot through realistic multi-step user
+    // flows. The per-feature unit tests above prove each step in
+    // isolation; these are the regression-prevention layer that fails
+    // meaningfully if any of Phase 1.a–1.f regresses.
+    // -----------------------------------------------------------------
+
+    /// Build an AppRoot pointed at `root_path` with a single INBOX
+    /// containing `n` real files in `cur/`. Useful for triage-style
+    /// integration tests that walk the cursor across many emails.
+    fn make_root_with_n_emails(root_path: PathBuf, n: usize) -> (AppRoot, Vec<PathBuf>) {
+        let inbox_cur = root_path.join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+
+        let mut store = EmailStore::new(root_path.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        let mut srcs = Vec::with_capacity(n);
+        for i in 0..n {
+            let name = format!("msg{:02}", i);
+            let path = inbox_cur.join(&name);
+            std::fs::write(&path, format!("body of {}", name)).unwrap();
+            inbox.add_email(Email::new(path.clone()));
+            srcs.push(path);
+        }
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path.clone());
+        let root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        (root, srcs)
+    }
+
+    /// Triage inbox: alternate Archive ('a') and Delete ('d') across
+    /// ten cursored emails, advance the cursor between each action,
+    /// then press 'u' ten times to reverse the whole batch. Verifies
+    /// every file lands in the right destination, the in-memory
+    /// `file_path` mirror tracks each move, and the undo stack
+    /// unwinds LIFO back to the starting filesystem state.
+    #[test]
+    fn triage_inbox_archive_and_delete_then_undo_all_ten() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, srcs) = make_root_with_n_emails(temp.path().to_path_buf(), 10);
+        root.layout.active_pane = ActivePane::Messages;
+
+        let archive_dir = temp.path().join("Archive").join("cur");
+        let trash_dir = temp.path().join("Trash").join("cur");
+
+        // 10 actions: even indices archive, odd indices delete.
+        // Bump the messages cursor between actions so each press
+        // targets the next email — `apply_move_action` rewrites
+        // `file_path` but leaves the email in the in-memory list.
+        for i in 0..10 {
+            root.messages.email_index = i;
+            let key = if i % 2 == 0 { 'a' } else { 'd' };
+            let ev = Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+            root.process_event(ev).unwrap();
+        }
+
+        // Every original file is gone; archived/deleted copies exist.
+        for (i, src) in srcs.iter().enumerate() {
+            assert!(!src.exists(), "src {:?} should be moved", src);
+            let dst_dir = if i % 2 == 0 { &archive_dir } else { &trash_dir };
+            let dst = dst_dir.join(src.file_name().unwrap());
+            assert!(dst.exists(), "expected {:?} after triage step {}", dst, i);
+        }
+        assert_eq!(root.undo_stack_len(), 10);
+
+        // In-memory mirror: each email's file_path tracks its new home.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            let inbox = &store.root_folder.subfolders[0];
+            for (i, email) in inbox.emails.iter().enumerate() {
+                let dst_dir = if i % 2 == 0 { &archive_dir } else { &trash_dir };
+                let expected = dst_dir.join(srcs[i].file_name().unwrap());
+                assert_eq!(email.file_path, expected, "email {} mirror lags", i);
+            }
+        }
+
+        // Ten undos must reverse every move, LIFO. After all 10
+        // pops, every file is back in INBOX/cur and the stack is
+        // empty.
+        for _ in 0..10 {
+            let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+            root.process_event(u).unwrap();
+        }
+
+        assert_eq!(root.undo_stack_len(), 0);
+        for src in &srcs {
+            assert!(src.exists(), "undo must restore {:?}", src);
+        }
+        // Destinations are clean.
+        for src in &srcs {
+            let name = src.file_name().unwrap();
+            assert!(!archive_dir.join(name).exists());
+            assert!(!trash_dir.join(name).exists());
+        }
+        // In-memory mirror is back to the source paths.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            let inbox = &store.root_folder.subfolders[0];
+            for (i, email) in inbox.emails.iter().enumerate() {
+                assert_eq!(email.file_path, srcs[i], "mirror at idx {} not restored", i);
+            }
+        }
+    }
+
+    /// Build a per-account maildir directory tree on disk and return
+    /// its root. Used by the multi-account integration test.
+    fn write_account_inbox(root_path: &std::path::Path, filenames: &[&str]) -> PathBuf {
+        let cur = root_path.join("INBOX").join("cur");
+        let new = root_path.join("INBOX").join("new");
+        std::fs::create_dir_all(&cur).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        for f in filenames {
+            std::fs::write(new.join(f), b"body").unwrap();
+        }
+        root_path.to_path_buf()
+    }
+
+    /// Re-seed the AppRoot's EmailStore with a single INBOX whose
+    /// emails come from the current `new/` and `cur/` on disk. This
+    /// simulates the folder-scanner reply for tests that exercise
+    /// `Msg::AccountSelect` (which resets the store and kicks off a
+    /// fresh scan that integration tests don't otherwise wait for).
+    fn reseed_inbox_from_disk(root: &mut AppRoot) {
+        let maildir_root = {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            store.root_folder.path.clone()
+        };
+        let inbox_path = maildir_root.join("INBOX");
+        let mut inbox = Folder::new("INBOX".to_string(), inbox_path.clone());
+        // `new/` first — these are the unread ones.
+        if let Ok(entries) = std::fs::read_dir(inbox_path.join("new")) {
+            let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            paths.sort();
+            for p in paths {
+                let mut e = Email::new(p);
+                e.is_unread = true;
+                inbox.unread_count += 1;
+                inbox.add_email(e);
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(inbox_path.join("cur")) {
+            let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            paths.sort();
+            for p in paths {
+                let mut e = Email::new(p);
+                e.is_unread = false;
+                inbox.add_email(e);
+            }
+        }
+        inbox.is_loaded = true;
+
+        let store_handle = root.email_store_handle();
+        let mut store = store_handle.lock().unwrap();
+        store.root_folder.subfolders.clear();
+        store.root_folder.add_subfolder(inbox);
+        store.scanning_folders = false;
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+    }
+
+    /// Multi-account workflow: with two accounts configured, switch
+    /// to account A, mark-read its unread email (Enter on the
+    /// Messages pane moves the file from new/ → cur/), switch to
+    /// account B and mark-read one of its emails, then switch back
+    /// to A and verify the disk state we left behind is intact.
+    ///
+    /// "State preserved per account" here means the on-disk maildir
+    /// is the source of truth and an account switch never mutates
+    /// the other account's files. The cursor/view state resets on
+    /// switch by design (see `switch_active_maildir`).
+    ///
+    /// Note on the keybinding: VISION.md and the AccountsComponent
+    /// unit tests treat 'l' as an account-select keystroke, but in
+    /// the current AppRoot the global key handler intercepts 'l'
+    /// for `Msg::ViewNext` before it reaches the Accounts pane.
+    /// This test drives the switch via `Msg::AccountSelect`
+    /// directly so it captures the workflow effect; a separate
+    /// observation has been filed for the key-routing gap.
+    #[test]
+    fn multi_account_switch_preserves_per_account_disk_state() {
+        let temp_a = tempfile::TempDir::new().unwrap();
+        let temp_b = tempfile::TempDir::new().unwrap();
+        let path_a = write_account_inbox(&temp_a.path().to_path_buf(), &["a-msg1", "a-msg2"]);
+        let path_b = write_account_inbox(&temp_b.path().to_path_buf(), &["b-msg1"]);
+
+        let mut cfg = Config::default();
+        cfg.accounts.insert(
+            "alpha".into(),
+            crate::config::AccountConfig {
+                name: "Alpha".into(),
+                email: "a@x.test".into(),
+                maildir_path: path_a.clone(),
+                smtp_command: None,
+                signature: None,
+            },
+        );
+        cfg.accounts.insert(
+            "bravo".into(),
+            crate::config::AccountConfig {
+                name: "Bravo".into(),
+                email: "b@x.test".into(),
+                maildir_path: path_b.clone(),
+                smtp_command: None,
+                signature: None,
+            },
+        );
+
+        let store = EmailStore::new(path_a.clone());
+        let scanner = MaildirScanner::new(path_a.clone());
+        let mut root = AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, cfg);
+
+        // Land on Alpha first. The fixture store starts empty; reseed
+        // from disk so the test does not depend on the async scanner.
+        root.enqueue(Msg::AccountSelect("alpha".into()));
+        root.drain();
+        reseed_inbox_from_disk(&mut root);
+
+        // Focus Messages, cursor on the first unread, press Enter to
+        // mark it read (file moves new/ → cur/).
+        root.layout.active_pane = ActivePane::Messages;
+        root.messages.email_index = 0;
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let a_msg1_new = path_a.join("INBOX").join("new").join("a-msg1");
+        let a_msg1_cur = path_a.join("INBOX").join("cur").join("a-msg1");
+        assert!(!a_msg1_new.exists(), "Alpha msg1 must leave new/");
+        assert!(a_msg1_cur.exists(), "Alpha msg1 must land in cur/");
+
+        // Switch to Bravo. The store gets reset; reseed from disk so
+        // we can act on Bravo's emails too.
+        root.enqueue(Msg::AccountSelect("bravo".into()));
+        root.drain();
+        // After switch, store path is the Bravo maildir; pane focus
+        // is back on Folders per `switch_active_maildir`.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            assert_eq!(store.root_folder.path, path_b);
+        }
+        assert_eq!(root.layout.active_pane, ActivePane::Folders);
+        reseed_inbox_from_disk(&mut root);
+
+        // Mark Bravo's msg1 read.
+        root.layout.active_pane = ActivePane::Messages;
+        root.messages.email_index = 0;
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let b_msg1_new = path_b.join("INBOX").join("new").join("b-msg1");
+        let b_msg1_cur = path_b.join("INBOX").join("cur").join("b-msg1");
+        assert!(!b_msg1_new.exists(), "Bravo msg1 must leave new/");
+        assert!(b_msg1_cur.exists(), "Bravo msg1 must land in cur/");
+
+        // Switch back to Alpha. Verify nothing in Alpha's maildir
+        // was touched by the Bravo round-trip — msg1 still in cur/,
+        // msg2 still in new/. The undo stack also resets across
+        // account switches (it's owned by AppRoot, not per-account,
+        // but the switch_active_maildir contract drops cursors;
+        // mutations on Bravo remain undoable until we switch).
+        root.enqueue(Msg::AccountSelect("alpha".into()));
+        root.drain();
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            assert_eq!(store.root_folder.path, path_a);
+        }
+
+        let a_msg2_new = path_a.join("INBOX").join("new").join("a-msg2");
+        assert!(a_msg1_cur.exists(), "Alpha msg1 must still be in cur/");
+        assert!(!a_msg1_new.exists(), "Alpha msg1 must not be in new/");
+        assert!(a_msg2_new.exists(), "Alpha msg2 must still be unread");
+
+        // And Bravo's state survived too.
+        assert!(b_msg1_cur.exists(), "Bravo msg1 must still be read");
+        assert!(!b_msg1_new.exists());
+    }
+
+    /// Move-with-picker round-trip: from a Messages-pane cursor on
+    /// INBOX/msg1, press 'm' to open the picker, type a filter,
+    /// press Enter to commit the move, then press 'u' to revert.
+    /// Asserts the full status sequence and undo-stack accounting,
+    /// stricter than the existing `enter_in_modal_moves_file_to_picked_folder`
+    /// and `undo_after_picker_move_restores_file` cases. This is the
+    /// integration-layer guardrail for Phase 1.d.
+    #[test]
+    fn move_with_picker_and_undo_full_round_trip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) =
+            make_root_with_disk_tree(temp.path().to_path_buf(), &["Archive", "Projects"]);
+        root.layout.active_pane = ActivePane::Messages;
+        assert_eq!(root.undo_stack_len(), 0);
+        assert!(!root.folder_picker.visible);
+
+        // 1. Open the picker.
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        assert!(root.folder_picker.visible);
+
+        // 2. Filter down to "Projects".
+        for c in "Proj".chars() {
+            let key = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            root.process_event(key).unwrap();
+        }
+        assert_eq!(root.folder_picker.filter_text, "Proj");
+
+        // 3. Commit. File moves to Projects/cur, picker closes, undo
+        //    stack grows, status reads "Moved".
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let dst = temp.path().join("Projects").join("cur").join("msg1");
+        assert!(dst.exists());
+        assert!(!src.exists());
+        assert!(!root.folder_picker.visible);
+        assert_eq!(root.undo_stack_len(), 1);
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Moved"),
+            "status after move: {:?}",
+            root.status_message,
+        );
+        // Mirror tracks the new location.
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            let inbox = &store.root_folder.subfolders[0];
+            assert_eq!(inbox.emails[0].file_path, dst);
+        }
+
+        // 4. Undo. File returns, stack empties.
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        assert!(src.exists());
+        assert!(!dst.exists());
+        assert_eq!(root.undo_stack_len(), 0);
+        {
+            let store = root.email_store_handle();
+            let store = store.lock().unwrap();
+            let inbox = &store.root_folder.subfolders[0];
+            assert_eq!(inbox.emails[0].file_path, src);
+        }
+    }
 }
