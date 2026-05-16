@@ -18,6 +18,16 @@ pub enum View {
     Content,             // [*Content]
     Messages,            // [*Messages] (when content hidden)
     MessagesAttachments, // [Messages, *Attachments] (when content hidden)
+    // Phase 0.2.4 scaffolds (vu-501). Slot-only: not yet reachable via h/l
+    // navigation in non-test builds. Phase 1 wires Accounts into the
+    // prev-view chain (conditional on >1 account configured); Phase 2
+    // wires Draft into the next-view chain when a reply draft exists.
+    // `allow(dead_code)` keeps the slot pinning quiet under cargo build
+    // until those phases construct the variants.
+    #[allow(dead_code)]
+    AccountsFolders, // [*Accounts, Folders]
+    #[allow(dead_code)]
+    ContentDraft, // [Content, *Draft]
 }
 
 impl View {
@@ -28,6 +38,7 @@ impl View {
                 View::FolderMessages => vec![ActivePane::Folders, ActivePane::Messages],
                 View::Messages => vec![ActivePane::Messages],
                 View::MessagesAttachments => vec![ActivePane::Messages, ActivePane::Attachments],
+                View::AccountsFolders => vec![ActivePane::Accounts, ActivePane::Folders],
                 _ => vec![ActivePane::Messages], // Fallback for invalid states
             }
         } else {
@@ -35,6 +46,8 @@ impl View {
                 View::FolderMessages => vec![ActivePane::Folders, ActivePane::Messages],
                 View::MessagesContent => vec![ActivePane::Messages, ActivePane::Content],
                 View::Content => vec![ActivePane::Content],
+                View::AccountsFolders => vec![ActivePane::Accounts, ActivePane::Folders],
+                View::ContentDraft => vec![ActivePane::Content, ActivePane::Draft],
                 _ => vec![ActivePane::Messages], // Fallback for invalid states
             }
         }
@@ -47,6 +60,7 @@ impl View {
                 View::FolderMessages => ActivePane::Folders,
                 View::Messages => ActivePane::Messages,
                 View::MessagesAttachments => ActivePane::Attachments,
+                View::AccountsFolders => ActivePane::Folders,
                 _ => ActivePane::Messages,
             }
         } else {
@@ -54,6 +68,8 @@ impl View {
                 View::FolderMessages => ActivePane::Folders,
                 View::MessagesContent => ActivePane::Messages,
                 View::Content => ActivePane::Content,
+                View::AccountsFolders => ActivePane::Folders,
+                View::ContentDraft => ActivePane::Draft,
                 _ => ActivePane::Messages,
             }
         }
@@ -72,7 +88,7 @@ impl View {
             match self {
                 View::FolderMessages => Some(View::MessagesContent),
                 View::MessagesContent => Some(View::Content),
-                View::Content => None, // No wraparound
+                View::Content => None, // No wraparound. Phase 2 wires ContentDraft here when a draft exists.
                 _ => None,
             }
         }
@@ -91,7 +107,7 @@ impl View {
             match self {
                 View::Content => Some(View::MessagesContent),
                 View::MessagesContent => Some(View::FolderMessages),
-                View::FolderMessages => None, // No wraparound
+                View::FolderMessages => None, // No wraparound. Phase 1 wires AccountsFolders here when >1 account.
                 _ => None,
             }
         }
@@ -104,6 +120,13 @@ pub enum ActivePane {
     Messages,    // Center pane (messages)
     Content,     // Right pane
     Attachments, // Attachment pane
+    // Phase 0.2.4 scaffolds (vu-501). Reachable only via View::AccountsFolders
+    // / View::ContentDraft, which Phase 1/2 wires into the navigation chain.
+    // `allow(dead_code)` keeps these quiet until Phase 1/2 constructs them.
+    #[allow(dead_code)]
+    Accounts, // Leftmost pane (only visible when multi-account is configured)
+    #[allow(dead_code)]
+    Draft, // Rightmost pane (only visible when composing a reply)
 }
 
 #[derive(Debug, Default)]
@@ -388,8 +411,15 @@ impl App {
         // Show welcome screen when user is actively browsing folders
         // Only serve emails when focused on email-related panes
         match self.active_pane {
-            ActivePane::Folders => None, // Show welcome screen when browsing folders
-            ActivePane::Messages | ActivePane::Content | ActivePane::Attachments => {
+            // Show the welcome screen when the user is browsing top-level
+            // panes. Accounts is grouped with Folders here (Phase 0.2.4
+            // scaffold, vu-501) — Phase 1 will revisit if the web pane
+            // should reflect the selected account.
+            ActivePane::Folders | ActivePane::Accounts => None,
+            ActivePane::Messages
+            | ActivePane::Content
+            | ActivePane::Attachments
+            | ActivePane::Draft => {
                 // Best-effort full load so the response includes body content,
                 // but don't withhold the email from the web pane if loading
                 // fails — the pane→serving contract is determined by pane +
@@ -659,5 +689,58 @@ mod tests {
             app.get_current_email_for_web().is_some(),
             "Should serve email in Content pane"
         );
+    }
+
+    // Phase 0.2.4 (vu-501) — these tests pin the new layout-enum slots
+    // before Phase 1/2 wires real navigation into them.
+
+    #[test]
+    fn accounts_folders_view_exposes_accounts_then_folders() {
+        let panes = View::AccountsFolders.get_available_panes(false);
+        assert_eq!(panes, vec![ActivePane::Accounts, ActivePane::Folders]);
+    }
+
+    #[test]
+    fn content_draft_view_exposes_content_then_draft() {
+        let panes = View::ContentDraft.get_available_panes(false);
+        assert_eq!(panes, vec![ActivePane::Content, ActivePane::Draft]);
+    }
+
+    #[test]
+    fn accounts_folders_default_focus_is_folders() {
+        // VISION: Accounts is the entry on the *left*, but Folders is
+        // still the natural starting focus — the user only crosses into
+        // Accounts to switch accounts and then moves right.
+        assert_eq!(
+            View::AccountsFolders.get_default_active_pane(false),
+            ActivePane::Folders
+        );
+    }
+
+    #[test]
+    fn content_draft_default_focus_is_draft() {
+        // VISION: Draft is reached by `l` from Content "when a draft
+        // exists or when starting a new reply" — so entering the view
+        // focuses the draft itself, not the original email.
+        assert_eq!(
+            View::ContentDraft.get_default_active_pane(false),
+            ActivePane::Draft
+        );
+    }
+
+    #[test]
+    fn new_view_variants_are_not_yet_wired_into_navigation_chain() {
+        // Phase 0.2.4 deliberately leaves the prev_view/next_view
+        // transitions alone. Phase 1 wires AccountsFolders ←
+        // FolderMessages (conditional on multi-account); Phase 2 wires
+        // ContentDraft ← Content (conditional on a draft existing).
+        // Pinning the current (None) outcomes here catches an
+        // accidental wiring before its phase lands.
+        assert_eq!(View::FolderMessages.prev_view(false), None);
+        assert_eq!(View::Content.next_view(false), None);
+        assert_eq!(View::AccountsFolders.next_view(false), None);
+        assert_eq!(View::AccountsFolders.prev_view(false), None);
+        assert_eq!(View::ContentDraft.next_view(false), None);
+        assert_eq!(View::ContentDraft.prev_view(false), None);
     }
 }

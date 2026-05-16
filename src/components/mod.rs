@@ -11,9 +11,11 @@
 // `Component`-related items remain unused until the first pane migrates.
 #![allow(dead_code, unused_imports)]
 
+mod accounts;
 mod body_loader;
 mod content;
 mod ctx;
+mod draft;
 mod folder_scanner;
 mod folders;
 mod headers_loader;
@@ -21,9 +23,11 @@ mod messages;
 mod msg;
 mod root;
 
+pub use accounts::AccountsComponent;
 pub use body_loader::{BodyLoader, LoadedBody, ParsedBody};
 pub use content::ContentComponent;
 pub use ctx::Ctx;
+pub use draft::DraftComponent;
 pub use folder_scanner::FolderScannerHandle;
 pub use folders::FoldersComponent;
 pub use headers_loader::{HeadersLoader, LoadFolderRequest, LoadedFolder};

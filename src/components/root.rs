@@ -42,8 +42,9 @@ use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
 use super::{
-    BodyLoader, Component, ContentComponent, Ctx, FolderScannerHandle, FoldersComponent,
-    HeadersLoader, LoadFolderRequest, MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
+    AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
+    FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest, MAX_DISPATCH_DEPTH,
+    MessagesComponent, Msg,
 };
 
 pub struct AppRoot {
@@ -61,6 +62,12 @@ pub struct AppRoot {
     /// (handle_back_navigation, handle_folder_selection_and_switch_view)
     /// and direct-App tests see the same value.
     content: ContentComponent,
+    /// Accounts pane scaffold (Phase 0.2.4, vu-501). Render-only
+    /// placeholder until Phase 1 wires multi-account in.
+    accounts: AccountsComponent,
+    /// Draft pane scaffold (Phase 0.2.4, vu-501). Render-only
+    /// placeholder until Phase 2 wires compose/reply in.
+    draft: DraftComponent,
     queue: VecDeque<Msg>,
     /// Off-thread email body parser (Phase 0.3.2, vu-6td). The render path
     /// reads only in-memory state; selection changes enqueue a request here,
@@ -100,6 +107,8 @@ impl AppRoot {
             folders: FoldersComponent::with_index(initial_index),
             messages: MessagesComponent::new(),
             content: ContentComponent::new(),
+            accounts: AccountsComponent::new(),
+            draft: DraftComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -180,6 +189,20 @@ impl AppRoot {
         &self.content
     }
 
+    /// Read-only handle to the Accounts scaffold (Phase 0.2.4, vu-501).
+    /// Threaded through `UI::draw` so the placeholder renders when the
+    /// view enters `View::AccountsFolders`.
+    pub fn accounts(&self) -> &AccountsComponent {
+        &self.accounts
+    }
+
+    /// Read-only handle to the Draft scaffold (Phase 0.2.4, vu-501).
+    /// Threaded through `UI::draw` so the placeholder renders when the
+    /// view enters `View::ContentDraft`.
+    pub fn draft(&self) -> &DraftComponent {
+        &self.draft
+    }
+
     /// Render one frame. Locks the app, drains any body-load responses that
     /// have arrived (so the next draw shows them), delegates to `ui::UI::draw`,
     /// and returns whether the loop should exit (quit state observed).
@@ -199,7 +222,9 @@ impl AppRoot {
         let folders = &self.folders;
         let messages = &self.messages;
         let content = &self.content;
-        terminal.draw(|f| ui.draw(f, &mut app, folders, messages, content))?;
+        let accounts = &self.accounts;
+        let draft = &self.draft;
+        terminal.draw(|f| ui.draw(f, &mut app, folders, messages, content, accounts, draft))?;
         // The Messages pane render writes its live visible-row count into
         // `messages.visible_rows`. Mirror it into App so the legacy
         // header-load sizing in `request_folder_load_if_needed` keeps
@@ -493,6 +518,12 @@ impl AppRoot {
                 let mut fu = self.folders.handle_msg(&msg, &ctx);
                 fu.extend(self.messages.handle_msg(&msg, &ctx));
                 fu.extend(self.content.handle_msg(&msg, &ctx));
+                // Phase 0.2.4 scaffolds (vu-501): both are no-op
+                // subscribers today. Wired into the broadcast loop so
+                // they pick up messages automatically once Phase 1/2
+                // adds real handlers.
+                fu.extend(self.accounts.handle_msg(&msg, &ctx));
+                fu.extend(self.draft.handle_msg(&msg, &ctx));
                 fu
             };
             self.queue.extend(follow_ups);

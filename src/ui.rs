@@ -1,5 +1,8 @@
 use crate::app::{ActivePane, App, AppState, View};
-use crate::components::{Component, ContentComponent, Ctx, FoldersComponent, MessagesComponent};
+use crate::components::{
+    AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FoldersComponent,
+    MessagesComponent,
+};
 use crate::config::Config;
 use crate::email::EmailLoadState;
 use crate::theme::VulthorTheme;
@@ -28,6 +31,7 @@ impl UI {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         f: &mut Frame,
@@ -35,6 +39,8 @@ impl UI {
         folders: &FoldersComponent,
         messages: &MessagesComponent,
         content: &ContentComponent,
+        accounts: &AccountsComponent,
+        draft: &DraftComponent,
     ) {
         let size = f.area();
 
@@ -43,11 +49,12 @@ impl UI {
                 self.draw_help_screen(f, size);
             }
             _ => {
-                self.draw_main_layout(f, app, folders, messages, content, size);
+                self.draw_main_layout(f, app, folders, messages, content, accounts, draft, size);
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_main_layout(
         &mut self,
         f: &mut Frame,
@@ -55,6 +62,8 @@ impl UI {
         folders: &FoldersComponent,
         messages: &MessagesComponent,
         content: &ContentComponent,
+        accounts: &AccountsComponent,
+        draft: &DraftComponent,
         area: Rect,
     ) {
         match app.current_view {
@@ -113,6 +122,50 @@ impl UI {
 
                 Self::draw_messages_pane(f, app, messages, chunks[0], is_messages_active);
                 self.draw_attachments_pane(f, app, chunks[1], is_attachments_active);
+            }
+            // Phase 0.2.4 scaffolds (vu-501). The View variants exist so
+            // Phase 1/2 can wire them into the h/l navigation chain
+            // without re-shuffling enum slots. Until then the runtime
+            // does not put `current_view` into either of these states,
+            // but `ui.rs` paints the placeholders so tests (and a
+            // forced View injection) render meaningfully.
+            View::AccountsFolders => {
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+
+                let is_accounts_active = matches!(app.active_pane, ActivePane::Accounts);
+                let is_folders_active = matches!(app.active_pane, ActivePane::Folders);
+
+                let theme = VulthorTheme;
+                let config = Config::default();
+                let ctx = Ctx {
+                    theme: &theme,
+                    config: &config,
+                    store: &app.email_store,
+                };
+                accounts.render(f, chunks[0], is_accounts_active, &ctx);
+                folders.render(f, chunks[1], is_folders_active, &ctx);
+            }
+            View::ContentDraft => {
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+
+                let is_content_active = matches!(app.active_pane, ActivePane::Content);
+                let is_draft_active = matches!(app.active_pane, ActivePane::Draft);
+
+                Self::render_content_pane(f, app, content, chunks[0], is_content_active);
+                let theme = VulthorTheme;
+                let config = Config::default();
+                let ctx = Ctx {
+                    theme: &theme,
+                    config: &config,
+                    store: &app.email_store,
+                };
+                draft.render(f, chunks[1], is_draft_active, &ctx);
             }
         }
 

@@ -226,6 +226,9 @@ fn handle_navigation(app: &mut App, direction: NavigationDirection) {
                 }
             }
         }
+        // Phase 0.2.4 scaffolds (vu-501): no navigation behavior yet —
+        // Accounts ships in Phase 1 and Draft in Phase 2.
+        ActivePane::Accounts | ActivePane::Draft => {}
     }
 }
 
@@ -308,6 +311,9 @@ fn handle_selection(app: &mut App) {
             // Open selected attachment
             handle_attachment_open(app, false);
         }
+        // Phase 0.2.4 scaffolds (vu-501): no selection behavior yet —
+        // Accounts ships in Phase 1 and Draft in Phase 2.
+        ActivePane::Accounts | ActivePane::Draft => {}
     }
 }
 
@@ -331,6 +337,9 @@ fn handle_back_navigation(app: &mut App) {
             app.active_pane = ActivePane::Messages;
             app.set_state(AppState::EmailList);
         }
+        // Phase 0.2.4 scaffolds (vu-501): no back behavior yet —
+        // Accounts ships in Phase 1 and Draft in Phase 2.
+        ActivePane::Accounts | ActivePane::Draft => {}
     }
 }
 
