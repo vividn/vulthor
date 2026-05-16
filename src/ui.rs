@@ -1,6 +1,6 @@
 use crate::components::{
-    AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FoldersComponent,
-    MessagesComponent,
+    AccountsComponent, Component, ContentComponent, Ctx, DraftComponent, FolderPickerComponent,
+    FoldersComponent, MessagesComponent,
 };
 use crate::config::Config;
 use crate::email::{EmailLoadState, EmailStore};
@@ -44,6 +44,7 @@ impl UI {
         content: &ContentComponent,
         accounts: &AccountsComponent,
         draft: &DraftComponent,
+        folder_picker: &FolderPickerComponent,
     ) {
         let size = f.area();
         if help_visible {
@@ -54,6 +55,10 @@ impl UI {
             f, store, layout, folders, messages, content, accounts, draft, size,
         );
         self.draw_status_bar(f, layout, status_message, size);
+        // Modal overlay (Phase 1.d, vu-rr6). Drawn last so it sits on
+        // top of every pane; `render_modal` is a no-op when the picker
+        // is hidden.
+        folder_picker.render_modal(f, size);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -364,6 +369,12 @@ impl UI {
             Line::from("View Control:"),
             Line::from("  h          - Switch to folder/message view"),
             Line::from("  l          - Switch to message/content view"),
+            Line::from(""),
+            Line::from("Email Actions:"),
+            Line::from("  a          - Archive selected email"),
+            Line::from("  d          - Delete selected email (Trash)"),
+            Line::from("  s          - Toggle star (Flagged)"),
+            Line::from("  m          - Move to folder (picker)"),
             Line::from(""),
             Line::from("Other:"),
             Line::from("  u          - Undo last action (session-only)"),

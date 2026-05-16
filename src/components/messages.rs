@@ -367,6 +367,9 @@ impl Component for MessagesComponent {
             KeyCode::Char('a') => Some(Msg::Archive(String::new())),
             KeyCode::Char('s') => Some(Msg::ToggleStar(String::new())),
             KeyCode::Char('d') => Some(Msg::Delete(String::new())),
+            // Phase 1.d (vu-rr6). 'm' surfaces the folder picker; the
+            // picker dispatches `Msg::MoveTo` on Enter.
+            KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
             _ => None,
         }
     }
@@ -601,6 +604,17 @@ mod tests {
         assert!(matches!(m.on_key(s, &ctx), Some(Msg::ToggleStar(_))));
         let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
         assert!(matches!(m.on_key(d, &ctx), Some(Msg::Delete(_))));
+    }
+
+    #[test]
+    fn on_key_m_emits_open_folder_picker() {
+        // Phase 1.d (vu-rr6): 'm' surfaces the modal folder picker.
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+        let mut m = MessagesComponent::new();
+        let key = KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE);
+        assert_eq!(m.on_key(key, &ctx), Some(Msg::OpenFolderPicker));
     }
 
     #[test]

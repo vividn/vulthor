@@ -37,8 +37,8 @@ use crate::undo::{Mutation, Reversed};
 
 use super::{
     AccountsComponent, BodyLoader, Component, ContentComponent, Ctx, DraftComponent,
-    FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest, MAX_DISPATCH_DEPTH,
-    MessagesComponent, Msg,
+    FolderPickerComponent, FolderScannerHandle, FoldersComponent, HeadersLoader, LoadFolderRequest,
+    MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
 };
 
 pub struct AppRoot {
@@ -70,6 +70,10 @@ pub struct AppRoot {
     content: ContentComponent,
     accounts: AccountsComponent,
     draft: DraftComponent,
+    /// Modal "move to folder" picker (Phase 1.d, vu-rr6). When
+    /// `folder_picker.visible` is true, `process_event` routes every
+    /// key event to the picker first so the modal absorbs input.
+    folder_picker: FolderPickerComponent,
     queue: VecDeque<Msg>,
     body_loader: BodyLoader,
     loading_paths: HashSet<PathBuf>,
@@ -114,6 +118,7 @@ impl AppRoot {
             content: ContentComponent::new(),
             accounts: AccountsComponent::with_config(&config),
             draft: DraftComponent::new(),
+            folder_picker: FolderPickerComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -198,6 +203,9 @@ impl AppRoot {
     pub fn draft(&self) -> &DraftComponent {
         &self.draft
     }
+    pub fn folder_picker(&self) -> &FolderPickerComponent {
+        &self.folder_picker
+    }
 
     /// Render one frame. Drains async replies first, then delegates to
     /// `ui::UI::draw` with borrowed state. Returns whether the loop
@@ -219,12 +227,23 @@ impl AppRoot {
         let content = &self.content;
         let accounts = &self.accounts;
         let draft = &self.draft;
+        let folder_picker = &self.folder_picker;
         let layout = &self.layout;
         let status = &self.status_message;
         let help = self.help_visible;
         terminal.draw(|f| {
             ui.draw(
-                f, &mut store, layout, status, help, folders, messages, content, accounts, draft,
+                f,
+                &mut store,
+                layout,
+                status,
+                help,
+                folders,
+                messages,
+                content,
+                accounts,
+                draft,
+                folder_picker,
             )
         })?;
         self.message_pane_visible_rows = self.messages.visible_rows.get();
@@ -253,6 +272,21 @@ impl AppRoot {
             if self.help_visible {
                 // Any key dismisses help.
                 self.help_visible = false;
+                return Ok(self.should_quit);
+            }
+            // 0. Modal picker, when visible, absorbs every key — global
+            //    shortcuts included. This is what makes 'q' inside the
+            //    modal type into the filter instead of quitting (vu-rr6).
+            if self.folder_picker.visible {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.folder_picker.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                }
+                self.drain();
                 return Ok(self.should_quit);
             }
             // 1. Global keys win unconditionally.
@@ -560,6 +594,7 @@ impl AppRoot {
                 fu.extend(self.content.handle_msg(&msg, &ctx));
                 fu.extend(self.accounts.handle_msg(&msg, &ctx));
                 fu.extend(self.draft.handle_msg(&msg, &ctx));
+                fu.extend(self.folder_picker.handle_msg(&msg, &ctx));
                 fu
             };
             self.queue.extend(follow_ups);
@@ -730,6 +765,9 @@ impl AppRoot {
             Msg::Delete(_) => {
                 self.apply_move_action(MoveKind::Delete);
             }
+            Msg::MoveTo(_, target) => {
+                self.apply_move_action(MoveKind::Custom(target.clone()));
+            }
             Msg::ToggleStar(_) => {
                 self.apply_toggle_star();
             }
@@ -740,10 +778,11 @@ impl AppRoot {
         }
     }
 
-    /// Perform an Archive- or Delete-style move on the cursor email.
-    /// Both share the same filesystem shape — `<maildir>/<Target>/cur/`,
-    /// create-on-demand — and only differ in the destination directory
-    /// and the `Mutation` variant they record. Phase 1.c (vu-bti).
+    /// Perform an Archive-/Delete-/Move-style relocation on the cursor
+    /// email. All three share the same filesystem shape — `<target>/cur/`,
+    /// create-on-demand — and differ only in the destination directory
+    /// and the `Mutation` variant they record. Phase 1.c (vu-bti),
+    /// extended for Phase 1.d (vu-rr6) custom moves.
     fn apply_move_action(&mut self, kind: MoveKind) {
         let (src_path, subject) = {
             let store = self.email_store.lock().unwrap();
@@ -762,9 +801,22 @@ impl AppRoot {
             ));
             return;
         };
-        let maildir_root = self.email_store.lock().unwrap().root_folder.path.clone();
-        let dst_dir = maildir_root.join(kind.folder_name()).join("cur");
+        let dst_dir = match &kind {
+            MoveKind::Archive | MoveKind::Delete => {
+                let maildir_root = self.email_store.lock().unwrap().root_folder.path.clone();
+                maildir_root.join(kind.builtin_folder_name()).join("cur")
+            }
+            MoveKind::Custom(target) => target.join("cur"),
+        };
         let dst_path = dst_dir.join(filename);
+
+        // Don't no-op if the user picks the email's current folder —
+        // the rename would silently succeed but the undo entry would
+        // round-trip to the same path. Surface it as a status instead.
+        if dst_path == src_path {
+            self.status_message = Some("Move target matches source — no-op".into());
+            return;
+        }
 
         if let Err(e) = std::fs::create_dir_all(&dst_dir) {
             self.status_message = Some(format!("Failed to {} (mkdir): {}", kind.verb_present(), e));
@@ -780,16 +832,21 @@ impl AppRoot {
             .unwrap()
             .swap_email_path(&src_path, &dst_path);
 
-        let mutation = match kind {
+        let mutation = match &kind {
             MoveKind::Archive => Mutation::Archive {
                 msg: dst_path.clone(),
                 from: src_path,
-                to: dst_path,
+                to: dst_path.clone(),
             },
             MoveKind::Delete => Mutation::Delete {
                 msg: dst_path.clone(),
                 from: src_path,
-                to: dst_path,
+                to: dst_path.clone(),
+            },
+            MoveKind::Custom(_) => Mutation::Move {
+                msg: dst_path.clone(),
+                from: src_path,
+                to: dst_path.clone(),
             },
         };
         self.undo_stack.push(mutation);
@@ -975,32 +1032,38 @@ impl AppRoot {
 
 static THEME: VulthorTheme = VulthorTheme;
 
-/// Phase 1.c (vu-bti). The two MailDir-move action keys (`a`, `d`) share
-/// every step except the destination folder and the recorded mutation
-/// variant; this enum carries that delta.
-#[derive(Debug, Clone, Copy)]
+/// Phase 1.c (vu-bti). The MailDir-move action keys (`a`, `d`, `m`)
+/// share every step except the destination directory and the recorded
+/// mutation variant; this enum carries that delta. `Custom` lands the
+/// email at an arbitrary folder filesystem path — Phase 1.d (vu-rr6)
+/// uses it for the picker's "move to folder" target.
+#[derive(Debug, Clone)]
 enum MoveKind {
     Archive,
     Delete,
+    Custom(PathBuf),
 }
 
 impl MoveKind {
-    fn folder_name(self) -> &'static str {
+    fn builtin_folder_name(&self) -> &'static str {
         match self {
             MoveKind::Archive => "Archive",
             MoveKind::Delete => "Trash",
+            MoveKind::Custom(_) => "",
         }
     }
-    fn verb_present(self) -> &'static str {
+    fn verb_present(&self) -> &'static str {
         match self {
             MoveKind::Archive => "archive",
             MoveKind::Delete => "delete",
+            MoveKind::Custom(_) => "move",
         }
     }
-    fn verb_past(self) -> &'static str {
+    fn verb_past(&self) -> &'static str {
         match self {
             MoveKind::Archive => "Archived",
             MoveKind::Delete => "Deleted",
+            MoveKind::Custom(_) => "Moved",
         }
     }
 }
@@ -2021,5 +2084,153 @@ mod tests {
         assert_eq!(root.accounts.account_count(), 2);
         // BTreeMap order: alpha first.
         assert_eq!(root.accounts.current_account_id().as_deref(), Some("alpha"));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.d (vu-rr6): folder-picker modal + 'm' move-to-folder.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn key_m_in_messages_pane_opens_folder_picker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-m");
+        root.layout.active_pane = ActivePane::Messages;
+        assert!(!root.folder_picker.visible);
+
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+
+        assert!(root.folder_picker.visible);
+        // INBOX is the one folder we seeded; the picker must see it.
+        assert!(
+            root.folder_picker
+                .folder_list
+                .iter()
+                .any(|(label, _)| label == "INBOX")
+        );
+    }
+
+    #[test]
+    fn modal_routes_keys_to_picker_not_global() {
+        // While the modal is visible, even global keys like 'q' (Quit)
+        // must funnel into the filter text, not trigger their global
+        // action.
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, _src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-modal");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        assert!(root.folder_picker.visible);
+        assert!(!root.should_quit);
+
+        // Press 'q' inside the modal — must NOT quit; must add to filter.
+        let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        root.process_event(q).unwrap();
+        assert!(!root.should_quit, "modal must absorb global keys");
+        assert_eq!(root.folder_picker.filter_text, "q");
+    }
+
+    #[test]
+    fn esc_in_modal_cancels_picker_with_no_filesystem_change() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msg-esc");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        root.process_event(esc).unwrap();
+
+        assert!(!root.folder_picker.visible);
+        assert!(src.exists(), "file must still be in its original place");
+        assert_eq!(root.undo_stack_len(), 0, "no mutation recorded on cancel");
+    }
+
+    /// AppRoot fixture seeded with an INBOX, an Archive, and a Projects
+    /// folder all on disk so the picker can resolve a real target path.
+    fn make_root_with_disk_tree(root_path: PathBuf, extra_folders: &[&str]) -> (AppRoot, PathBuf) {
+        let inbox_cur = root_path.join("INBOX").join("cur");
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_cur.join("msg1");
+        std::fs::write(&src, "body").unwrap();
+
+        let mut store = EmailStore::new(root_path.clone());
+        let mut inbox = Folder::new("INBOX".to_string(), root_path.join("INBOX"));
+        inbox.add_email(Email::new(src.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        for name in extra_folders {
+            let fs_path = root_path.join(name);
+            std::fs::create_dir_all(fs_path.join("cur")).unwrap();
+            let mut f = Folder::new((*name).to_string(), fs_path);
+            f.is_loaded = true;
+            store.root_folder.add_subfolder(f);
+        }
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(root_path.clone());
+        let root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        (root, src)
+    }
+
+    #[test]
+    fn enter_in_modal_moves_file_to_picked_folder() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) =
+            make_root_with_disk_tree(temp.path().to_path_buf(), &["Archive", "Projects"]);
+        root.layout.active_pane = ActivePane::Messages;
+
+        // Open modal, filter to "Proj", pick it.
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        for c in "Proj".chars() {
+            let key = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            root.process_event(key).unwrap();
+        }
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let dst = temp.path().join("Projects").join("cur").join("msg1");
+        assert!(dst.exists(), "expected file at {:?}", dst);
+        assert!(!src.exists(), "source must be empty after move");
+        assert_eq!(root.undo_stack_len(), 1, "move pushes one mutation");
+        assert!(
+            root.status_message
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Moved"),
+            "status: {:?}",
+            root.status_message,
+        );
+        assert!(!root.folder_picker.visible, "modal closes after pick");
+    }
+
+    #[test]
+    fn undo_after_picker_move_restores_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_tree(temp.path().to_path_buf(), &["Projects"]);
+        root.layout.active_pane = ActivePane::Messages;
+
+        let m = Event::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        root.process_event(m).unwrap();
+        for c in "Proj".chars() {
+            let key = Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            root.process_event(key).unwrap();
+        }
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let dst = temp.path().join("Projects").join("cur").join("msg1");
+        assert!(dst.exists() && !src.exists());
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+
+        assert!(src.exists(), "undo must restore to INBOX/cur");
+        assert!(!dst.exists(), "undo must clear the Projects path");
+        assert_eq!(root.undo_stack_len(), 0);
     }
 }
