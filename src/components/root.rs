@@ -223,7 +223,6 @@ impl AppRoot {
         self.web_port = port;
     }
 
-<<<<<<< HEAD
     /// Install the runtime [`Theme`] resolved by
     /// `crate::theme::build_theme`. `main.rs` calls this after config
     /// load so user themes / `[theme].overrides` reach the component
@@ -232,7 +231,8 @@ impl AppRoot {
     #[allow(dead_code)]
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
-=======
+    }
+
     /// Spawn the Phase 4.d MailDir watcher against the live email
     /// store's root path. Called once from `main.rs` after AppRoot
     /// construction; tests skip it so the watcher does not subscribe
@@ -253,7 +253,6 @@ impl AppRoot {
                 self.status_message = Some(e.to_string());
             }
         }
->>>>>>> 038f883 (feat(watch): inotify MailDir auto-refresh (vu-e3e))
     }
 
     /// Clone of the focused-pane signal the web server reads.
