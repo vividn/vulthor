@@ -15,6 +15,7 @@ mod compose;
 mod config;
 mod email;
 mod error;
+mod keymap;
 mod layout;
 mod maildir;
 mod theme;
