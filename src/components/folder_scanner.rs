@@ -1,9 +1,9 @@
-// Off-thread MailDir folder-structure scanner (Phase 0.3.4, vu-w9i).
+// Off-thread MailDir folder-structure scanner.
 //
-// Audit entry C2 had `MaildirScanner::scan` running on the main thread
-// *before* the TUI enabled raw mode. On NFS or a maildir with hundreds
-// of folders this stalled the launch for multiple seconds, with only a
-// `println!` banner to show for it.
+// `MaildirScanner::scan` used to run on the main thread *before* the
+// TUI enabled raw mode. On NFS or a maildir with hundreds of folders
+// this stalled the launch for multiple seconds, with only a `println!`
+// banner to show for it.
 //
 // `FolderScannerHandle` spawns a single short-lived OS thread that
 // runs the scan and sends its `Result<Folder>` back over an `mpsc`
@@ -66,9 +66,9 @@ mod tests {
     use tempfile::TempDir;
 
     /// Build a maildir with a deep nested hierarchy to exercise the
-    /// recursive `scan_folder_structure_only` path that vu-w9i is
-    /// moving off the main thread. Returns the temp dir (must outlive
-    /// the scanner) and the path to scan.
+    /// recursive `scan_folder_structure_only` path running off the
+    /// main thread. Returns the temp dir (must outlive the scanner)
+    /// and the path to scan.
     fn build_deep_maildir(depth: usize, branching: usize) -> TempDir {
         let temp = TempDir::new().unwrap();
         let root = temp.path().to_path_buf();
@@ -109,10 +109,10 @@ mod tests {
         }
     }
 
-    /// vu-w9i acceptance: a deep maildir hierarchy must come back from
-    /// the worker as a populated `Folder` tree. The exact recursion is
-    /// tested by `MaildirScanner` itself; here we just prove the
-    /// off-thread handoff delivers the same shape.
+    /// A deep maildir hierarchy must come back from the worker as a
+    /// populated `Folder` tree. The exact recursion is tested by
+    /// `MaildirScanner` itself; here we just prove the off-thread
+    /// handoff delivers the same shape.
     #[test]
     fn scanner_returns_deep_hierarchy_off_thread() {
         let temp = build_deep_maildir(3, 3);
@@ -134,7 +134,7 @@ mod tests {
     /// status message instead of silently sitting in "Scanning…".
     #[test]
     fn scanner_propagates_missing_path_error() {
-        let missing = PathBuf::from("/definitely/does/not/exist/vu-w9i");
+        let missing = PathBuf::from("/definitely/does/not/exist/folder-scanner");
         let handle = FolderScannerHandle::spawn(missing);
         let result = wait_for(|| handle.try_recv(), Duration::from_secs(2));
         assert!(result.is_err(), "missing path must yield Err, got Ok");

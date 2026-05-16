@@ -1,16 +1,8 @@
-// `FoldersComponent` — first pane migration (Phase 0.2.2b, vu-sd6).
+// `FoldersComponent` — folder pane.
 //
 // Owns the folder-pane selection (`folder_index`) and the ratatui
 // `ListState` used to highlight it. Renders the folder tree from
 // `Ctx::store.root_folder`. Translates Folders-pane keys into messages.
-//
-// **Sole writer of `folder_index`.** AppRoot mirrors this value into
-// `app.selection.folder_index` after each dispatch so the legacy
-// readers in `ui.rs` and `input.rs` keep working until the Messages
-// pane is also extracted (vu-3yj). `Backspace` is the one remaining
-// legacy path that still writes through `App`; AppRoot syncs the
-// other direction after fall-through. That seam disappears when
-// back-navigation moves into a `Msg` variant.
 //
 // **`RefCell<ListState>`** — ratatui's `render_stateful_widget`
 // requires `&mut ListState`, but `Component::render` takes `&self`.
@@ -105,10 +97,7 @@ impl Component for FoldersComponent {
             }
             Msg::FolderExitParent => {
                 // Back-navigation collapses the selection to the top of
-                // the (now parent) folder pane — matches the legacy
-                // `handle_back_navigation` behavior and resolves the
-                // vu-sd6 Backspace observation by writing through the
-                // component instead of `app.selection.folder_index`.
+                // the (now parent) folder pane.
                 self.folder_index = 0;
             }
             _ => {}
@@ -128,11 +117,10 @@ impl Component for FoldersComponent {
             .style(style)
             .title("Folders");
 
-        // Phase 0.3.4 (vu-w9i): the initial folder-structure scan now
-        // runs off-thread. Until it lands, the store carries no folders;
-        // render a splash instead of an empty list so the user sees that
-        // launch is making progress rather than that their maildir is
-        // empty.
+        // The initial folder-structure scan runs off-thread. Until it
+        // lands, the store carries no folders; render a splash instead
+        // of an empty list so the user sees that launch is making
+        // progress rather than that their maildir is empty.
         if ctx.store.scanning_folders {
             let splash = Paragraph::new(vec![Line::from(Span::styled(
                 "Scanning folders…",

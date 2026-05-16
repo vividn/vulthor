@@ -63,9 +63,9 @@ impl MaildirScanner {
     }
 
     /// Load up to `chunk_size` additional emails into a folder that is
-    /// already partially loaded. Bounded paged loader for B2 (vu-5jt):
-    /// replaces the unbounded `load_folder_emails` call from the scroll-
-    /// triggered code path, which used to freeze the TUI on large folders.
+    /// already partially loaded. Bounded paged loader: replaces the
+    /// unbounded `load_folder_emails` call from the scroll-triggered
+    /// code path, which used to freeze the TUI on large folders.
     ///
     /// Behavior:
     /// - No-op (returns `Ok(0)`) if the folder is already fully loaded or
@@ -464,7 +464,7 @@ mod tests {
         // Load emails for INBOX to test the lazy loading.
         // `None` limit is the explicit "load every message" mode used
         // here for setup; production code paths now go through the
-        // paged `load_more_folder_emails` instead (vu-5jt).
+        // paged `load_more_folder_emails` instead.
         scanner
             .load_folder_emails_with_limit(&mut result.subfolders[0], None)
             .unwrap();
@@ -492,9 +492,9 @@ mod tests {
         (temp, scanner, result)
     }
 
-    /// vu-5jt acceptance: one call to `load_more_folder_emails` must add
-    /// at most `chunk_size` emails, regardless of how many remain in the
-    /// folder. Proves the unbounded-load mode is gone from the scroll path.
+    /// One call to `load_more_folder_emails` must add at most
+    /// `chunk_size` emails, regardless of how many remain in the folder.
+    /// Proves the unbounded-load mode is gone from the scroll path.
     #[test]
     fn load_more_folder_emails_is_bounded_by_chunk_size() {
         let (_temp, scanner, mut root) = build_folder_with_n_emails(200);

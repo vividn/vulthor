@@ -1,9 +1,9 @@
-// Off-thread full-body email parser (Phase 0.3.2, vu-6td).
+// Off-thread full-body email parser.
 //
-// Audit entries A2 / A3 / B5 called `Email::ensure_fully_loaded` from the
-// render thread, so every email selection change paid a `fs::read` + full
-// MIME parse on the next frame. For 10-50 MB multipart messages on NFS
-// this stalled the TUI for seconds.
+// `Email::ensure_fully_loaded` used to be called from the render
+// thread, so every email selection change paid a `fs::read` + full
+// MIME parse on the next frame. For 10-50 MB multipart messages on
+// NFS this stalled the TUI for seconds.
 //
 // `BodyLoader` is a single long-lived OS thread fed by an `mpsc` request
 // channel. AppRoot drains the reply channel each tick and writes results
@@ -74,7 +74,7 @@ impl BodyLoader {
 
     /// Clone of the request channel — lets the web server submit body-load
     /// requests through the same worker the TUI uses, so neither side has
-    /// to do an `fs::read` on its own thread (`vu-9ie`, D1-D3).
+    /// to do an `fs::read` on its own thread.
     pub fn request_sender(&self) -> Sender<PathBuf> {
         self.tx.clone()
     }

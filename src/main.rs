@@ -51,13 +51,13 @@ async fn main() -> Result<()> {
 
     // `-m` overrides the maildir for single-account runs; for
     // multi-account configs, the active account's `maildir_path`
-    // wins (vu-nja, Phase 1.a). `Config::active_maildir()` resolves
-    // both cases.
+    // wins. `Config::active_maildir()` resolves both cases.
     let initial_maildir = config.active_maildir();
 
-    // Phase 0.3.4 (vu-w9i): folder-structure scan runs off the main thread.
-    // We start the worker but do NOT block; the TUI comes up immediately and
-    // renders a splash until the scan reply lands in `drain_scanned_folders`.
+    // Folder-structure scan runs off the main thread. We start the
+    // worker but do NOT block; the TUI comes up immediately and
+    // renders a splash until the scan reply lands in
+    // `drain_scanned_folders`.
     let scanner = MaildirScanner::new(initial_maildir.clone());
     let folder_scanner_handle = FolderScannerHandle::spawn(initial_maildir.clone());
 

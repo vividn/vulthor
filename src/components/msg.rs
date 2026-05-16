@@ -1,5 +1,3 @@
-// Step 1 of the Phase-0.2 component refactor (vu-m6s).
-//
 // Flat `Msg` enum: a single grep target for every cross-component message
 // the runtime can dispatch. Variants are grouped by addressee but the enum
 // stays flat — nested variants (e.g. `Msg::Folders(FoldersMsg)`) buy us
@@ -9,8 +7,8 @@
 
 use std::path::PathBuf;
 
-/// Opaque account identifier. Placeholder until multi-account lands in
-/// Phase 1; alias keeps call sites stable.
+/// Opaque account identifier. Alias keeps call sites stable while the
+/// concrete type may still evolve.
 pub type AccountId = String;
 
 /// Path to a folder inside the active MailDir tree. Concrete type stays a
@@ -53,10 +51,10 @@ pub enum Msg {
     FocusPrev,
     /// AppRoot publishes the new focused pane after every focus change.
     /// The web server reads this signal via `Arc<AtomicU8>` and decides
-    /// between serving the selected email and the welcome screen. vu-7r1.
+    /// between serving the selected email and the welcome screen.
     FocusChanged(crate::layout::ActivePane),
 
-    // Accounts (Phase 1)
+    // Accounts
     /// Move the cursor inside the Accounts pane. Only `Up`/`Down` are
     /// meaningful — `Left`/`Right` belong to the view-progression
     /// (`h`/`l`) handled by `AppRoot`.
@@ -74,12 +72,9 @@ pub enum Msg {
     FolderEnter,
     FolderLoaded(FolderPath),
     /// Back-navigation out of the current folder (Backspace from the
-    /// Folders or Messages pane). Replaces the legacy
-    /// `handle_back_navigation` path that wrote `selection.folder_index`
-    /// directly (see notes/observations/2026-05-16-vu-sd6-backspace-...).
-    /// `AppRoot::apply_root` pops the store path and resets scroll;
-    /// `FoldersComponent`/`MessagesComponent` reset their own indices in
-    /// `handle_msg`.
+    /// Folders or Messages pane). `AppRoot::apply_root` pops the store
+    /// path and resets scroll; `FoldersComponent`/`MessagesComponent`
+    /// reset their own indices in `handle_msg`.
     FolderExitParent,
 
     // Messages
@@ -102,12 +97,11 @@ pub enum Msg {
     /// store knows where the user is reading.
     StoreLoadMore(usize),
 
-    // Direct mutation actions (Phase 1.c, vu-bti). All three carry
-    // a `MessageId` for forward compatibility, but until the store
-    // grows a real index the action-key handler in `MessagesComponent`
-    // emits an empty sentinel string and `AppRoot::apply_root` resolves
-    // the target from the current cursor (same convention as
-    // `Msg::MessageOpen`).
+    // Direct mutation actions. All three carry a `MessageId` for
+    // forward compatibility, but until the store grows a real index the
+    // action-key handler in `MessagesComponent` emits an empty sentinel
+    // string and `AppRoot::apply_root` resolves the target from the
+    // current cursor (same convention as `Msg::MessageOpen`).
     /// Move the cursor-selected email to `<maildir_root>/Archive/cur/`.
     /// Creates the Archive folder on first use. Pushes an `Archive`
     /// mutation onto the undo stack.
@@ -124,10 +118,10 @@ pub enum Msg {
     /// `<folder>/new/`, flipping `is_unread` to true and bumping the
     /// folder's `unread_count`. Idempotent: a no-op when the file is
     /// already in `new/`. Pushes a `MarkUnread` mutation onto the
-    /// undo stack. Phase 1.e (vu-0o3).
+    /// undo stack.
     MarkUnread(MessageId),
 
-    /// Open the folder-picker modal (Phase 1.d, vu-rr6). The
+    /// Open the folder-picker modal. The
     /// `FolderPickerComponent` populates itself from the live store
     /// when it sees this message; AppRoot routes subsequent key events
     /// to the picker until it closes.
@@ -143,7 +137,7 @@ pub enum Msg {
     // Content
     ContentScroll(Dir, usize),
 
-    // Draft (Phase 2)
+    // Draft
     DraftStart(ReplyKind, MessageId),
     DraftEditorExited,
     DraftSend,
@@ -153,7 +147,7 @@ pub enum Msg {
     StoreLoadEmail(MessageId),
 
     /// Pop the most recent `Mutation` off the session undo stack and
-    /// reverse it (vu-pas / Phase 1.f). No-op when the stack is empty.
-    /// AppRoot is the sole handler; components do not observe undo.
+    /// reverse it. No-op when the stack is empty. AppRoot is the sole
+    /// handler; components do not observe undo.
     Undo,
 }

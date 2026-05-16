@@ -21,17 +21,16 @@ use tokio::time::sleep;
 
 /// State threaded through axum handlers.
 ///
-/// vu-7r1: web server no longer shares the legacy `App` god object — it
-/// holds only the email store (locked briefly when reading the current
-/// selection) and an atomic encoding of the focused pane (no lock needed
-/// for the focus check).
+/// Holds only the email store (locked briefly when reading the current
+/// selection) and an atomic encoding of the focused pane (no lock
+/// needed for the focus check).
 ///
-/// vu-9ie (Phase 0.3.5, D1-D3): the web server no longer performs
-/// `fs::read` + MIME parse on its executor threads. When a handler reads
-/// a `HeadersOnly` email it dispatches a request to the shared
-/// `BodyLoader` worker and returns the current state immediately. The
-/// SSE poll loop keys on the email's `load_state` in addition to the
-/// selection coordinates, so the client refetches once the body lands.
+/// The web server never performs `fs::read` + MIME parse on its
+/// executor threads. When a handler reads a `HeadersOnly` email it
+/// dispatches a request to the shared `BodyLoader` worker and returns
+/// the current state immediately. The SSE poll loop keys on the
+/// email's `load_state` in addition to the selection coordinates, so
+/// the client refetches once the body lands.
 #[derive(Clone)]
 pub struct WebState {
     pub email_store: Arc<Mutex<EmailStore>>,
@@ -119,7 +118,7 @@ impl WebServer {
 async fn serve_email(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
     // Hold the lock just long enough to clone what we need; never call
-    // `parse_from_file` under the mutex (vu-9ie, D1-D3).
+    // `parse_from_file` under the mutex.
     let snapshot = {
         let store = match state.email_store.lock() {
             Ok(s) => s,
@@ -184,7 +183,7 @@ async fn email_events(
                     let email_index = store.selected_email.unwrap_or(usize::MAX);
                     // Include load_state in the key so SSE refires when the
                     // body-loader fills in the body after the initial
-                    // selection event (vu-9ie, D2).
+                    // selection event.
                     let load_tag = match store.current_email_for_web(pane) {
                         Some(e) => match e.load_state {
                             EmailLoadState::HeadersOnly => "headers",
@@ -216,7 +215,7 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
     // Snapshot the visible state under the lock, then drop it before doing
     // any HTML/JSON work. The store lock is shared with the TUI render
-    // thread, so we must never block on it (vu-9ie, D3).
+    // thread, so we must never block on it.
     let snapshot = {
         let store = match state.email_store.lock() {
             Ok(s) => s,
@@ -861,7 +860,7 @@ mod tests {
         assert!(html.contains("<p>This is a paragraph.</p>"));
     }
 
-    // --- vu-9ie (Phase 0.3.5) — D1-D3: web server contention on Mutex<App> ---
+    // --- Web server contention on `Mutex<EmailStore>` ---
     //
     // These tests pin the contract that web handlers never hold the
     // `EmailStore` lock across an `fs::read` and never block on disk on

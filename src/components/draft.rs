@@ -1,13 +1,10 @@
-// `DraftComponent` — render-only scaffold (Phase 0.2.4, vu-501).
+// `DraftComponent` — render-only scaffold.
 //
-// Per DESIGN-COMPONENTS.md § "Migration order" step 4, this component
-// locks in the Draft pane's slot in the layout and message addressing
-// before Phase 2 (compose / reply) lands. It owns no state and reacts
-// to no messages yet; `handle_msg` is a no-op and `render` paints a
-// single-line "Coming in Phase 2" placeholder.
-//
-// Phase 2 will populate it with the reply-draft editor lifecycle and
-// handle `Msg::DraftStart` / `Msg::DraftEditorExited` / `Msg::DraftSend`
+// Locks in the Draft pane's slot in the layout and message addressing
+// before compose / reply lands. It owns no state and reacts to no
+// messages yet; `handle_msg` is a no-op and `render` paints a single-
+// line placeholder. The reply-draft editor lifecycle will handle
+// `Msg::DraftStart` / `Msg::DraftEditorExited` / `Msg::DraftSend`
 // (the variants are already defined in `msg.rs`).
 
 use ratatui::{

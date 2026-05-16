@@ -37,11 +37,11 @@ pub enum EmailLoadState {
     FullyLoaded,
 }
 
-/// Source and destination paths for a `new/`→`cur/` mark-read move
-/// (vu-rxi). Built by `EmailStore::plan_mark_read`; consumed by the
-/// AppRoot handler for `Msg::MessageMarkRead`, which performs the
-/// `fs::rename` and then calls `update_email_read_state` so the
-/// in-memory store stays consistent with disk.
+/// Source and destination paths for a `new/`→`cur/` mark-read move.
+/// Built by `EmailStore::plan_mark_read`; consumed by the AppRoot
+/// handler for `Msg::MessageMarkRead`, which performs the `fs::rename`
+/// and then calls `update_email_read_state` so the in-memory store
+/// stays consistent with disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkReadPlan {
     pub from: PathBuf,
@@ -309,9 +309,9 @@ pub struct EmailStore {
     pub current_folder: Vec<usize>, // Path to current folder (indices in subfolder arrays)
     pub selected_email: Option<usize>, // Index of selected email in current folder
     /// True while the initial off-thread folder-structure scan is in
-    /// flight (Phase 0.3.4, vu-w9i). The folder pane uses this to
-    /// render a "Scanning folders…" splash instead of an empty list.
-    /// Flips to false when `AppRoot` reaps the scanner reply.
+    /// flight. The folder pane uses this to render a "Scanning folders…"
+    /// splash instead of an empty list. Flips to false when `AppRoot`
+    /// reaps the scanner reply.
     pub scanning_folders: bool,
     /// Index from original-message-id → draft (Phase 2.c, vu-nof). Built
     /// off-thread alongside the folder-structure scan by walking every
@@ -418,7 +418,7 @@ impl EmailStore {
     /// Called on each `j` scroll in the Messages pane. The previous
     /// implementation called `scanner.load_folder_emails(folder)` with no
     /// limit, which on a 50k-message archive folder could freeze the TUI
-    /// for tens of seconds (vu-5jt / AUDIT-BLOCKING-IO.md §B2).
+    /// for tens of seconds (see AUDIT-BLOCKING-IO.md §B2).
     ///
     /// The paged loader loads at most `SCROLL_LOAD_CHUNK` headers per
     /// call, so per-scroll latency is bounded by `chunk × per-message
@@ -472,14 +472,14 @@ impl EmailStore {
     /// focused pane. Returns `None` for top-level browse panes (Folders,
     /// Accounts) so the web pane shows the welcome screen instead.
     ///
-    /// `vu-9ie` (Phase 0.3.5, D1-D3): non-blocking. Previously this called
-    /// `ensure_fully_loaded` on the selected email while holding the
-    /// `Mutex<EmailStore>`, performing `fs::read` + full MIME parse on the
-    /// axum executor thread *and* stalling the TUI render loop for the
-    /// duration. Body loading is now the `BodyLoader` worker's job; the web
-    /// handler observes whatever state the email is in and (separately)
-    /// kicks the loader. SSE refires on `load_state` change so the client
-    /// refetches once the body lands.
+    /// Non-blocking. Previously this called `ensure_fully_loaded` on the
+    /// selected email while holding the `Mutex<EmailStore>`, performing
+    /// `fs::read` + full MIME parse on the axum executor thread *and*
+    /// stalling the TUI render loop for the duration. Body loading is
+    /// now the `BodyLoader` worker's job; the web handler observes
+    /// whatever state the email is in and (separately) kicks the loader.
+    /// SSE refires on `load_state` change so the client refetches once
+    /// the body lands.
     pub fn current_email_for_web(&self, pane: crate::layout::ActivePane) -> Option<&Email> {
         if !pane.serves_email() {
             return None;
@@ -569,21 +569,21 @@ impl EmailStore {
     }
 
     /// Rewrite a single email's `file_path` after the file has moved on
-    /// disk (action-key handlers + `Msg::Undo`, vu-pas). Walks the
-    /// folder tree and updates the first matching email; returns true
-    /// if an email was found. Counts are not touched — moves between
-    /// folders should also update each folder's `total_count` /
-    /// `unread_count`, but that's the responsibility of the higher-level
-    /// "move email across folders" path that Phase 1.b–1.e will add.
+    /// disk (action-key handlers + `Msg::Undo`). Walks the folder tree
+    /// and updates the first matching email; returns true if an email
+    /// was found. Counts are not touched — moves between folders also
+    /// need to update each folder's `total_count` / `unread_count`, but
+    /// that's the responsibility of the higher-level "move email across
+    /// folders" path.
     pub fn swap_email_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> bool {
         Self::swap_email_path_in_folder(&mut self.root_folder, old, new)
     }
 
-    /// Plan a mark-read transition for the email at `email_index` in the
-    /// current folder (vu-rxi, Phase 1.b). Returns `None` when the index
-    /// is out of range, the email is already read, or the file path is
-    /// not under a `new/` directory — making this method the single
-    /// idempotency gate for `Enter (auto mark-read)`.
+    /// Plan a mark-read transition for the email at `email_index` in
+    /// the current folder. Returns `None` when the index is out of
+    /// range, the email is already read, or the file path is not under
+    /// a `new/` directory — making this method the single idempotency
+    /// gate for `Enter (auto mark-read)`.
     pub fn plan_mark_read(&self, email_index: usize) -> Option<MarkReadPlan> {
         let folder = self.get_current_folder();
         let email = folder.emails.get(email_index)?;
@@ -1080,7 +1080,7 @@ mod tests {
         // Navigate to INBOX and load emails
         store.enter_folder_by_path(&[0]); // Enter first folder (should be INBOX)
         // `None` limit = explicit "load every message" mode for test
-        // setup; production scroll path uses paged loads (vu-5jt).
+        // setup; production scroll path uses paged loads.
         scanner
             .load_folder_emails_with_limit(store.get_current_folder_mut(), None)
             .unwrap();

@@ -1,4 +1,4 @@
-// `FolderPickerComponent` — modal "move to folder" picker (Phase 1.d, vu-rr6).
+// `FolderPickerComponent` — modal "move to folder" picker.
 //
 // Owns its own visibility flag. When `visible == true`, AppRoot routes
 // every key event here first; the picker absorbs all keys until it

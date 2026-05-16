@@ -1,4 +1,4 @@
-// `AccountsComponent` — multi-account pane (Phase 1.a, vu-nja).
+// `AccountsComponent` — multi-account pane.
 //
 // Owns the Accounts pane's cursor (`selected_index`), a snapshot of
 // the `[accounts.*]` table loaded from `vulthor.toml`, and per-account

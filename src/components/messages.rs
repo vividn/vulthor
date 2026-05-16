@@ -1,15 +1,10 @@
-// `MessagesComponent` — second pane migration (Phase 0.2.3a, vu-3ko).
+// `MessagesComponent` — message-list pane.
 //
 // Owns the message-pane email cursor (`email_index`), the
 // remembered-cursor hand-off slot (`remembered_email_index`), and the
 // last-rendered visible-row count (`visible_rows`). Translates Messages-
 // pane keys into messages, restores/remembers selection across
 // Folders↔Messages focus changes, and renders the email list.
-//
-// **Sole writer of `email_index`.** `AppRoot::apply_root` mirrors
-// `email_index` into `app.selection.email_index` after each dispatch
-// step so legacy readers in `ui.rs` (status bar, scroll-offset) and
-// the web server keep working until ContentComponent lands.
 //
 // **`Cell<usize>` visible_rows / `RefCell<ListState>`.** Ratatui's
 // `render_stateful_widget` requires `&mut ListState`, but
@@ -375,22 +370,17 @@ impl Component for MessagesComponent {
             }
             Msg::MessageOpen(_) => {
                 // Enter on a message: pair the open with an auto
-                // mark-read (vu-rxi, Phase 1.b / VISION.md "Enter
-                // (auto mark-read)"). AppRoot derives the actual
-                // message id from `email_index` — we pass an empty
-                // sentinel the same way `on_key(Enter)` does for
-                // `MessageOpen` itself.
+                // mark-read (VISION.md "Enter (auto mark-read)"). AppRoot
+                // derives the actual message id from `email_index` — we
+                // pass an empty sentinel the same way `on_key(Enter)`
+                // does for `MessageOpen` itself.
                 return vec![Msg::MessageMarkRead(String::new())];
             }
             Msg::MessagesBlur => {
                 // Focus just moved Messages → Folders. Remember where
-                // the cursor was so the next `FoldersBlur` can restore it.
-                // The legacy `app.switch_pane` checked
-                // `email_store.selected_email.is_some()` here — but it
-                // *also* deselected the email *before* emitting this
-                // message, so the check would always fail. Always
-                // remember; if the cursor pointed at nothing meaningful,
-                // `FoldersBlur` clamps to 0 on restore anyway.
+                // the cursor was so the next `FoldersBlur` can restore
+                // it. Always remember; if the cursor pointed at nothing
+                // meaningful, `FoldersBlur` clamps to 0 on restore anyway.
                 let _ = ctx;
                 self.remembered_email_index = Some(self.email_index);
             }
@@ -427,18 +417,18 @@ impl Component for MessagesComponent {
             // `self.email_index`. We pass an empty id as a sentinel.
             KeyCode::Enter => Some(Msg::MessageOpen(String::new())),
             KeyCode::Backspace => Some(Msg::FolderExitParent),
-            // Phase 1.c (vu-bti). Same empty-id sentinel — AppRoot
-            // resolves the target email from the cursor.
+            // Same empty-id sentinel — AppRoot resolves the target
+            // email from the cursor.
             KeyCode::Char('a') => Some(Msg::Archive(String::new())),
-            // Phase 1.e (vu-0o3): `F` is a capital-letter alias for
-            // `s`. VISION.md lists both; treating them as the same
-            // action keeps the rebinding story simple.
+            // `F` is a capital-letter alias for `s`. VISION.md lists
+            // both; treating them as the same action keeps the
+            // rebinding story simple.
             KeyCode::Char('s') | KeyCode::Char('F') => Some(Msg::ToggleStar(String::new())),
             KeyCode::Char('d') => Some(Msg::Delete(String::new())),
-            // Phase 1.d (vu-rr6). 'm' surfaces the folder picker; the
-            // picker dispatches `Msg::MoveTo` on Enter.
+            // 'm' surfaces the folder picker; the picker dispatches
+            // `Msg::MoveTo` on Enter.
             KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
-            // Phase 1.e (vu-0o3): mark the cursor email unread.
+            // Mark the cursor email unread.
             KeyCode::Char('U') => Some(Msg::MarkUnread(String::new())),
             _ => None,
         }
@@ -648,9 +638,9 @@ mod tests {
         assert_eq!(m.on_key(up, &ctx), Some(Msg::MessageMove(Dir::Up)));
     }
 
-    /// vu-rxi (Phase 1.b): the open path pairs with an auto mark-read.
-    /// MessagesComponent emits `MessageMarkRead` as a follow-up to
-    /// `MessageOpen` so a single Enter triggers both.
+    /// The open path pairs with an auto mark-read. MessagesComponent
+    /// emits `MessageMarkRead` as a follow-up to `MessageOpen` so a
+    /// single Enter triggers both.
     #[test]
     fn message_open_returns_mark_read_follow_up() {
         let store = store_with_one_folder(3);
@@ -681,8 +671,8 @@ mod tests {
 
     #[test]
     fn on_key_a_s_d_emit_action_messages() {
-        // Phase 1.c (vu-bti): direct action keys map to mutation
-        // messages carrying an empty MessageId sentinel.
+        // Direct action keys map to mutation messages carrying an
+        // empty MessageId sentinel.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
@@ -698,7 +688,7 @@ mod tests {
 
     #[test]
     fn on_key_m_emits_open_folder_picker() {
-        // Phase 1.d (vu-rr6): 'm' surfaces the modal folder picker.
+        // 'm' surfaces the modal folder picker.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
@@ -709,9 +699,9 @@ mod tests {
 
     #[test]
     fn on_key_capital_f_emits_toggle_star_alias() {
-        // Phase 1.e (vu-0o3): VISION.md lists `F` as a capital-letter
-        // alias for `s`. Both forms — bare and SHIFT-modified, since
-        // terminals vary — must produce ToggleStar.
+        // VISION.md lists `F` as a capital-letter alias for `s`. Both
+        // forms — bare and SHIFT-modified, since terminals vary — must
+        // produce ToggleStar.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
@@ -725,7 +715,7 @@ mod tests {
 
     #[test]
     fn on_key_capital_u_emits_mark_unread() {
-        // Phase 1.e (vu-0o3): `U` marks the cursor email unread.
+        // `U` marks the cursor email unread.
         let store = store_with_one_folder(3);
         let (theme, config) = (VulthorTheme, Config::default());
         let ctx = ctx(&theme, &config, &store);
@@ -774,7 +764,7 @@ mod tests {
         assert_eq!(m.on_key(alt_j, &ctx), None);
     }
 
-    // --- Rendering helper tests (migrated from ui.rs in vu-3ko). ---
+    // --- Rendering helper tests. ---
     // The helpers are private to `MessagesComponent`; these tests
     // exercise them via `super::*`.
 

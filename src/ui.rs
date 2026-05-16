@@ -55,9 +55,8 @@ impl UI {
             f, store, layout, folders, messages, content, accounts, draft, size,
         );
         self.draw_status_bar(f, layout, status_message, size);
-        // Modal overlay (Phase 1.d, vu-rr6). Drawn last so it sits on
-        // top of every pane; `render_modal` is a no-op when the picker
-        // is hidden.
+        // Modal overlay drawn last so it sits on top of every pane;
+        // `render_modal` is a no-op when the picker is hidden.
         folder_picker.render_modal(f, size);
     }
 

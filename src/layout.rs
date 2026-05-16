@@ -1,4 +1,4 @@
-// Layout & pane state — split out of the legacy `App` god object (vu-7r1).
+// Layout & pane state.
 //
 // `Layout` owns the slice of state that drives ratatui's pane composition:
 // which `View` (h/l) is showing, which `ActivePane` (Tab) has focus,
@@ -22,10 +22,9 @@ pub enum View {
     Content,
     Messages,
     MessagesAttachments,
-    // Phase 0.2.4 scaffolds (vu-501). Slot-only: not yet reachable via h/l
-    // navigation in non-test builds. Phase 1 wires Accounts into the
-    // prev-view chain (conditional on >1 account configured); Phase 2
-    // wires Draft into the next-view chain when a reply draft exists.
+    // Slot-only scaffolds: `AccountsFolders` is reachable only when more
+    // than one account is configured; `ContentDraft` is reachable only
+    // while a reply draft exists.
     #[allow(dead_code)]
     AccountsFolders,
     #[allow(dead_code)]
@@ -360,11 +359,11 @@ mod tests {
 
     #[test]
     fn new_view_variants_are_not_yet_wired_into_navigation_chain() {
-        // Phase 1.a (vu-nja) wired the Accounts → Folders direction
-        // through `next_view` so 'l' from the Accounts pane advances
-        // back into the folder list. The conditional reverse direction
-        // (`h` from FolderMessages → AccountsFolders) is a multi-
-        // account-only policy enforced by AppRoot, not layout.
+        // The Accounts → Folders direction goes through `next_view` so
+        // 'l' from the Accounts pane advances back into the folder list.
+        // The conditional reverse direction (`h` from FolderMessages →
+        // AccountsFolders) is a multi-account-only policy enforced by
+        // AppRoot, not layout.
         assert_eq!(
             View::AccountsFolders.next_view(false),
             Some(View::FolderMessages)

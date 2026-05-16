@@ -1,4 +1,4 @@
-// Unified error type for the thiserror migration epic (vu-ri8).
+// Unified error type.
 //
 // Used across config, email, maildir, web, and main. `VulthorError` is
 // Send + Sync so it can flow across tokio task boundaries (e.g. the web

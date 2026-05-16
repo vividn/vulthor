@@ -1,9 +1,10 @@
-// Off-thread folder-headers loader (Phase 0.3.3, vu-kx9).
+// Off-thread folder-headers loader.
 //
-// Audit entries A1 / B1 / B3 / B4 called `MaildirScanner::load_folder_emails_with_limit`
-// from the TUI thread, so every j/k that changed the folder selection and every
-// folder-enter blocked on `fs::read_dir` + N × `fs::read` + header parse. On a cold
-// NFS mount that adds 200ms–1s per first-touch keystroke.
+// `MaildirScanner::load_folder_emails_with_limit` used to be called
+// from the TUI thread, so every j/k that changed the folder selection
+// and every folder-enter blocked on `fs::read_dir` + N × `fs::read` +
+// header parse. On a cold NFS mount that adds 200ms–1s per first-touch
+// keystroke.
 //
 // `HeadersLoader` mirrors `BodyLoader`'s shape: a single long-lived OS thread fed
 // by an `mpsc` request channel, replying through a second channel that `AppRoot`

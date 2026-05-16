@@ -1,14 +1,9 @@
 // Component-based state management.
 //
-// Phase 0.2.1 (vu-m6s) introduced the `Component` trait, the flat `Msg`
-// enum, the read-only `Ctx`, and an inert `AppRoot` scaffold.
-// Phase 0.2.2a (vu-gje) made `AppRoot` the live main-loop driver — it now
-// owns the message queue, intercepts global keys, dispatches via
-// `apply_root` against the legacy `App`, and renders by delegating to
-// today's `ui::UI::draw`. No pane has been migrated to a component yet;
-// that lands in vu-sd6 (FoldersComponent) and beyond.
+// `AppRoot` is the main-loop driver — it owns the message queue,
+// intercepts global keys, dispatches messages, and renders the panes
+// via `ui::UI::draw`.
 
-// `Component`-related items remain unused until the first pane migrates.
 #![allow(dead_code, unused_imports)]
 
 mod accounts;
