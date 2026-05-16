@@ -48,17 +48,23 @@ async fn main() -> Result<()> {
         config.maildir_path = maildir_path;
     }
 
+    // `-m` overrides the maildir for single-account runs; for
+    // multi-account configs, the active account's `maildir_path`
+    // wins (vu-nja, Phase 1.a). `Config::active_maildir()` resolves
+    // both cases.
+    let initial_maildir = config.active_maildir();
+
     // Phase 0.3.4 (vu-w9i): folder-structure scan runs off the main thread.
     // We start the worker but do NOT block; the TUI comes up immediately and
     // renders a splash until the scan reply lands in `drain_scanned_folders`.
-    let scanner = MaildirScanner::new(config.maildir_path.clone());
-    let folder_scanner_handle = FolderScannerHandle::spawn(config.maildir_path.clone());
+    let scanner = MaildirScanner::new(initial_maildir.clone());
+    let folder_scanner_handle = FolderScannerHandle::spawn(initial_maildir.clone());
 
-    let mut email_store = EmailStore::new(config.maildir_path.clone());
+    let mut email_store = EmailStore::new(initial_maildir.clone());
     email_store.scanning_folders = true;
     let email_store: Arc<Mutex<EmailStore>> = Arc::new(Mutex::new(email_store));
 
-    let mut app_root = AppRoot::new(email_store.clone(), scanner);
+    let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
 
     let web_server = WebServer::new(
@@ -135,6 +141,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = Config {
             maildir_path: temp_dir.path().to_path_buf(),
+            ..Config::default()
         };
 
         let scanner = MaildirScanner::new(config.maildir_path.clone());

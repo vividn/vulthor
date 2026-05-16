@@ -1,6 +1,7 @@
 use crate::error::{Result, VulthorError};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -19,10 +20,38 @@ pub struct CliArgs {
     pub maildir_path: Option<PathBuf>,
 }
 
+/// A single configured account. One per `[accounts.<key>]` section in
+/// `vulthor.toml`. The TOML table key becomes the [`AccountId`]; `name`
+/// is the human-facing display label rendered in the Accounts pane.
+///
+/// [`AccountId`]: crate::components::AccountId
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AccountConfig {
+    pub name: String,
+    pub email: String,
+    pub maildir_path: PathBuf,
+    /// Optional; required for sending mail, but read-only multi-account
+    /// switching does not need it.
+    #[serde(default)]
+    pub smtp_command: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
-    /// Path to the MailDir directory
+    /// Path to the MailDir directory. Used when no `[accounts.*]` table
+    /// is configured (single-account compat) or as a final fallback when
+    /// `default_account` does not resolve.
     pub maildir_path: PathBuf,
+    /// TOML key of the account active on startup. Falls back to the
+    /// first account in alphabetical order when unset.
+    #[serde(default)]
+    pub default_account: Option<String>,
+    /// `[accounts.<key>]` sections. `BTreeMap` gives a deterministic
+    /// (alphabetical) iteration order for the Accounts pane.
+    #[serde(default)]
+    pub accounts: BTreeMap<String, AccountConfig>,
 }
 
 impl Default for Config {
@@ -31,7 +60,55 @@ impl Default for Config {
             maildir_path: dirs::home_dir()
                 .map(|home| home.join("Mail"))
                 .unwrap_or_else(|| PathBuf::from("./Mail")),
+            default_account: None,
+            accounts: BTreeMap::new(),
         }
+    }
+}
+
+impl Config {
+    /// Ordered list of `(account_id, account)` pairs. Empty when no
+    /// `[accounts.*]` tables are configured. Stable across calls.
+    pub fn ordered_accounts(&self) -> Vec<(String, AccountConfig)> {
+        self.accounts
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Index of the account to activate on startup. Resolves
+    /// `default_account` against the ordered list; falls back to 0 when
+    /// the key is missing or unset. Returns `None` when no accounts are
+    /// configured.
+    pub fn default_account_index(&self) -> Option<usize> {
+        if self.accounts.is_empty() {
+            return None;
+        }
+        let ordered = self.ordered_accounts();
+        if let Some(key) = &self.default_account {
+            if let Some(idx) = ordered.iter().position(|(k, _)| k == key) {
+                return Some(idx);
+            }
+        }
+        Some(0)
+    }
+
+    /// MailDir path that should back the store on startup. Returns the
+    /// `default_account`'s `maildir_path` when multi-account is
+    /// configured, otherwise the top-level `maildir_path`.
+    pub fn active_maildir(&self) -> PathBuf {
+        if let Some(idx) = self.default_account_index() {
+            let ordered = self.ordered_accounts();
+            return ordered[idx].1.maildir_path.clone();
+        }
+        self.maildir_path.clone()
+    }
+
+    /// True when more than one account is configured. Drives the
+    /// Accounts pane visibility (single-account installs hide it per
+    /// VISION.md § "Multi-Account").
+    pub fn is_multi_account(&self) -> bool {
+        self.accounts.len() > 1
     }
 }
 
@@ -152,6 +229,7 @@ mod tests {
     fn test_config_serialization() {
         let config = Config {
             maildir_path: PathBuf::from("/test/maildir"),
+            ..Config::default()
         };
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -170,6 +248,7 @@ mod tests {
 
         let test_config = Config {
             maildir_path: PathBuf::from("/custom/mail/path"),
+            ..Config::default()
         };
 
         // Write test config
@@ -267,6 +346,7 @@ mod tests {
     async fn test_config_with_relative_path() {
         let config = Config {
             maildir_path: PathBuf::from("./relative/mail/path"),
+            ..Config::default()
         };
 
         let temp_dir = TempDir::new().unwrap();
@@ -287,6 +367,7 @@ mod tests {
     async fn test_config_with_unicode_path() {
         let config = Config {
             maildir_path: PathBuf::from("/home/用户/邮件"),
+            ..Config::default()
         };
 
         let temp_dir = TempDir::new().unwrap();
@@ -302,10 +383,104 @@ mod tests {
     }
 
     #[test]
+    fn multi_account_toml_round_trips() {
+        // Per VISION.md § "Multi-Account": `[accounts.<key>]` tables
+        // carry name / email / maildir_path (required) plus optional
+        // smtp_command / signature. We confirm the deserializer picks
+        // them up, that ordered_accounts() sorts by key, and that
+        // default_account_index() honors the configured key.
+        let toml_str = r#"
+maildir_path = "/legacy/path"
+default_account = "personal"
+
+[accounts.work]
+name = "Work"
+email = "me@company.com"
+maildir_path = "/Mail/work"
+smtp_command = "msmtp -a work"
+signature = "Best,\nMe"
+
+[accounts.personal]
+name = "Personal"
+email = "me@personal.tld"
+maildir_path = "/Mail/personal"
+smtp_command = "msmtp -a personal"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.accounts.len(), 2);
+        assert_eq!(cfg.default_account.as_deref(), Some("personal"));
+
+        let ordered = cfg.ordered_accounts();
+        // BTreeMap → alphabetical: personal before work.
+        assert_eq!(ordered[0].0, "personal");
+        assert_eq!(ordered[1].0, "work");
+        assert_eq!(ordered[0].1.name, "Personal");
+        assert_eq!(ordered[1].1.email, "me@company.com");
+
+        // default_account "personal" lives at index 0.
+        assert_eq!(cfg.default_account_index(), Some(0));
+        // active_maildir resolves to the default account's path, not
+        // the top-level legacy fallback.
+        assert_eq!(cfg.active_maildir(), PathBuf::from("/Mail/personal"));
+        assert!(cfg.is_multi_account());
+    }
+
+    #[test]
+    fn single_account_config_is_not_multi_account() {
+        // One [accounts.*] block is still "single-account" for the
+        // purposes of hiding the Accounts pane (per VISION.md).
+        let toml_str = r#"
+maildir_path = "/legacy/path"
+
+[accounts.solo]
+name = "Solo"
+email = "me@solo.tld"
+maildir_path = "/Mail/solo"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.accounts.len(), 1);
+        assert!(!cfg.is_multi_account());
+        // No default_account configured — falls back to first account.
+        assert_eq!(cfg.default_account_index(), Some(0));
+        assert_eq!(cfg.active_maildir(), PathBuf::from("/Mail/solo"));
+    }
+
+    #[test]
+    fn no_accounts_falls_back_to_legacy_maildir_path() {
+        // Existing single-account configs that pre-date the
+        // `[accounts.*]` schema must keep working unchanged.
+        let toml_str = r#"maildir_path = "/legacy/Mail""#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert!(cfg.accounts.is_empty());
+        assert_eq!(cfg.default_account_index(), None);
+        assert!(!cfg.is_multi_account());
+        assert_eq!(cfg.active_maildir(), PathBuf::from("/legacy/Mail"));
+    }
+
+    #[test]
+    fn default_account_with_unknown_key_falls_back_to_first() {
+        // Typo in default_account → don't crash; pick the first
+        // account in the alphabetical iteration order.
+        let toml_str = r#"
+maildir_path = "/legacy/path"
+default_account = "does-not-exist"
+
+[accounts.work]
+name = "Work"
+email = "w@x.tld"
+maildir_path = "/Mail/work"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.default_account_index(), Some(0));
+        assert_eq!(cfg.active_maildir(), PathBuf::from("/Mail/work"));
+    }
+
+    #[test]
     fn test_config_error_handling_file_permission() {
         // This test might not work on all systems, but tests error handling
         let config = Config {
             maildir_path: PathBuf::from("/test/path"),
+            ..Config::default()
         };
 
         // Try to save to a path that should fail (like root directory on Unix)

@@ -51,6 +51,10 @@ pub struct AppRoot {
     /// change via `Msg::FocusChanged`.
     focused_pane: Arc<AtomicU8>,
 
+    /// User config (incl. `[accounts.*]`). Lives on AppRoot since
+    /// Phase 1.a (vu-nja); `Msg::AccountSelect` reads it to find the
+    /// maildir_path to rebuild the store against.
+    config: Config,
     scanner: MaildirScanner,
     layout: Layout,
     status_message: Option<String>,
@@ -79,7 +83,15 @@ pub struct AppRoot {
 }
 
 impl AppRoot {
-    pub fn new(email_store: Arc<Mutex<EmailStore>>, scanner: MaildirScanner) -> Self {
+    /// Construct an AppRoot whose Accounts pane mirrors the config's
+    /// `[accounts.*]` tables. Use this for the runtime. Tests that
+    /// don't exercise multi-account behavior can call [`new`] which
+    /// substitutes `Config::default()`.
+    pub fn with_config(
+        email_store: Arc<Mutex<EmailStore>>,
+        scanner: MaildirScanner,
+        config: Config,
+    ) -> Self {
         let initial_index = {
             let store = email_store.lock().unwrap();
             FoldersComponent::auto_select_inbox(&store.root_folder)
@@ -90,6 +102,7 @@ impl AppRoot {
         let mut root = Self {
             email_store: email_store.clone(),
             focused_pane: Arc::new(AtomicU8::new(ActivePane::Folders.to_u8())),
+            config: Config::default(),
             scanner: scanner.clone(),
             layout,
             status_message: None,
@@ -99,7 +112,7 @@ impl AppRoot {
             folders: FoldersComponent::with_index(initial_index),
             messages: MessagesComponent::new(),
             content: ContentComponent::new(),
-            accounts: AccountsComponent::new(),
+            accounts: AccountsComponent::with_config(&config),
             draft: DraftComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
@@ -109,6 +122,10 @@ impl AppRoot {
             loading_folder_paths: HashSet::new(),
             undo_stack: Vec::new(),
         };
+        // Stash the real config after building the component so the
+        // AccountsComponent can be seeded with a borrowed reference
+        // above without colliding with the move into `Self`.
+        root.config = config;
 
         // Pre-fetch the auto-selected folder's headers off-thread so the
         // first frame doesn't have to block on disk. No-op when the
@@ -121,6 +138,12 @@ impl AppRoot {
             root.request_folder_load_if_needed(&indices);
         }
         root
+    }
+
+    /// Default-config shim. Tests that don't exercise the Accounts
+    /// pane use this; the runtime always uses [`with_config`].
+    pub fn new(email_store: Arc<Mutex<EmailStore>>, scanner: MaildirScanner) -> Self {
+        Self::with_config(email_store, scanner, Config::default())
     }
 
     /// Hand the root the off-thread folder scanner started in `main`.
@@ -242,7 +265,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Folders) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&store);
+                    let ctx = Self::make_ctx(&self.config, &store);
                     self.folders.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -255,7 +278,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Messages) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&store);
+                    let ctx = Self::make_ctx(&self.config, &store);
                     self.messages.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -268,7 +291,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Content) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&store);
+                    let ctx = Self::make_ctx(&self.config, &store);
                     self.content.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -277,7 +300,20 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
-            // 5. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
+            // 5. Accounts-pane keys go to AccountsComponent (Phase 1.a, vu-nja).
+            if matches!(self.layout.active_pane, ActivePane::Accounts) {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.accounts.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain();
+                    return Ok(self.should_quit);
+                }
+            }
+            // 6. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
             self.handle_residual_key(key);
             self.drain();
             self.request_body_if_needed();
@@ -518,7 +554,7 @@ impl AppRoot {
             }
             let follow_ups = {
                 let store = self.email_store.lock().unwrap();
-                let ctx = Self::make_ctx(&store);
+                let ctx = Self::make_ctx(&self.config, &store);
                 let mut fu = self.folders.handle_msg(&msg, &ctx);
                 fu.extend(self.messages.handle_msg(&msg, &ctx));
                 fu.extend(self.content.handle_msg(&msg, &ctx));
@@ -569,7 +605,23 @@ impl AppRoot {
             }
             Msg::ViewPrev => {
                 let old = self.layout.active_pane;
-                self.layout.prev_view();
+                // Multi-account override (VISION.md § "Multi-Account",
+                // vu-nja): 'h' from the FolderMessages view surfaces
+                // the Accounts pane. Layout-level `prev_view` returns
+                // None there because single-account installs must
+                // keep the pane hidden; the multi-account policy
+                // lives here so layout stays pure.
+                if matches!(self.layout.current_view, View::FolderMessages)
+                    && self.config.is_multi_account()
+                {
+                    self.layout.current_view = View::AccountsFolders;
+                    self.layout.active_pane = self
+                        .layout
+                        .current_view
+                        .get_default_active_pane(self.layout.content_pane_hidden);
+                } else {
+                    self.layout.prev_view();
+                }
                 let new = self.layout.active_pane;
                 self.on_focus_change(old, new);
             }
@@ -660,6 +712,12 @@ impl AppRoot {
                 self.layout.selection.email_index = idx;
                 self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
             }
+            Msg::AccountSelect(id) => {
+                if let Some(account) = self.accounts.account_by_id(id) {
+                    let new_path = account.maildir_path.clone();
+                    self.switch_active_maildir(new_path);
+                }
+            }
             Msg::StatusSet(s) => {
                 self.status_message = Some(s.clone());
             }
@@ -715,6 +773,56 @@ impl AppRoot {
         self.undo_stack.len()
     }
 
+    /// Re-point the runtime at a new maildir root. Used by
+    /// `Msg::AccountSelect` (Phase 1.a, vu-nja).
+    ///
+    /// The shared `Arc<Mutex<EmailStore>>` keeps its identity — the
+    /// web server's clone stays valid — and we overwrite its
+    /// contents under the lock. The folder scanner and headers
+    /// loader both get fresh handles tied to the new path; the
+    /// existing body loader is path-agnostic and stays running.
+    /// Folder/message/content cursors reset so the user lands on the
+    /// new account's INBOX (auto-selected once the scanner reply
+    /// arrives in `drain_scanned_folders`).
+    fn switch_active_maildir(&mut self, new_path: PathBuf) {
+        // 1. Reset the store in place — same Arc, fresh contents.
+        {
+            let mut store = self.email_store.lock().unwrap();
+            *store = EmailStore::new(new_path.clone());
+            store.scanning_folders = true;
+        }
+
+        // 2. Replace the scanners. HeadersLoader owns its own clone
+        //    of the scanner, so we re-spawn it against the new path.
+        self.scanner = MaildirScanner::new(new_path.clone());
+        self.headers_loader = HeadersLoader::spawn(self.scanner.clone());
+        self.folder_scanner = Some(FolderScannerHandle::spawn(new_path.clone()));
+
+        // 3. Reset component cursors. Folders auto-select runs again
+        //    in `drain_scanned_folders` once the new scan lands.
+        self.folders.folder_index = 0;
+        self.messages.email_index = 0;
+        self.messages.remembered_email_index = None;
+        self.content.scroll_offset = 0;
+        self.layout.selection = Default::default();
+
+        // 4. Clear in-flight load tracking so we don't suppress
+        //    legitimate reloads of paths that happened to match the
+        //    previous account's tree.
+        self.loading_paths.clear();
+        self.loading_folder_paths.clear();
+
+        // 5. Land the user in FolderMessages with focus on Folders;
+        //    the AccountsFolders view was a transient navigation
+        //    state, not where they want to sit reading mail. The
+        //    FolderMessages view is identical in both content-pane
+        //    modes (the messages pane is shown either way), so there
+        //    is no branch on `content_pane_hidden` here.
+        self.layout.current_view = View::FolderMessages;
+        self.layout.active_pane = ActivePane::Folders;
+        self.publish_focus();
+    }
+
     fn on_focus_change(&mut self, old: ActivePane, new: ActivePane) {
         if old != new {
             self.publish_focus();
@@ -741,17 +849,16 @@ impl AppRoot {
         self.help_visible
     }
 
-    fn make_ctx(store: &EmailStore) -> Ctx<'_> {
+    fn make_ctx<'a>(config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme: &THEME,
-            config: &CONFIG,
+            config,
             store,
         }
     }
 }
 
 static THEME: VulthorTheme = VulthorTheme;
-static CONFIG: std::sync::LazyLock<Config> = std::sync::LazyLock::new(Config::default);
 
 #[cfg(test)]
 mod tests {
@@ -1392,5 +1499,164 @@ mod tests {
         let tab = Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         root.process_event(tab).unwrap();
         assert_eq!(focus.load(Ordering::Relaxed), ActivePane::Messages.to_u8());
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 1.a (vu-nja): multi-account view-progression + switching.
+    // -----------------------------------------------------------------
+
+    fn multi_account_config(maildirs: &[(&str, &str)]) -> Config {
+        let mut cfg = Config::default();
+        for (key, path) in maildirs {
+            cfg.accounts.insert(
+                (*key).to_string(),
+                crate::config::AccountConfig {
+                    name: key.to_string(),
+                    email: format!("{}@x.test", key),
+                    maildir_path: PathBuf::from(*path),
+                    smtp_command: None,
+                    signature: None,
+                },
+            );
+        }
+        cfg
+    }
+
+    fn make_root_with_config(config: Config) -> AppRoot {
+        let store = EmailStore::new(PathBuf::from("/tmp"));
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, config)
+    }
+
+    #[test]
+    fn h_from_folder_messages_reveals_accounts_when_multi_account() {
+        // VISION.md § "Multi-Account": pressing 'h' from FolderMessages
+        // surfaces the AccountsFolders view (only when >1 accounts are
+        // configured). AppRoot owns this policy; layout's prev_view
+        // stays None for FolderMessages because single-account installs
+        // must keep the pane hidden.
+        let cfg = multi_account_config(&[("work", "/Mail/work"), ("home", "/Mail/home")]);
+        let mut root = make_root_with_config(cfg);
+        assert_eq!(root.layout.current_view, View::FolderMessages);
+
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+
+        assert_eq!(root.layout.current_view, View::AccountsFolders);
+        // Default focus on entering AccountsFolders is the Folders
+        // pane (the user came from there); Accounts is one Tab away.
+        assert_eq!(root.layout.active_pane, ActivePane::Folders);
+    }
+
+    #[test]
+    fn h_from_folder_messages_is_noop_for_single_account() {
+        // A single configured account hides the pane entirely. 'h'
+        // from FolderMessages stays put — there is no broader view
+        // to fall back to.
+        let cfg = multi_account_config(&[("solo", "/Mail/solo")]);
+        let mut root = make_root_with_config(cfg);
+        let before = root.layout.current_view;
+
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+
+        assert_eq!(root.layout.current_view, before);
+    }
+
+    #[test]
+    fn h_from_folder_messages_is_noop_with_no_accounts() {
+        // Legacy single-maildir config (no [accounts.*] sections) —
+        // same outcome as one-account: pane never appears.
+        let mut root = make_root();
+        let before = root.layout.current_view;
+
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+
+        assert_eq!(root.layout.current_view, before);
+    }
+
+    #[test]
+    fn account_select_rebuilds_store_with_new_maildir() {
+        // The acceptance test: dispatching Msg::AccountSelect points
+        // the EmailStore at the chosen account's maildir, resets
+        // folder/message cursors, and re-spawns the folder scanner
+        // (scanning_folders flips true, the new path is owned by the
+        // store).
+        let cfg = multi_account_config(&[("work", "/tmp/work-mail"), ("home", "/tmp/home-mail")]);
+        let mut root = make_root_with_config(cfg);
+        let store_handle = root.email_store_handle();
+
+        // Seed some state so the reset is observable.
+        root.folders.folder_index = 3;
+        root.messages.email_index = 5;
+        root.content.scroll_offset = 10;
+        {
+            let mut store = store_handle.lock().unwrap();
+            store.current_folder = vec![0, 1];
+            store.scanning_folders = false;
+        }
+
+        root.enqueue(Msg::AccountSelect("home".into()));
+        root.drain();
+
+        let store = store_handle.lock().unwrap();
+        assert_eq!(store.root_folder.path, PathBuf::from("/tmp/home-mail"));
+        assert!(store.scanning_folders, "rebuild must start a fresh scan");
+        assert!(store.current_folder.is_empty());
+        assert_eq!(root.folders.folder_index, 0);
+        assert_eq!(root.messages.email_index, 0);
+        assert_eq!(root.content.scroll_offset, 0);
+        assert_eq!(root.layout.active_pane, ActivePane::Folders);
+        assert_eq!(root.layout.current_view, View::FolderMessages);
+    }
+
+    #[test]
+    fn account_select_keeps_arc_identity_for_web_server() {
+        // The web server holds a clone of `Arc<Mutex<EmailStore>>`.
+        // Switching accounts must overwrite the store contents under
+        // the lock — not swap the Arc itself — so the web pane keeps
+        // serving the live store after a switch.
+        let cfg = multi_account_config(&[("a", "/tmp/a-mail"), ("b", "/tmp/b-mail")]);
+        let mut root = make_root_with_config(cfg);
+        let store_handle = root.email_store_handle();
+        let same_arc_check = Arc::clone(&store_handle);
+
+        root.enqueue(Msg::AccountSelect("b".into()));
+        root.drain();
+
+        // Same Arc pointer means the web server's clone still points
+        // at the freshly-loaded store.
+        assert!(Arc::ptr_eq(&store_handle, &same_arc_check));
+        let store = store_handle.lock().unwrap();
+        assert_eq!(store.root_folder.path, PathBuf::from("/tmp/b-mail"));
+    }
+
+    #[test]
+    fn account_select_with_unknown_id_is_a_no_op() {
+        // A stale AccountSelect (account removed mid-session) must
+        // not crash the dispatch loop; the store stays pointed at the
+        // current account.
+        let cfg = multi_account_config(&[("only", "/tmp/only-mail")]);
+        let mut root = make_root_with_config(cfg);
+        let store_handle = root.email_store_handle();
+        let prior_path = store_handle.lock().unwrap().root_folder.path.clone();
+
+        root.enqueue(Msg::AccountSelect("missing".into()));
+        root.drain();
+
+        assert_eq!(store_handle.lock().unwrap().root_folder.path, prior_path);
+    }
+
+    #[test]
+    fn approot_with_config_seeds_accounts_pane() {
+        // Sanity check the wiring: AppRoot::with_config hands the
+        // config through to AccountsComponent::with_config so the
+        // pane is populated from the start.
+        let cfg = multi_account_config(&[("alpha", "/tmp/alpha"), ("bravo", "/tmp/bravo")]);
+        let root = make_root_with_config(cfg);
+        assert_eq!(root.accounts.account_count(), 2);
+        // BTreeMap order: alpha first.
+        assert_eq!(root.accounts.current_account_id().as_deref(), Some("alpha"));
     }
 }

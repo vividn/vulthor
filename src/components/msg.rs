@@ -56,7 +56,17 @@ pub enum Msg {
     /// between serving the selected email and the welcome screen. vu-7r1.
     FocusChanged(crate::layout::ActivePane),
 
-    // Accounts (Phase 1, scaffold now)
+    // Accounts (Phase 1)
+    /// Move the cursor inside the Accounts pane. Only `Up`/`Down` are
+    /// meaningful — `Left`/`Right` belong to the view-progression
+    /// (`h`/`l`) handled by `AppRoot`.
+    AccountMove(Dir),
+    /// Switch the active account. The carried [`AccountId`] is the
+    /// `[accounts.<key>]` table key from `vulthor.toml`. `AppRoot`
+    /// rebuilds the [`EmailStore`] from the account's `maildir_path`
+    /// and resets folder/message selection.
+    ///
+    /// [`EmailStore`]: crate::email::EmailStore
     AccountSelect(AccountId),
 
     // Folders

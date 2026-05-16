@@ -1,45 +1,163 @@
-// `AccountsComponent` — render-only scaffold (Phase 0.2.4, vu-501).
+// `AccountsComponent` — multi-account pane (Phase 1.a, vu-nja).
 //
-// Per DESIGN-COMPONENTS.md § "Migration order" step 4, this component
-// locks in the Accounts pane's slot in the layout and message addressing
-// before Phase 1 (multi-account support) lands. It owns no state and
-// reacts to no messages yet; `handle_msg` is a no-op and `render` paints
-// a single-line "Coming in Phase 1" placeholder.
+// Owns the Accounts pane's cursor (`selected_index`), a snapshot of
+// the `[accounts.*]` table loaded from `vulthor.toml`, and per-account
+// unread counts. Translates Accounts-pane keys into messages.
 //
-// Phase 1 will populate it with account selection, per-account unread
-// counts, and `Msg::AccountSelect` handling (the `Msg` variant is
-// already defined in `msg.rs`).
+// **State source.** The accounts list is seeded once at construction
+// from `Config::ordered_accounts()`. The component does not read
+// `Ctx::config` during render — that would let a stale config drift
+// the cursor against the rendered list. Re-seeding (e.g. when a
+// future config-reload feature lands) is an explicit caller action.
+//
+// **Why a `Vec` and not a `BTreeMap`.** Selection-by-index dominates
+// the UX surface (j/k, render highlight, `current_account_id`).
+// `Config` keeps the map; the component flattens it once.
+//
+// **Single-account installs.** When the config has 0 or 1 accounts,
+// VISION.md § "Multi-Account" requires the pane to be hidden. That
+// policy is enforced by `AppRoot`'s `ViewPrev` handler refusing to
+// surface `View::AccountsFolders`; this component happily renders a
+// single row when asked.
 
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::cell::RefCell;
 
+use crate::config::{AccountConfig, Config};
 use crate::theme::VulthorTheme;
 
-use super::{Component, Ctx, Msg};
+use super::{AccountId, Component, Ctx, Dir, Msg};
 
-/// Pane title — shared with the placeholder body so tests can grep for
-/// either string.
 pub const ACCOUNTS_TITLE: &str = "Accounts";
 
-/// Placeholder body until Phase 1 wires multi-account in. Tests assert
-/// this exact string renders when the pane is active.
-pub const ACCOUNTS_PLACEHOLDER: &str = "Coming in Phase 1";
+/// Body rendered when no `[accounts.*]` sections are configured —
+/// e.g. an old single-account config that still uses the top-level
+/// `maildir_path`. Tests grep for this exact string.
+pub const ACCOUNTS_EMPTY_BODY: &str = "No accounts configured";
 
-#[derive(Default)]
-pub struct AccountsComponent;
+#[derive(Debug, Clone)]
+struct AccountRow {
+    id: AccountId,
+    account: AccountConfig,
+    /// Reserved for a later loader; today every row reports 0 because
+    /// the store only knows the active account's folders. Rendered
+    /// as `Name (n)` only when non-zero so non-active accounts read
+    /// plainly.
+    unread: usize,
+}
+
+pub struct AccountsComponent {
+    accounts: Vec<AccountRow>,
+    selected_index: usize,
+    list_state: RefCell<ListState>,
+}
+
+impl Default for AccountsComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AccountsComponent {
+    /// Construct an empty component. The runtime calls
+    /// [`with_config`](Self::with_config) instead, but tests that
+    /// don't care about accounts use this.
     pub fn new() -> Self {
-        Self
+        Self {
+            accounts: Vec::new(),
+            selected_index: 0,
+            list_state: RefCell::new(ListState::default()),
+        }
+    }
+
+    /// Build a component seeded from `Config`. The initial cursor
+    /// follows `Config::default_account_index()` so the highlighted
+    /// row matches the account whose maildir is loaded into the store.
+    pub fn with_config(config: &Config) -> Self {
+        let accounts: Vec<AccountRow> = config
+            .ordered_accounts()
+            .into_iter()
+            .map(|(id, account)| AccountRow {
+                id,
+                account,
+                unread: 0,
+            })
+            .collect();
+        let selected_index = config.default_account_index().unwrap_or(0);
+        let mut state = ListState::default();
+        if !accounts.is_empty() {
+            state.select(Some(selected_index));
+        }
+        Self {
+            accounts,
+            selected_index,
+            list_state: RefCell::new(state),
+        }
+    }
+
+    pub fn account_count(&self) -> usize {
+        self.accounts.len()
+    }
+
+    pub fn selected_index(&self) -> usize {
+        self.selected_index
+    }
+
+    /// Account id at the cursor — `None` only when no accounts are
+    /// configured. Used by `on_key` to populate `Msg::AccountSelect`.
+    pub fn current_account_id(&self) -> Option<AccountId> {
+        self.accounts.get(self.selected_index).map(|r| r.id.clone())
+    }
+
+    /// Resolve an account id to its config payload. `AppRoot` uses
+    /// this to look up the maildir_path when handling
+    /// `Msg::AccountSelect`.
+    pub fn account_by_id(&self, id: &str) -> Option<&AccountConfig> {
+        self.accounts
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| &r.account)
+    }
+
+    fn highlight_row(&self, row: &AccountRow) -> Line<'static> {
+        let mut spans = vec![Span::raw(row.account.name.clone())];
+        if row.unread > 0 {
+            spans.push(Span::raw(format!(" ({})", row.unread)));
+        }
+        Line::from(spans)
     }
 }
 
 impl Component for AccountsComponent {
-    fn handle_msg(&mut self, _msg: &Msg, _ctx: &Ctx) -> Vec<Msg> {
+    fn handle_msg(&mut self, msg: &Msg, _ctx: &Ctx) -> Vec<Msg> {
+        match msg {
+            Msg::AccountMove(Dir::Down) => {
+                if !self.accounts.is_empty() && self.selected_index + 1 < self.accounts.len() {
+                    self.selected_index += 1;
+                }
+            }
+            Msg::AccountMove(Dir::Up) => {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                }
+            }
+            // `AccountSelect` is observed by AppRoot (which rebuilds
+            // the store); the component itself only needs to mirror
+            // the cursor to the chosen id so the highlight matches.
+            Msg::AccountSelect(id) => {
+                if let Some(idx) = self.accounts.iter().position(|r| r.id == *id) {
+                    self.selected_index = idx;
+                }
+            }
+            _ => {}
+        }
         Vec::new()
     }
 
@@ -49,37 +167,80 @@ impl Component for AccountsComponent {
         } else {
             Style::default()
         };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .style(border_style)
             .title(ACCOUNTS_TITLE);
 
-        let body = Paragraph::new(ACCOUNTS_PLACEHOLDER)
-            .block(block)
-            .style(Style::default().fg(VulthorTheme::GRAY_DARK))
-            .wrap(Wrap { trim: true });
+        if self.accounts.is_empty() {
+            let body = Paragraph::new(Text::from(ACCOUNTS_EMPTY_BODY))
+                .block(block)
+                .style(Style::default().fg(VulthorTheme::GRAY_DARK))
+                .wrap(Wrap { trim: true });
+            f.render_widget(body, area);
+            return;
+        }
 
-        f.render_widget(body, area);
+        let items: Vec<ListItem<'static>> = self
+            .accounts
+            .iter()
+            .map(|row| ListItem::new(self.highlight_row(row)))
+            .collect();
+        let list = List::new(items).block(block).highlight_style(
+            Style::default()
+                .bg(VulthorTheme::SELECTION_BG)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mut state = self.list_state.borrow_mut();
+        state.select(Some(self.selected_index));
+        f.render_stateful_widget(list, area, &mut *state);
+    }
+
+    fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
+        if !key.modifiers.is_empty() && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => Some(Msg::AccountMove(Dir::Down)),
+            KeyCode::Char('k') | KeyCode::Up => Some(Msg::AccountMove(Dir::Up)),
+            KeyCode::Enter | KeyCode::Char('l') => {
+                self.current_account_id().map(Msg::AccountSelect)
+            }
+            _ => None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{AccountId, Dir};
-    use crate::config::Config;
     use crate::email::EmailStore;
+    use crossterm::event::KeyModifiers;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
-    fn fixtures() -> (VulthorTheme, Config, EmailStore) {
-        (
-            VulthorTheme,
-            Config::default(),
-            EmailStore::new(PathBuf::from("/tmp")),
-        )
+    fn account(name: &str, mail_path: &str) -> AccountConfig {
+        AccountConfig {
+            name: name.to_string(),
+            email: format!("{}@x.test", name.to_lowercase()),
+            maildir_path: PathBuf::from(mail_path),
+            smtp_command: None,
+            signature: None,
+        }
+    }
+
+    fn config_with(pairs: &[(&str, AccountConfig)]) -> Config {
+        let mut cfg = Config::default();
+        for (key, account) in pairs {
+            cfg.accounts.insert(key.to_string(), account.clone());
+        }
+        cfg
+    }
+
+    fn fixtures() -> (VulthorTheme, EmailStore) {
+        (VulthorTheme, EmailStore::new(PathBuf::from("/tmp")))
     }
 
     fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
@@ -90,14 +251,11 @@ mod tests {
         }
     }
 
-    /// Render the component into a TestBackend and flatten the visible
-    /// cell contents into a single string. Used to assert placeholder
-    /// text reaches the screen.
-    fn render_to_string(c: &AccountsComponent, focused: bool) -> String {
-        let backend = TestBackend::new(40, 5);
+    fn render_to_string(c: &AccountsComponent, focused: bool, cfg: &Config) -> String {
+        let backend = TestBackend::new(30, 6);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, cfg, &store);
         terminal
             .draw(|f| c.render(f, f.area(), focused, &ctx))
             .expect("draw");
@@ -113,40 +271,168 @@ mod tests {
     }
 
     #[test]
-    fn handle_msg_is_no_op() {
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
-        let mut c = AccountsComponent::new();
-        // A spread of variants the component will eventually subscribe
-        // to — until then they must all produce zero follow-ups.
-        assert!(c.handle_msg(&Msg::Quit, &ctx).is_empty());
-        assert!(
-            c.handle_msg(&Msg::AccountSelect(AccountId::from("default")), &ctx)
-                .is_empty()
-        );
-        assert!(c.handle_msg(&Msg::FolderMove(Dir::Down), &ctx).is_empty());
+    fn with_config_seeds_accounts_in_btreemap_order() {
+        let cfg = config_with(&[
+            ("work", account("Work", "/Mail/work")),
+            ("personal", account("Personal", "/Mail/personal")),
+        ]);
+        let c = AccountsComponent::with_config(&cfg);
+        assert_eq!(c.account_count(), 2);
+        // BTreeMap → alphabetical: personal (p) before work (w).
+        assert_eq!(c.current_account_id().as_deref(), Some("personal"));
     }
 
     #[test]
-    fn render_paints_placeholder_text() {
-        let c = AccountsComponent::new();
-        let rendered = render_to_string(&c, true);
+    fn with_config_honors_default_account() {
+        let mut cfg = config_with(&[
+            ("work", account("Work", "/Mail/work")),
+            ("personal", account("Personal", "/Mail/personal")),
+        ]);
+        cfg.default_account = Some("work".into());
+        let c = AccountsComponent::with_config(&cfg);
+        assert_eq!(c.current_account_id().as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn account_move_down_clamps_at_last_row() {
+        let cfg = config_with(&[("a", account("A", "/a")), ("b", account("B", "/b"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        // Starts at 0 → Down moves to 1 → another Down clamps at 1.
+        c.handle_msg(&Msg::AccountMove(Dir::Down), &ctx);
+        assert_eq!(c.selected_index(), 1);
+        c.handle_msg(&Msg::AccountMove(Dir::Down), &ctx);
+        assert_eq!(c.selected_index(), 1);
+    }
+
+    #[test]
+    fn account_move_up_clamps_at_zero() {
+        let cfg = config_with(&[("a", account("A", "/a")), ("b", account("B", "/b"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        // Already at top — Up is a no-op.
+        c.handle_msg(&Msg::AccountMove(Dir::Up), &ctx);
+        assert_eq!(c.selected_index(), 0);
+    }
+
+    #[test]
+    fn account_select_msg_moves_cursor_to_named_account() {
+        let cfg = config_with(&[
+            ("a", account("A", "/a")),
+            ("b", account("B", "/b")),
+            ("c", account("C", "/c")),
+        ]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        c.handle_msg(&Msg::AccountSelect("c".into()), &ctx);
+        assert_eq!(c.selected_index(), 2);
+        assert_eq!(c.current_account_id().as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn enter_emits_account_select_for_current_row() {
+        let cfg = config_with(&[("a", account("Alpha", "/a")), ("b", account("Bravo", "/b"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        // Move to "b" first so we know we're picking the cursor, not 0.
+        c.handle_msg(&Msg::AccountMove(Dir::Down), &ctx);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(c.on_key(enter, &ctx), Some(Msg::AccountSelect("b".into())));
+    }
+
+    #[test]
+    fn lowercase_l_emits_account_select_for_current_row() {
+        // Per the issue's acceptance: 'l' switches the active account
+        // exactly like Enter (it advances right into the Folders view
+        // anchored to the picked account).
+        let cfg = config_with(&[("only", account("Only", "/only"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        let l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        assert_eq!(c.on_key(l, &ctx), Some(Msg::AccountSelect("only".into())));
+    }
+
+    #[test]
+    fn jk_emit_account_move() {
+        let cfg = config_with(&[("a", account("A", "/a"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(c.on_key(j, &ctx), Some(Msg::AccountMove(Dir::Down)));
+        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(c.on_key(k, &ctx), Some(Msg::AccountMove(Dir::Up)));
+    }
+
+    #[test]
+    fn modifiers_other_than_arrows_pass_through() {
+        let cfg = config_with(&[("a", account("A", "/a"))]);
+        let mut c = AccountsComponent::with_config(&cfg);
+        let (theme, store) = fixtures();
+        let ctx = ctx(&theme, &cfg, &store);
+        let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
+        assert_eq!(c.on_key(alt_j, &ctx), None);
+    }
+
+    #[test]
+    fn render_lists_each_account_name() {
+        let cfg = config_with(&[
+            ("alpha", account("Alpha", "/a")),
+            ("bravo", account("Bravo", "/b")),
+        ]);
+        let c = AccountsComponent::with_config(&cfg);
+        let rendered = render_to_string(&c, true, &cfg);
         assert!(
-            rendered.contains(ACCOUNTS_PLACEHOLDER),
-            "expected placeholder text in render output, got:\n{}",
+            rendered.contains("Alpha"),
+            "expected Alpha row, got:\n{}",
+            rendered
+        );
+        assert!(
+            rendered.contains("Bravo"),
+            "expected Bravo row, got:\n{}",
             rendered
         );
     }
 
     #[test]
-    fn render_paints_pane_title() {
-        let c = AccountsComponent::new();
-        let rendered = render_to_string(&c, false);
+    fn render_paints_title() {
+        let cfg = Config::default();
+        let c = AccountsComponent::with_config(&cfg);
+        let rendered = render_to_string(&c, false, &cfg);
+        assert!(rendered.contains(ACCOUNTS_TITLE));
+    }
+
+    #[test]
+    fn render_shows_empty_message_when_no_accounts() {
+        // VISION.md: single-account installs hide the pane, but the
+        // policy lives in AppRoot. If a caller does render this
+        // component with zero accounts (e.g. a legacy maildir_path-
+        // only config opened deliberately), it must not panic — show
+        // a polite empty body.
+        let cfg = Config::default();
+        let c = AccountsComponent::with_config(&cfg);
+        let rendered = render_to_string(&c, true, &cfg);
         assert!(
-            rendered.contains(ACCOUNTS_TITLE),
-            "expected '{}' title in render output, got:\n{}",
-            ACCOUNTS_TITLE,
+            rendered.contains(ACCOUNTS_EMPTY_BODY),
+            "expected empty body, got:\n{}",
             rendered
         );
+    }
+
+    #[test]
+    fn account_by_id_resolves_to_config_payload() {
+        let cfg = config_with(&[
+            ("work", account("Work", "/Mail/work")),
+            ("personal", account("Personal", "/Mail/personal")),
+        ]);
+        let c = AccountsComponent::with_config(&cfg);
+        let work = c.account_by_id("work").expect("work account");
+        assert_eq!(work.maildir_path, PathBuf::from("/Mail/work"));
+        assert!(c.account_by_id("missing").is_none());
     }
 }

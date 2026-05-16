@@ -78,6 +78,7 @@ impl View {
     pub fn next_view(&self, content_hidden: bool) -> Option<View> {
         if content_hidden {
             match self {
+                View::AccountsFolders => Some(View::FolderMessages),
                 View::FolderMessages => Some(View::Messages),
                 View::Messages => Some(View::MessagesAttachments),
                 View::MessagesAttachments => None,
@@ -85,6 +86,7 @@ impl View {
             }
         } else {
             match self {
+                View::AccountsFolders => Some(View::FolderMessages),
                 View::FolderMessages => Some(View::MessagesContent),
                 View::MessagesContent => Some(View::Content),
                 View::Content => None,
@@ -358,12 +360,32 @@ mod tests {
 
     #[test]
     fn new_view_variants_are_not_yet_wired_into_navigation_chain() {
+        // Phase 1.a (vu-nja) wired the Accounts → Folders direction
+        // through `next_view` so 'l' from the Accounts pane advances
+        // back into the folder list. The conditional reverse direction
+        // (`h` from FolderMessages → AccountsFolders) is a multi-
+        // account-only policy enforced by AppRoot, not layout.
+        assert_eq!(
+            View::AccountsFolders.next_view(false),
+            Some(View::FolderMessages)
+        );
+        assert_eq!(View::AccountsFolders.prev_view(false), None);
+
         assert_eq!(View::FolderMessages.prev_view(false), None);
         assert_eq!(View::Content.next_view(false), None);
-        assert_eq!(View::AccountsFolders.next_view(false), None);
-        assert_eq!(View::AccountsFolders.prev_view(false), None);
         assert_eq!(View::ContentDraft.next_view(false), None);
         assert_eq!(View::ContentDraft.prev_view(false), None);
+    }
+
+    #[test]
+    fn accounts_folders_next_view_advances_to_folder_messages_in_both_layouts() {
+        // Content-hidden mode (Alt+c) must keep the same Accounts →
+        // FolderMessages transition so the pane is reachable from the
+        // Accounts pane regardless of the content-pane toggle.
+        assert_eq!(
+            View::AccountsFolders.next_view(true),
+            Some(View::FolderMessages)
+        );
     }
 
     #[test]
