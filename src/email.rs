@@ -404,23 +404,21 @@ impl EmailStore {
 
     /// Resolve the email the web pane should serve given the TUI's currently
     /// focused pane. Returns `None` for top-level browse panes (Folders,
-    /// Accounts) so the web pane shows the welcome screen instead; for the
-    /// email-bearing panes (Messages/Content/Attachments/Draft) we best-
-    /// effort full-load the selected email so the response includes a body.
-    /// Body parsing happens on the web request thread, not the TUI, so this
-    /// is OK to call from the axum handler.
+    /// Accounts) so the web pane shows the welcome screen instead.
     ///
-    /// `vu-7r1`: replaces the legacy `App::get_current_email_for_web`. The
-    /// focused-pane signal travels from AppRoot to the web server via an
-    /// `Arc<AtomicU8>` (see `crate::layout::ActivePane::{to_u8, from_u8}`).
-    pub fn current_email_for_web(&mut self, pane: crate::layout::ActivePane) -> Option<&Email> {
+    /// `vu-9ie` (Phase 0.3.5, D1-D3): non-blocking. Previously this called
+    /// `ensure_fully_loaded` on the selected email while holding the
+    /// `Mutex<EmailStore>`, performing `fs::read` + full MIME parse on the
+    /// axum executor thread *and* stalling the TUI render loop for the
+    /// duration. Body loading is now the `BodyLoader` worker's job; the web
+    /// handler observes whatever state the email is in and (separately)
+    /// kicks the loader. SSE refires on `load_state` change so the client
+    /// refetches once the body lands.
+    pub fn current_email_for_web(&self, pane: crate::layout::ActivePane) -> Option<&Email> {
         if !pane.serves_email() {
             return None;
         }
-        if let Some(email) = self.get_selected_email_mut() {
-            let _ = email.ensure_fully_loaded();
-        }
-        self.get_selected_email_headers()
+        self.get_selected_email()
     }
 
     /// Get currently selected email mutably

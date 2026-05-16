@@ -60,7 +60,12 @@ async fn main() -> Result<()> {
     let mut app_root = AppRoot::new(email_store.clone(), scanner);
     app_root.attach_folder_scanner(folder_scanner_handle);
 
-    let web_server = WebServer::new(args.port, email_store.clone(), app_root.focused_pane());
+    let web_server = WebServer::new(
+        args.port,
+        email_store.clone(),
+        app_root.focused_pane(),
+        app_root.body_request_sender(),
+    );
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start().await {
             eprintln!("Web server error: {}", e);

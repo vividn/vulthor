@@ -72,6 +72,13 @@ impl BodyLoader {
         let _ = self.tx.send(path);
     }
 
+    /// Clone of the request channel — lets the web server submit body-load
+    /// requests through the same worker the TUI uses, so neither side has
+    /// to do an `fs::read` on its own thread (`vu-9ie`, D1-D3).
+    pub fn request_sender(&self) -> Sender<PathBuf> {
+        self.tx.clone()
+    }
+
     pub fn try_recv(&self) -> Result<LoadedBody, TryRecvError> {
         self.rx.try_recv()
     }

@@ -1,4 +1,4 @@
-use crate::email::EmailStore;
+use crate::email::{EmailLoadState, EmailStore};
 use crate::error::Result;
 use crate::layout::ActivePane;
 use axum::{
@@ -11,25 +11,45 @@ use axum::{
 use futures::stream::{self, Stream};
 use serde::Serialize;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
 
-/// State threaded through axum handlers. vu-7r1: web server no longer
-/// shares the legacy `App` god object — it holds only the email store
-/// (locked when reading the current selection) and an atomic encoding
-/// of the focused pane (no lock needed for the focus check).
+/// State threaded through axum handlers.
+///
+/// vu-7r1: web server no longer shares the legacy `App` god object — it
+/// holds only the email store (locked briefly when reading the current
+/// selection) and an atomic encoding of the focused pane (no lock needed
+/// for the focus check).
+///
+/// vu-9ie (Phase 0.3.5, D1-D3): the web server no longer performs
+/// `fs::read` + MIME parse on its executor threads. When a handler reads
+/// a `HeadersOnly` email it dispatches a request to the shared
+/// `BodyLoader` worker and returns the current state immediately. The
+/// SSE poll loop keys on the email's `load_state` in addition to the
+/// selection coordinates, so the client refetches once the body lands.
 #[derive(Clone)]
 pub struct WebState {
     pub email_store: Arc<Mutex<EmailStore>>,
     pub focused_pane: Arc<AtomicU8>,
+    pub body_request_tx: Sender<PathBuf>,
 }
 
 impl WebState {
     fn focused_pane(&self) -> ActivePane {
         ActivePane::from_u8(self.focused_pane.load(Ordering::Relaxed))
+    }
+
+    /// Request an off-thread body parse for `path`. The reply lands in
+    /// `EmailStore` via `AppRoot::drain_loaded_bodies`. Idempotent: extra
+    /// requests just produce extra (cheap) parses; the SSE refire dedups
+    /// at the client.
+    fn request_body_load(&self, path: PathBuf) {
+        let _ = self.body_request_tx.send(path);
     }
 }
 
@@ -62,12 +82,14 @@ impl WebServer {
         port: u16,
         email_store: Arc<Mutex<EmailStore>>,
         focused_pane: Arc<AtomicU8>,
+        body_request_tx: Sender<PathBuf>,
     ) -> Self {
         Self {
             port,
             state: WebState {
                 email_store,
                 focused_pane,
+                body_request_tx,
             },
         }
     }
@@ -96,20 +118,27 @@ impl WebServer {
 
 async fn serve_email(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
-    let mut store = match state.email_store.lock() {
-        Ok(s) => s,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<h1>Error: Could not access application state</h1>"),
-            )
-                .into_response();
-        }
+    // Hold the lock just long enough to clone what we need; never call
+    // `parse_from_file` under the mutex (vu-9ie, D1-D3).
+    let snapshot = {
+        let store = match state.email_store.lock() {
+            Ok(s) => s,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html("<h1>Error: Could not access application state</h1>"),
+                )
+                    .into_response();
+            }
+        };
+        store.current_email_for_web(pane).cloned()
     };
 
-    if let Some(email) = store.current_email_for_web(pane) {
-        let html = generate_email_html(email);
-        Html(html).into_response()
+    if let Some(email) = snapshot {
+        if matches!(email.load_state, EmailLoadState::HeadersOnly) {
+            state.request_body_load(email.file_path.clone());
+        }
+        Html(generate_email_html(&email)).into_response()
     } else {
         Html(generate_welcome_html()).into_response()
     }
@@ -150,11 +179,20 @@ async fn email_events(
 
                 let current_email_id = {
                     let pane = state.focused_pane();
-                    let mut store = state.email_store.lock().ok()?;
+                    let store = state.email_store.lock().ok()?;
                     let folder_indices = store.current_folder.clone();
                     let email_index = store.selected_email.unwrap_or(usize::MAX);
-                    let has_email = store.current_email_for_web(pane).is_some();
-                    format!("{:?}:{}:{}", folder_indices, email_index, has_email)
+                    // Include load_state in the key so SSE refires when the
+                    // body-loader fills in the body after the initial
+                    // selection event (vu-9ie, D2).
+                    let load_tag = match store.current_email_for_web(pane) {
+                        Some(e) => match e.load_state {
+                            EmailLoadState::HeadersOnly => "headers",
+                            EmailLoadState::FullyLoaded => "full",
+                        },
+                        None => "none",
+                    };
+                    format!("{:?}:{}:{}", folder_indices, email_index, load_tag)
                 };
 
                 if last_email_id.as_ref() != Some(&current_email_id) {
@@ -176,37 +214,55 @@ async fn email_events(
 
 async fn get_current_email_json(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
-    let mut store = match state.email_store.lock() {
-        Ok(s) => s,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(EmailData {
-                    has_email: false,
-                    subject: String::new(),
-                    from: String::new(),
-                    to: String::new(),
-                    date: String::new(),
-                    body_html: "Error: Could not access application state".to_string(),
-                    attachments: vec![],
-                    email_id: "error".to_string(),
-                }),
-            )
-                .into_response();
-        }
+    // Snapshot the visible state under the lock, then drop it before doing
+    // any HTML/JSON work. The store lock is shared with the TUI render
+    // thread, so we must never block on it (vu-9ie, D3).
+    let snapshot = {
+        let store = match state.email_store.lock() {
+            Ok(s) => s,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(EmailData {
+                        has_email: false,
+                        subject: String::new(),
+                        from: String::new(),
+                        to: String::new(),
+                        date: String::new(),
+                        body_html: "Error: Could not access application state".to_string(),
+                        attachments: vec![],
+                        email_id: "error".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+        let folder_indices = store.current_folder.clone();
+        let email_index = store.selected_email.unwrap_or(usize::MAX);
+        let email = store.current_email_for_web(pane).cloned();
+        (folder_indices, email_index, email)
     };
+    let (folder_indices, email_index, current_email) = snapshot;
 
-    let folder_indices = store.current_folder.clone();
-    let email_index = store.selected_email.unwrap_or(usize::MAX);
-    let current_email = store.current_email_for_web(pane);
-    let has_email = current_email.is_some();
-    let email_id = format!("{:?}:{}:{}", folder_indices, email_index, has_email);
+    let load_tag = match &current_email {
+        Some(e) => match e.load_state {
+            EmailLoadState::HeadersOnly => "headers",
+            EmailLoadState::FullyLoaded => "full",
+        },
+        None => "none",
+    };
+    let email_id = format!("{:?}:{}:{}", folder_indices, email_index, load_tag);
 
     if let Some(email) = current_email {
-        let body_content = if let Some(html) = &email.body_html {
+        if matches!(email.load_state, EmailLoadState::HeadersOnly) {
+            state.request_body_load(email.file_path.clone());
+        }
+
+        let body_content = if matches!(email.load_state, EmailLoadState::HeadersOnly) {
+            "<p><em>Loading body…</em></p>".to_string()
+        } else if let Some(html) = &email.body_html {
             html.clone()
         } else {
-            // Convert plain text to HTML
             markdown_to_html(&email.body_text)
         };
 
@@ -803,5 +859,154 @@ mod tests {
         assert!(html.contains("<h1>Title</h1>"));
         assert!(html.contains("<h2>Subtitle</h2>"));
         assert!(html.contains("<p>This is a paragraph.</p>"));
+    }
+
+    // --- vu-9ie (Phase 0.3.5) — D1-D3: web server contention on Mutex<App> ---
+    //
+    // These tests pin the contract that web handlers never hold the
+    // `EmailStore` lock across an `fs::read` and never block on disk on
+    // their executor threads.
+
+    use crate::email::{Email, EmailLoadState, Folder};
+    use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    /// Helper: build a `WebState` wired to a real `EmailStore` containing a
+    /// single `HeadersOnly` email at a non-existent path, focused on the
+    /// Messages pane. Any code path that calls `parse_from_file` on this
+    /// email would either error or block on a missing-file stat.
+    fn webstate_with_one_headers_only_email() -> (WebState, mpsc::Receiver<PathBuf>) {
+        let mut store = EmailStore::new(PathBuf::from("/nonexistent_root"));
+        let mut inbox = Folder::new(
+            "INBOX".to_string(),
+            PathBuf::from("/nonexistent_root/INBOX"),
+        );
+        inbox.add_email(Email::new(PathBuf::from(
+            "/definitely/does/not/exist/email.eml",
+        )));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let (tx, rx) = mpsc::channel::<PathBuf>();
+        let state = WebState {
+            email_store: Arc::new(Mutex::new(store)),
+            focused_pane: Arc::new(AtomicU8::new(ActivePane::Messages.to_u8())),
+            body_request_tx: tx,
+        };
+        (state, rx)
+    }
+
+    /// D1-D3 contract: `current_email_for_web` is purely observational. It
+    /// must not transition `load_state`, must not touch disk, and must
+    /// borrow the store immutably so it cannot accidentally regress to an
+    /// in-line `ensure_fully_loaded` again.
+    #[test]
+    fn current_email_for_web_is_non_blocking_observer() {
+        let (state, _rx) = webstate_with_one_headers_only_email();
+        let store = state.email_store.lock().unwrap();
+        let email = store
+            .current_email_for_web(ActivePane::Messages)
+            .expect("messages pane must surface the selected email");
+        assert!(
+            matches!(email.load_state, EmailLoadState::HeadersOnly),
+            "web observer must not transition load_state",
+        );
+        assert!(
+            email.body_text.is_empty(),
+            "body_text must be empty until BodyLoader fills it in",
+        );
+        assert!(
+            email.body_html.is_none(),
+            "body_html must be None until BodyLoader fills it in",
+        );
+    }
+
+    /// D1: `serve_email` returns within a bounded time even when the
+    /// selected email's underlying file does not exist. Previously this
+    /// handler called `ensure_fully_loaded` inline, which would have spent
+    /// time on the missing-file stat and (in production) blocked on the
+    /// MIME parse. Bounded latency proves the executor thread is no
+    /// longer doing disk I/O under the lock.
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_email_does_not_block_on_disk() {
+        let (state, rx) = webstate_with_one_headers_only_email();
+        let start = Instant::now();
+        let _response = serve_email(axum::extract::State(state)).await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "serve_email must not block on disk; took {:?}",
+            elapsed,
+        );
+        // The handler must have dispatched the body load to the worker.
+        let dispatched = rx
+            .recv_timeout(Duration::from_millis(50))
+            .expect("serve_email must dispatch a body-load request for HeadersOnly emails");
+        assert_eq!(
+            dispatched,
+            PathBuf::from("/definitely/does/not/exist/email.eml"),
+        );
+    }
+
+    /// D3: `get_current_email_json` returns within a bounded time and
+    /// reports the email as `loading` (placeholder body) when the body
+    /// is not yet available. Mirrors the `serve_email` contract.
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_current_email_json_does_not_block_on_disk() {
+        let (state, rx) = webstate_with_one_headers_only_email();
+        let start = Instant::now();
+        let _response = get_current_email_json(axum::extract::State(state)).await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "get_current_email_json must not block on disk; took {:?}",
+            elapsed,
+        );
+        let dispatched = rx.recv_timeout(Duration::from_millis(50)).expect(
+            "get_current_email_json must dispatch a body-load request for HeadersOnly emails",
+        );
+        assert_eq!(
+            dispatched,
+            PathBuf::from("/definitely/does/not/exist/email.eml"),
+        );
+    }
+
+    /// D1-D3 contention test: while another thread is holding the
+    /// `EmailStore` mutex (simulating the TUI render path mid-frame), a
+    /// web request must still acquire it and return promptly once the
+    /// holder releases. With the legacy code that called
+    /// `ensure_fully_loaded` under the lock, the *opposite* direction
+    /// (TUI waiting on web) was unbounded; this test pins the symmetric
+    /// half — handlers don't hold the lock longer than a cheap snapshot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn web_handler_does_not_deadlock_with_concurrent_lock_holder() {
+        let (state, _rx) = webstate_with_one_headers_only_email();
+        let store = state.email_store.clone();
+
+        // Background thread that grabs the lock, holds it ~50ms, releases.
+        // The web handler should be free to proceed immediately after.
+        let holder = std::thread::spawn(move || {
+            let _guard = store.lock().unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        });
+
+        // Give the holder a moment to actually acquire the lock.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let start = Instant::now();
+        let _response = serve_email(axum::extract::State(state)).await;
+        let elapsed = start.elapsed();
+        holder.join().unwrap();
+
+        // Generous bound: 50ms wait + the cheap snapshot itself. If the
+        // handler did any disk I/O under the lock we'd see seconds here.
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "web handler must not deadlock with a concurrent lock holder; took {:?}",
+            elapsed,
+        );
     }
 }

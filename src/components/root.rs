@@ -127,6 +127,14 @@ impl AppRoot {
         self.focused_pane.clone()
     }
 
+    /// Clone of the body-loader request channel. The web server uses this to
+    /// dispatch body parses to the same off-thread worker the TUI feeds, so
+    /// no `fs::read` ever runs on an axum executor thread while holding the
+    /// store lock (`vu-9ie`, D1-D3).
+    pub fn body_request_sender(&self) -> std::sync::mpsc::Sender<PathBuf> {
+        self.body_loader.request_sender()
+    }
+
     /// Clone of the email-store handle. Tests and callers that want a
     /// post-dispatch peek at the store use this.
     pub fn email_store_handle(&self) -> Arc<Mutex<EmailStore>> {
