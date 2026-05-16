@@ -176,10 +176,10 @@ impl Component for ContentComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // Allow arrow + paging keys with any modifier (terminals
-        // sometimes report Shift+Arrow with a modifier), but reject
-        // modified letter keys (Alt+j etc.) so global shortcuts don't
-        // accidentally scroll.
+        // Action keys (`j`/`k`) now resolve through the central
+        // `AppRoot::action_to_msg` keymap dispatch. This handler owns
+        // structural keys that aren't in the keymap: arrow keys and
+        // PageUp/PageDown paging.
         if !key.modifiers.is_empty()
             && !matches!(
                 key.code,
@@ -189,8 +189,6 @@ impl Component for ContentComponent {
             return None;
         }
         match key.code {
-            KeyCode::Char('j') => Some(Msg::ContentScroll(Dir::Down, 1)),
-            KeyCode::Char('k') => Some(Msg::ContentScroll(Dir::Up, 1)),
             KeyCode::Down => Some(Msg::ContentScroll(Dir::Down, 1)),
             KeyCode::Up => Some(Msg::ContentScroll(Dir::Up, 1)),
             KeyCode::PageDown => Some(Msg::ContentScroll(Dir::Down, PAGE_SCROLL_STEP)),

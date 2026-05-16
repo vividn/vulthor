@@ -155,23 +155,20 @@ impl Component for FoldersComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Option<Msg> {
+        // Action keys (`j`/`k`/Enter/Backspace) now resolve through the
+        // central `AppRoot::action_to_msg` keymap dispatch. This handler
+        // owns:
+        //   - arrow-key navigation (not in the keymap),
+        //   - context-dependent `l` (select-into vs. view-advance) — the
+        //     keymap maps `Action::ViewNext` to `None` in the Folders
+        //     pane so this arm gets to make the call.
         if !key.modifiers.is_empty() && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
-            // Only plain keys (and arrow keys, which carry no modifiers
-            // we care about) belong to the Folders pane. Anything with a
-            // modifier is either global (Alt+c, Shift+Tab) or unhandled.
             return None;
         }
         match key.code {
-            KeyCode::Char('j') => Some(Msg::FolderMove(Dir::Down)),
-            KeyCode::Char('k') => Some(Msg::FolderMove(Dir::Up)),
             KeyCode::Down => Some(Msg::FolderMove(Dir::Down)),
             KeyCode::Up => Some(Msg::FolderMove(Dir::Up)),
-            KeyCode::Enter => Some(Msg::FolderEnter),
             KeyCode::Char('l') => {
-                // 'l' from the Folders pane is overloaded: if the user is
-                // *already* inside the selected folder, 'l' advances the
-                // view; otherwise it enters the folder. This preserves
-                // the pre-refactor UX (see `input.rs` legacy branch).
                 let path = crate::layout::get_folder_path_from_display_index(
                     &ctx.store.root_folder,
                     self.folder_index,
@@ -181,7 +178,6 @@ impl Component for FoldersComponent {
                     _ => Some(Msg::FolderEnter),
                 }
             }
-            KeyCode::Backspace => Some(Msg::FolderExitParent),
             _ => None,
         }
     }

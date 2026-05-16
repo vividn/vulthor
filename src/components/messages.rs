@@ -498,68 +498,56 @@ impl Component for MessagesComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // SHIFT is allowed (capital-letter bindings like `F`/`U`/`R`);
-        // other modifiers (ALT, CTRL) still bail out so Alt-pane
-        // shortcuts and friends don't double-fire. Arrow keys keep
-        // their legacy any-modifier pass-through.
+        // Action keys (`j`/`k`/`a`/`s`/`d`/`m`/`F`/`U`/`r`/`R`/`f`/Enter
+        // /Backspace) now resolve through the central
+        // `AppRoot::action_to_msg` keymap dispatch so `[keybindings]`
+        // overrides actually reach the runtime. This handler only owns:
+        //   - arrow-key navigation (not in the keymap),
+        //   - the `g`-prefix sequence (`gr` → reply-sender; the rest
+        //     are reserved for future sequence actions).
+        // AppRoot pre-empts this handler while `pending_g` is set so
+        // the second key of the sequence is consumed here before the
+        // single-key table can interpret it (e.g. `r` → ReplyAll).
         use crossterm::event::KeyModifiers;
         let mods_ok = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         if !mods_ok && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
             return None;
         }
 
-        // Two-key `g`-prefix sequences (`gr` for reply-sender, future
-        // `gg`/`gj`/`gk`). When `pending_g` is set we branch on the
-        // second key; any non-match falls through to the single-key
-        // table below with `pending_g` cleared.
         if self.pending_g {
             self.pending_g = false;
             if let KeyCode::Char('r') = key.code {
                 return Some(Msg::DraftStart(ReplyKind::Reply, String::new()));
             }
-            // Fall through: treat the second key as a plain keystroke.
+            // Sequence aborted — fall through; the caller will retry
+            // single-key dispatch with `pending_g` cleared.
         }
 
         match key.code {
-            KeyCode::Char('j') => Some(Msg::MessageMove(Dir::Down)),
-            KeyCode::Char('k') => Some(Msg::MessageMove(Dir::Up)),
             KeyCode::Down => Some(Msg::MessageMove(Dir::Down)),
             KeyCode::Up => Some(Msg::MessageMove(Dir::Up)),
-            // `MessageOpen` carries a `MessageId`. Until the store grows
-            // a real index, the open semantics are "open whatever the
-            // cursor is on" and the id is derived in `apply_root` from
-            // `self.email_index`. We pass an empty id as a sentinel.
-            KeyCode::Enter => Some(Msg::MessageOpen(String::new())),
-            KeyCode::Backspace => Some(Msg::FolderExitParent),
-            // Same empty-id sentinel — AppRoot resolves the target
-            // email from the cursor.
-            KeyCode::Char('a') => Some(Msg::Archive(String::new())),
-            // `F` is a capital-letter alias for `s`. VISION.md lists
-            // both; treating them as the same action keeps the
-            // rebinding story simple.
-            KeyCode::Char('s') | KeyCode::Char('F') => Some(Msg::ToggleStar(String::new())),
-            KeyCode::Char('d') => Some(Msg::Delete(String::new())),
-            // 'm' surfaces the folder picker; the picker dispatches
-            // `Msg::MoveTo` on Enter.
-            KeyCode::Char('m') => Some(Msg::OpenFolderPicker),
-            // Mark the cursor email unread.
-            KeyCode::Char('U') => Some(Msg::MarkUnread(String::new())),
-            // Reply variants (VISION.md § "Email Actions").
-            //   r  → reply-all
-            //   gr → reply (sender only)         [two-key sequence]
-            //   f  → forward
-            //   R  → reply-later (empty draft, no editor launch)
-            KeyCode::Char('r') => Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new())),
-            KeyCode::Char('R') => Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new())),
-            KeyCode::Char('f') => Some(Msg::DraftStart(ReplyKind::Forward, String::new())),
             KeyCode::Char('g') => {
-                // Start a g-prefix sequence; absorb the keystroke without
-                // emitting a message. The next key is interpreted above.
+                // Arm the g-prefix sequence; absorb the keystroke
+                // without emitting a message. AppRoot will route the
+                // next key here before keymap dispatch (see
+                // `has_pending_sequence`).
                 self.pending_g = true;
                 None
             }
             _ => None,
         }
+    }
+}
+
+impl MessagesComponent {
+    /// True while a multi-key sequence (`g`-prefix) is mid-flight.
+    /// `AppRoot::process_event` reads this to route the next key into
+    /// this component BEFORE the central keymap dispatch — otherwise
+    /// the second key (`r` for `gr → Reply`) would be intercepted as a
+    /// single-key action (`r → ReplyAll`) and the sequence would never
+    /// resolve.
+    pub fn has_pending_sequence(&self) -> bool {
+        self.pending_g
     }
 }
 

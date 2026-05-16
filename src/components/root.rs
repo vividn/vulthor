@@ -475,6 +475,30 @@ impl AppRoot {
                 self.drain();
                 return Ok(self.should_quit);
             }
+            // 0d. While a component has a multi-key sequence in flight
+            //     (currently only MessagesComponent's `g`-prefix), route
+            //     the next key into that component BEFORE the central
+            //     keymap dispatch. Otherwise centralised single-key
+            //     dispatch would intercept the sequence's second key
+            //     (e.g. `r` → `ReplyAll`) and the sequence (`gr` →
+            //     `Reply`) would never resolve.
+            if matches!(self.layout.active_pane, ActivePane::Messages)
+                && self.messages.has_pending_sequence()
+            {
+                let ctx_msg = {
+                    let store = self.email_store.lock().unwrap();
+                    let ctx = Self::make_ctx(&self.config, &store);
+                    self.messages.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain();
+                    return Ok(self.should_quit);
+                }
+                // Sequence aborted (`on_key` cleared `pending_g` and
+                // returned None) — fall through to normal dispatch so
+                // the key is interpreted as a single-key action.
+            }
             // 1. Global / pane-action keys flow through the resolved
             //    [keybindings] table. Atomic-key lookups only;
             //    sequence keys (`gg`/`G`/`gj`/`gk`/`gr`) stay with the
@@ -787,6 +811,7 @@ impl AppRoot {
         search_results_active: bool,
     ) -> Option<Msg> {
         match action {
+            // ---- Global lifecycle / layout -------------------------------
             // `q` quits everywhere except the Draft pane, where it
             // discards the in-flight reply (VISION.md §Pre-Send Flow).
             Action::Quit => Some(if matches!(active_pane, ActivePane::Draft) {
@@ -828,6 +853,77 @@ impl AppRoot {
                     Some(Msg::OpenSearchInput)
                 }
             }
+
+            // ---- Per-pane navigation -------------------------------------
+            // `j`/`k` dispatch into the focused pane's move-Msg. Accounts
+            // and Attachments still own their own j/k handlers (they
+            // weren't in the strip list for this refactor); returning
+            // `None` here lets their existing component logic fire.
+            Action::MoveDown => match active_pane {
+                ActivePane::Folders => Some(Msg::FolderMove(Dir::Down)),
+                ActivePane::Messages => Some(Msg::MessageMove(Dir::Down)),
+                ActivePane::Content => Some(Msg::ContentScroll(Dir::Down, 1)),
+                _ => None,
+            },
+            Action::MoveUp => match active_pane {
+                ActivePane::Folders => Some(Msg::FolderMove(Dir::Up)),
+                ActivePane::Messages => Some(Msg::MessageMove(Dir::Up)),
+                ActivePane::Content => Some(Msg::ContentScroll(Dir::Up, 1)),
+                _ => None,
+            },
+            // Enter is context-sensitive. Folders → enter the cursor
+            // folder; Messages → open the cursor email. Accounts owns
+            // its own Enter (it needs the selected account id), and
+            // Attachments has bespoke open-the-attachment logic in
+            // `handle_residual_key`.
+            Action::Confirm => match active_pane {
+                ActivePane::Folders => Some(Msg::FolderEnter),
+                ActivePane::Messages => Some(Msg::MessageOpen(String::new())),
+                _ => None,
+            },
+            // Backspace pops the folder stack from the list-oriented
+            // panes. Content/Attachments use it for view-back via
+            // `handle_residual_key`/`handle_back_navigation`.
+            Action::Back => match active_pane {
+                ActivePane::Folders | ActivePane::Messages => Some(Msg::FolderExitParent),
+                _ => None,
+            },
+
+            // ---- Email actions (Messages pane only) ----------------------
+            // Carry empty-id sentinels — AppRoot resolves the cursor
+            // email in `apply_root` (same convention as the legacy
+            // per-component handlers).
+            Action::Archive if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::Archive(String::new()))
+            }
+            // `Star` (`s`) and `ToggleFlag` (`F`) are VISION.md aliases
+            // for the same maildir-F-flag toggle. Both surface as
+            // `Msg::ToggleStar` so the rebind story stays uniform.
+            Action::Star | Action::ToggleFlag
+                if matches!(active_pane, ActivePane::Messages) =>
+            {
+                Some(Msg::ToggleStar(String::new()))
+            }
+            Action::Delete if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::Delete(String::new()))
+            }
+            Action::MoveToFolder if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::OpenFolderPicker)
+            }
+            Action::MarkUnread if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::MarkUnread(String::new()))
+            }
+            Action::ReplyAll if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new()))
+            }
+            Action::ReplyLater if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new()))
+            }
+            Action::Forward if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::DraftStart(ReplyKind::Forward, String::new()))
+            }
+
+            // ---- Draft pane action keys ----------------------------------
             Action::DraftSend if matches!(active_pane, ActivePane::Draft) => Some(Msg::DraftSend),
             Action::DraftEdit if matches!(active_pane, ActivePane::Draft) => {
                 Some(Msg::DraftEditRelaunch)
@@ -835,9 +931,27 @@ impl AppRoot {
             Action::DraftDiscard if matches!(active_pane, ActivePane::Draft) => {
                 Some(Msg::DraftDiscard)
             }
-            // Everything else — j/k navigation, gg/G sequences,
-            // archive/star/delete, reply, mark-unread, etc. — is the
-            // focused component's responsibility.
+
+            // ---- Component-local sequences & not-yet-implemented ---------
+            // `Reply` is the `gr` two-key sequence; `JumpTop`/`JumpBottom`/
+            // `JumpNextUnread`/`JumpPrevUnread` are `gg`/`G`/`gj`/`gk`.
+            // These stay component-local (or aren't wired at all yet).
+            // `AcceptSuggestion`/`SearchNext`/`SearchPrev` are bound in
+            // the keymap but don't have dispatch yet — fall through so
+            // they're a no-op rather than a panic.
+            Action::Reply
+            | Action::JumpTop
+            | Action::JumpBottom
+            | Action::JumpNextUnread
+            | Action::JumpPrevUnread
+            | Action::AcceptSuggestion
+            | Action::SearchNext
+            | Action::SearchPrev => None,
+
+            // Action key pressed outside its meaningful pane: silent
+            // no-op rather than a panic. The `if let` guards above
+            // narrow each action to the pane it makes sense in;
+            // everything else falls here.
             _ => None,
         }
     }
