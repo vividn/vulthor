@@ -329,15 +329,7 @@ impl UI {
 
         let mut status_text = vec![];
 
-        let help_text = {
-            let base_help = "j/k: Navigate | Tab: Switch Pane | h/l: Switch View";
-            let content_toggle = if lay.content_pane_hidden {
-                " | M-c: Show Content"
-            } else {
-                " | M-c: Hide Content"
-            };
-            format!("{}{} | q: Quit", base_help, content_toggle)
-        };
+        let help_text = build_status_hint(lay.content_pane_hidden);
 
         status_text.push(Span::styled(
             help_text,
@@ -363,32 +355,7 @@ impl UI {
     }
 
     fn draw_help_screen(&mut self, f: &mut Frame, area: Rect) {
-        let help_text = vec![
-            Line::from("Vulthor - TUI Email Client"),
-            Line::from(""),
-            Line::from("Navigation:"),
-            Line::from("  j/k        - Move up/down in current pane"),
-            Line::from("  Tab        - Switch between panes"),
-            Line::from("  Enter      - Select folder or email"),
-            Line::from("  Backspace  - Go back to parent folder"),
-            Line::from(""),
-            Line::from("View Control:"),
-            Line::from("  h          - Switch to folder/message view"),
-            Line::from("  l          - Switch to message/content view"),
-            Line::from(""),
-            Line::from("Email Actions:"),
-            Line::from("  a          - Archive selected email"),
-            Line::from("  d          - Delete selected email (Trash)"),
-            Line::from("  s          - Toggle star (Flagged)"),
-            Line::from("  m          - Move to folder (picker)"),
-            Line::from(""),
-            Line::from("Other:"),
-            Line::from("  u          - Undo last action (session-only)"),
-            Line::from("  ?          - Show this help"),
-            Line::from("  q          - Quit application"),
-            Line::from(""),
-            Line::from("Press any key to return..."),
-        ];
+        let help_text: Vec<Line> = help_screen_lines().into_iter().map(Line::from).collect();
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -400,5 +367,136 @@ impl UI {
             .wrap(Wrap { trim: true });
 
         f.render_widget(paragraph, area);
+    }
+}
+
+/// Lines shown in the `?` help overlay. Kept in sync with the wired
+/// key handlers in `components/root.rs` and the per-pane components;
+/// see the `help_screen_lists_*` tests below.
+pub(crate) fn help_screen_lines() -> Vec<&'static str> {
+    vec![
+        "Vulthor - TUI Email Client",
+        "",
+        "Navigation:",
+        "  j/k        - Move up/down in current pane",
+        "  Tab / S-Tab - Switch between panes",
+        "  h / l      - Switch view (broader / deeper)",
+        "  Enter      - Select folder or open email",
+        "  Backspace  - Go back to parent folder",
+        "",
+        "Email Actions:",
+        "  a          - Archive selected email",
+        "  d          - Delete selected email (Trash)",
+        "  s / F      - Toggle star (Flagged)",
+        "  m          - Move to folder (picker)",
+        "  U          - Mark unread",
+        "  u          - Undo last action (session-only)",
+        "",
+        "View Control:",
+        "  Alt+c      - Toggle content pane",
+        "  ?          - Show this help",
+        "  q          - Quit application",
+        "",
+        "Press any key to return...",
+    ]
+}
+
+/// Status-bar hint string. Reflects the keys most worth surfacing
+/// from a non-help screen; full list lives in `help_screen_lines`.
+pub(crate) fn build_status_hint(content_pane_hidden: bool) -> String {
+    let toggle = if content_pane_hidden {
+        "Alt+c: Show Content"
+    } else {
+        "Alt+c: Hide Content"
+    };
+    format!(
+        "j/k: Navigate | Tab: Pane | h/l: View | a/d/s/m/U: Act | u: Undo | {} | ?: Help | q: Quit",
+        toggle
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn joined() -> String {
+        help_screen_lines().join("\n")
+    }
+
+    #[test]
+    fn help_screen_lists_wired_action_keys() {
+        let text = joined();
+        // Action verbs the user should be able to discover from `?`.
+        for verb in ["Archive", "Delete", "star", "Move", "unread", "Undo"] {
+            assert!(
+                text.contains(verb),
+                "help screen missing action `{}`:\n{}",
+                verb,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn help_screen_lists_wired_keys() {
+        let text = joined();
+        // Each key with a wired handler must appear in the overlay.
+        for key in [
+            "j/k",
+            "Tab",
+            "h / l",
+            "Enter",
+            "Backspace",
+            "Alt+c",
+            "?",
+            "q",
+        ] {
+            assert!(
+                text.contains(key),
+                "help screen missing key `{}`:\n{}",
+                key,
+                text
+            );
+        }
+        // Email-action keys from VISION.md that are wired today.
+        for key in ["a ", "d ", "s / F", "m ", "U ", "u "] {
+            assert!(
+                text.contains(key),
+                "help screen missing email-action key `{}`:\n{}",
+                key,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn help_screen_omits_unwired_keys() {
+        // Guard against re-introducing stale entries for not-yet-wired
+        // VISION.md keys. Update this list as features land.
+        let text = joined();
+        for stale in ["Reply", "Forward", "Search forward", "PWA"] {
+            assert!(
+                !text.contains(stale),
+                "help screen advertises unwired feature `{}`:\n{}",
+                stale,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn status_hint_swaps_content_toggle_label() {
+        let shown = build_status_hint(false);
+        assert!(shown.contains("Hide Content"), "{}", shown);
+        let hidden = build_status_hint(true);
+        assert!(hidden.contains("Show Content"), "{}", hidden);
+    }
+
+    #[test]
+    fn status_hint_advertises_core_keys() {
+        let s = build_status_hint(false);
+        for token in ["j/k", "Tab", "h/l", "?", "q", "u:"] {
+            assert!(s.contains(token), "status hint missing `{}`: {}", token, s);
+        }
     }
 }
