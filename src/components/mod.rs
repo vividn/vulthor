@@ -10,7 +10,7 @@ mod accounts;
 mod body_loader;
 mod content;
 mod ctx;
-mod draft;
+pub(crate) mod draft;
 mod folder_picker;
 mod folder_scanner;
 mod folders;

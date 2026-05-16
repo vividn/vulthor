@@ -25,6 +25,9 @@ mod web;
 #[cfg(test)]
 mod test_fixtures;
 
+#[cfg(test)]
+mod integration_tests;
+
 use clap::Parser;
 use components::{AppRoot, FolderScannerHandle};
 use config::{CliArgs, Config};

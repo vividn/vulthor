@@ -1395,6 +1395,26 @@ impl AppRoot {
         self.undo_stack.len()
     }
 
+    /// Test seam: force the active pane. Production code transitions
+    /// the pane via `Msg::FocusNext` / `Msg::FocusPrev` and view-
+    /// progression; tests outside `root.rs` skip that machinery to
+    /// land directly on the pane they want to drive keys against.
+    #[cfg(test)]
+    pub(crate) fn set_active_pane_for_test(&mut self, pane: ActivePane) {
+        self.layout.active_pane = pane;
+        self.publish_focus();
+    }
+
+    /// Test seam: position the Messages-pane cursor. Mirrors the
+    /// in-tree convention of writing `root.messages.email_index = i`
+    /// directly. Keeps the layout mirror in sync so subsequent
+    /// dispatches don't snap back.
+    #[cfg(test)]
+    pub(crate) fn set_messages_email_index_for_test(&mut self, idx: usize) {
+        self.messages.email_index = idx;
+        self.layout.selection.email_index = idx;
+    }
+
     /// Re-point the runtime at a new maildir root. Used by
     /// `Msg::AccountSelect`.
     ///
