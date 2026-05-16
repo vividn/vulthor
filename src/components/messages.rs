@@ -303,6 +303,14 @@ impl Component for MessagesComponent {
                     self.email_index -= 1;
                 }
             }
+            Msg::MessageOpen(_) => {
+                // Phase 1.b (vu-4yi): opening an email also marks it
+                // as read. AppRoot owns both side-effects — view-switch
+                // for `MessageOpen` and new/→cur/ move for
+                // `MessageMarkRead` — so we pair them here as a
+                // follow-up rather than fanning out from `on_key`.
+                return vec![Msg::MessageMarkRead(String::new())];
+            }
             Msg::FolderMove(_) | Msg::FolderEnter | Msg::FolderExitParent => {
                 // New folder context: drop the cursor to the top and
                 // clear the cross-pane remembered position. The legacy
@@ -573,6 +581,26 @@ mod tests {
         assert_eq!(m.on_key(down, &ctx), Some(Msg::MessageMove(Dir::Down)));
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         assert_eq!(m.on_key(up, &ctx), Some(Msg::MessageMove(Dir::Up)));
+    }
+
+    /// Phase 1.b (vu-4yi): `handle_msg(MessageOpen)` fans out a
+    /// `MessageMarkRead` follow-up so opening an email also moves its
+    /// file from `new/` to `cur/`.
+    #[test]
+    fn message_open_fans_out_mark_read_followup() {
+        let store = store_with_one_folder(3);
+        let (theme, config) = (VulthorTheme, Config::default());
+        let ctx = ctx(&theme, &config, &store);
+
+        let mut m = MessagesComponent::new();
+        let followups = m.handle_msg(&Msg::MessageOpen(String::new()), &ctx);
+        assert!(
+            followups
+                .iter()
+                .any(|x| matches!(x, Msg::MessageMarkRead(_))),
+            "MessageOpen must enqueue MessageMarkRead, got {:?}",
+            followups,
+        );
     }
 
     #[test]

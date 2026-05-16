@@ -733,6 +733,9 @@ impl AppRoot {
             Msg::ToggleStar(_) => {
                 self.apply_toggle_star();
             }
+            Msg::MessageMarkRead(_) => {
+                self.apply_mark_read();
+            }
             Msg::Undo => {
                 self.apply_undo();
             }
@@ -844,6 +847,37 @@ impl AppRoot {
         };
         let verb = if want { "Starred" } else { "Unstarred" };
         self.status_message = Some(format!("{}: {}", verb, label));
+    }
+
+    /// Mark the cursor-selected email as read by moving its file from
+    /// the MailDir `new/` tray to `cur/`. Idempotent: no-op when the
+    /// email is already in `cur/`. Pushes a `Mutation::MarkRead` so
+    /// `u` can move the file back. Phase 1.b (vu-4yi).
+    fn apply_mark_read(&mut self) {
+        let src_path = {
+            let store = self.email_store.lock().unwrap();
+            let folder = store.get_current_folder();
+            let idx = self.messages.email_index;
+            match folder.emails.get(idx) {
+                Some(e) => e.file_path.clone(),
+                None => return,
+            }
+        };
+
+        let result = self.email_store.lock().unwrap().mark_read(&src_path);
+        match result {
+            Ok(Some((from, to))) => {
+                self.undo_stack.push(Mutation::MarkRead {
+                    msg: to.clone(),
+                    from,
+                    to,
+                });
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.status_message = Some(format!("Failed to mark read: {}", e));
+            }
+        }
     }
 
     /// Pop one mutation off the undo stack and reverse it. No-op when
@@ -2009,6 +2043,84 @@ mod tests {
         let store = root.email_store_handle();
         let store = store.lock().unwrap();
         assert!(!store.root_folder.subfolders[0].emails[0].is_flagged);
+    }
+
+    /// Phase 1.b (vu-4yi): pressing Enter on an unread email moves the
+    /// file from `new/` to `cur/` and pushes a `MarkRead` mutation onto
+    /// the undo stack. Then `u` reverses the move.
+    #[test]
+    fn enter_on_unread_email_moves_new_to_cur_and_undo_restores() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let inbox_new = temp.path().join("INBOX/new");
+        let inbox_cur = temp.path().join("INBOX/cur");
+        std::fs::create_dir_all(&inbox_new).unwrap();
+        std::fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_new.join("msg1");
+        std::fs::write(
+            &src,
+            "From: a@b.test\r\nTo: c@d.test\r\nSubject: hi\r\n\r\nbody\r\n",
+        )
+        .unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(src.clone());
+        email.is_unread = true;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(temp.path().to_path_buf());
+        let shared = Arc::new(Mutex::new(store));
+        let mut root = AppRoot::new(shared.clone(), scanner);
+        root.layout.active_pane = ActivePane::Messages;
+
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        let dst = inbox_cur.join("msg1");
+        assert!(dst.exists(), "file must be in cur/");
+        assert!(!src.exists(), "file must no longer be in new/");
+        assert_eq!(root.undo_stack_len(), 1);
+        {
+            let store = shared.lock().unwrap();
+            let inbox = &store.root_folder.subfolders[0];
+            assert_eq!(inbox.emails[0].file_path, dst);
+            assert!(!inbox.emails[0].is_unread);
+            assert_eq!(inbox.unread_count, 0);
+        }
+
+        let u = Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        root.process_event(u).unwrap();
+        assert!(src.exists(), "undo must restore file to new/");
+        assert!(!dst.exists());
+        assert_eq!(root.undo_stack_len(), 0);
+        let store = shared.lock().unwrap();
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, src);
+        assert!(inbox.emails[0].is_unread, "undo must restore unread state");
+        assert_eq!(inbox.unread_count, 1);
+    }
+
+    /// Idempotency check: Enter on an email already in `cur/` does
+    /// nothing on disk and pushes no mutation.
+    #[test]
+    fn enter_on_already_read_email_is_no_op() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (mut root, src) = make_root_with_disk_inbox(temp.path().to_path_buf(), "msgr");
+        root.layout.active_pane = ActivePane::Messages;
+
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        assert!(src.exists(), "file must remain in cur/");
+        assert_eq!(
+            root.undo_stack_len(),
+            0,
+            "no-op mark-read must not push a mutation",
+        );
     }
 
     #[test]

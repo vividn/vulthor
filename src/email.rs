@@ -523,10 +523,10 @@ impl EmailStore {
     /// Rewrite a single email's `file_path` after the file has moved on
     /// disk (action-key handlers + `Msg::Undo`, vu-pas). Walks the
     /// folder tree and updates the first matching email; returns true
-    /// if an email was found. Counts are not touched — moves between
-    /// folders should also update each folder's `total_count` /
-    /// `unread_count`, but that's the responsibility of the higher-level
-    /// "move email across folders" path that Phase 1.b–1.e will add.
+    /// if an email was found. When the move is a MailDir tray
+    /// transition (`new/` ↔ `cur/`), `is_unread` and the containing
+    /// folder's `unread_count` are kept in sync — mark-read forward
+    /// and undo both rely on this (vu-4yi).
     pub fn swap_email_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> bool {
         Self::swap_email_path_in_folder(&mut self.root_folder, old, new)
     }
@@ -536,6 +536,10 @@ impl EmailStore {
         old: &std::path::Path,
         new: &std::path::Path,
     ) -> bool {
+        let new_tray = new
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str());
         for email in &mut folder.emails {
             if email.file_path == old {
                 email.file_path = new.to_path_buf();
@@ -543,6 +547,17 @@ impl EmailStore {
                 // `:2,…F…` flag; refresh it so Phase 1.c star-toggle
                 // and its undo stay coherent without a separate writer.
                 email.is_flagged = maildir_flag_in_filename(new, 'F');
+                match new_tray {
+                    Some("new") if !email.is_unread => {
+                        email.is_unread = true;
+                        folder.unread_count += 1;
+                    }
+                    Some("cur") if email.is_unread => {
+                        email.is_unread = false;
+                        folder.unread_count = folder.unread_count.saturating_sub(1);
+                    }
+                    _ => {}
+                }
                 return true;
             }
         }
@@ -552,6 +567,34 @@ impl EmailStore {
             }
         }
         false
+    }
+
+    /// Mark an email as read by moving its file from the MailDir `new/`
+    /// tray into the sibling `cur/` tray (Phase 1.b, vu-4yi). Idempotent:
+    /// when `path` already lives in `cur/` (or any non-`new/` parent),
+    /// returns `Ok(None)` without touching disk. On success, returns
+    /// `Ok(Some((from, to)))` so the caller can record a `Mutation::MarkRead`
+    /// for undo. The in-memory `Email.is_unread` and containing folder's
+    /// `unread_count` are updated via `swap_email_path`.
+    pub fn mark_read(&mut self, path: &std::path::Path) -> Result<Option<(PathBuf, PathBuf)>> {
+        let parent = path.parent();
+        let parent_is_new =
+            parent.and_then(|p| p.file_name()).and_then(|s| s.to_str()) == Some("new");
+        if !parent_is_new {
+            return Ok(None);
+        }
+        let cur_dir = parent
+            .and_then(|p| p.parent())
+            .map(|folder_root| folder_root.join("cur"))
+            .ok_or(VulthorError::InvalidFolderPath)?;
+        let filename = path.file_name().ok_or(VulthorError::InvalidFolderPath)?;
+        let new_path = cur_dir.join(filename);
+
+        fs::create_dir_all(&cur_dir)?;
+        fs::rename(path, &new_path)?;
+
+        self.swap_email_path(path, &new_path);
+        Ok(Some((path.to_path_buf(), new_path)))
     }
 
     fn apply_loaded_body_to_folder(
@@ -1208,6 +1251,85 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
             .add_subfolder(Folder::new("a".to_string(), PathBuf::from("/tmp/a")));
         let applied = store.apply_loaded_folder(&PathBuf::from("/tmp/b"), Vec::new(), true);
         assert!(!applied);
+    }
+
+    /// Phase 1.b (vu-4yi): `mark_read` moves a file from `new/` to
+    /// `cur/`, returns `Some((from, to))` for undo recording, flips
+    /// `is_unread` to false on the matching email, and decrements the
+    /// containing folder's `unread_count`.
+    #[test]
+    fn mark_read_moves_file_new_to_cur_and_updates_store() {
+        let temp = TempDir::new().unwrap();
+        let inbox_new = temp.path().join("INBOX/new");
+        let inbox_cur = temp.path().join("INBOX/cur");
+        fs::create_dir_all(&inbox_new).unwrap();
+        fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_new.join("msg1");
+        fs::write(&src, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        let mut email = Email::new(src.clone());
+        email.is_unread = true;
+        inbox.add_email(email);
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        let result = store.mark_read(&src).expect("mark_read must not error");
+        let (from, to) = result.expect("mark_read must report the move");
+        let dst = inbox_cur.join("msg1");
+        assert_eq!(from, src);
+        assert_eq!(to, dst);
+        assert!(dst.exists(), "file must be in cur/");
+        assert!(!src.exists(), "file must no longer be in new/");
+
+        let inbox = &store.root_folder.subfolders[0];
+        assert_eq!(inbox.emails[0].file_path, dst);
+        assert!(!inbox.emails[0].is_unread);
+        assert_eq!(inbox.unread_count, 0);
+    }
+
+    /// `mark_read` is idempotent: a file already in `cur/` reports
+    /// `Ok(None)` and does not touch disk or store state.
+    #[test]
+    fn mark_read_is_no_op_when_already_in_cur() {
+        let temp = TempDir::new().unwrap();
+        let inbox_cur = temp.path().join("INBOX/cur");
+        fs::create_dir_all(&inbox_cur).unwrap();
+        let src = inbox_cur.join("msg1");
+        fs::write(&src, "body").unwrap();
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        inbox.add_email(Email::new(src.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        let result = store.mark_read(&src).expect("mark_read must not error");
+        assert!(result.is_none(), "cur/ → cur/ must be a no-op");
+        assert!(src.exists(), "file must still be in cur/");
+    }
+
+    /// `swap_email_path` flips `is_unread` and adjusts `unread_count`
+    /// when the destination's parent tray changes. Mark-read undo
+    /// (cur/→new/) relies on this to restore the unread state.
+    #[test]
+    fn swap_email_path_cur_to_new_restores_unread() {
+        let temp = TempDir::new().unwrap();
+        let cur = temp.path().join("INBOX/cur/msg1");
+        let new = temp.path().join("INBOX/new/msg1");
+
+        let mut store = EmailStore::new(temp.path().to_path_buf());
+        let mut inbox = Folder::new("INBOX".to_string(), temp.path().join("INBOX"));
+        // Post-mark-read state: in cur/, read, unread_count = 0.
+        let email = Email::new(cur.clone());
+        inbox.add_email(email);
+        store.root_folder.add_subfolder(inbox);
+
+        assert!(store.swap_email_path(&cur, &new));
+        let inbox = &store.root_folder.subfolders[0];
+        assert!(inbox.emails[0].is_unread, "cur/→new/ must flip is_unread");
+        assert_eq!(inbox.unread_count, 1);
     }
 
     /// Phase 0.3.2 (vu-6td): `apply_loaded_body` returns `false` when no
