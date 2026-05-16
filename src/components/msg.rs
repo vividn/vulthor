@@ -141,6 +141,14 @@ pub enum Msg {
     DraftStart(ReplyKind, MessageId),
     DraftEditorExited,
     DraftSend,
+    /// Relaunch `$EDITOR` on the in-flight draft. AppRoot rebuilds the
+    /// template from the live `Compose` and parks a new editor request
+    /// for the run loop. No-op when there is no draft in flight.
+    DraftEditRelaunch,
+    /// Discard the in-flight draft (q/Esc from the Draft pane). Clears
+    /// the draft state and drops back to the `MessagesContent` view.
+    /// No-op when there is no draft in flight.
+    DraftDiscard,
 
     // Store mutations (handled by AppRoot/store owner)
     StoreLoadFolder(FolderPath),

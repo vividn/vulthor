@@ -368,6 +368,17 @@ impl AppRoot {
                     return Ok(self.should_quit);
                 }
             }
+            // 5b. Draft-pane action keys (S send, e edit, q/Esc discard).
+            //     Resolved inline rather than via a `DraftComponent::on_key`
+            //     because each action needs AppRoot context (the parked
+            //     editor launch, compose::send, view navigation).
+            if matches!(self.layout.active_pane, ActivePane::Draft)
+                && let Some(msg) = Self::handle_draft_pane_key(key)
+            {
+                self.queue.push_back(msg);
+                self.drain();
+                return Ok(self.should_quit);
+            }
             // 6. Pane-agnostic legacy keys (Backspace, Attachments j/k/Enter).
             self.handle_residual_key(key);
             self.drain();
@@ -580,9 +591,32 @@ impl AppRoot {
         }
     }
 
+    /// Map a key event in the Draft pane to a `Msg`. Only consumes
+    /// the three action keys the pre-send footer documents: `S` sends,
+    /// `e` relaunches the editor, `q`/`Esc` discards. Everything else
+    /// (Tab, h/l view nav, etc.) falls through to the global handler.
+    fn handle_draft_pane_key(key: KeyEvent) -> Option<Msg> {
+        if !key.modifiers.is_empty() && !matches!(key.modifiers, KeyModifiers::SHIFT) {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('S') => Some(Msg::DraftSend),
+            KeyCode::Char('e') => Some(Msg::DraftEditRelaunch),
+            KeyCode::Char('q') | KeyCode::Esc => Some(Msg::DraftDiscard),
+            _ => None,
+        }
+    }
+
     fn handle_global_key(key: KeyEvent, active_pane: &ActivePane) -> Option<Msg> {
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), m) if m.is_empty() => Some(Msg::Quit),
+            // `q` is the global quit key in every pane *except* Draft,
+            // where it discards the in-flight reply. Defer to the per-
+            // pane handler so the draft-discard path wins.
+            (KeyCode::Char('q'), m)
+                if m.is_empty() && !matches!(active_pane, ActivePane::Draft) =>
+            {
+                Some(Msg::Quit)
+            }
             (KeyCode::Char('?'), m) if m.is_empty() => Some(Msg::ToggleHelp),
             (KeyCode::Char('u'), m) if m.is_empty() => Some(Msg::Undo),
             (KeyCode::Char('c'), KeyModifiers::ALT) => Some(Msg::ToggleContentPane),
@@ -660,7 +694,22 @@ impl AppRoot {
             }
             Msg::ViewNext => {
                 let old = self.layout.active_pane;
-                self.layout.next_view();
+                // Draft override: 'l' from the Content view jumps to
+                // ContentDraft when a reply is in flight. `layout.next_view`
+                // returns None there because the draft-pane gate depends
+                // on `DraftComponent::has_draft()`, which layout can't see.
+                if matches!(self.layout.current_view, View::Content)
+                    && self.draft.has_draft()
+                    && !self.layout.content_pane_hidden
+                {
+                    self.layout.current_view = View::ContentDraft;
+                    self.layout.active_pane = self
+                        .layout
+                        .current_view
+                        .get_default_active_pane(self.layout.content_pane_hidden);
+                } else {
+                    self.layout.next_view();
+                }
                 let new = self.layout.active_pane;
                 self.on_focus_change(old, new);
             }
@@ -672,10 +721,20 @@ impl AppRoot {
                 // there because single-account installs must keep the
                 // pane hidden; the multi-account policy lives here so
                 // layout stays pure.
+                //
+                // Draft override (symmetric to ViewNext): 'h' from
+                // ContentDraft drops back to MessagesContent so the
+                // user can leave the pre-send pane without discarding.
                 if matches!(self.layout.current_view, View::FolderMessages)
                     && self.config.is_multi_account()
                 {
                     self.layout.current_view = View::AccountsFolders;
+                    self.layout.active_pane = self
+                        .layout
+                        .current_view
+                        .get_default_active_pane(self.layout.content_pane_hidden);
+                } else if matches!(self.layout.current_view, View::ContentDraft) {
+                    self.layout.current_view = View::MessagesContent;
                     self.layout.active_pane = self
                         .layout
                         .current_view
@@ -809,8 +868,70 @@ impl AppRoot {
             Msg::DraftStart(kind, _) => {
                 self.apply_draft_start(*kind);
             }
+            Msg::DraftSend => {
+                self.apply_draft_send();
+            }
+            Msg::DraftDiscard => {
+                self.apply_draft_discard();
+            }
+            Msg::DraftEditRelaunch => {
+                self.apply_draft_edit_relaunch();
+            }
             _ => {}
         }
+    }
+
+    /// Pipe the in-flight draft to `compose::send`. On success, file
+    /// the Sent copy, clear the draft, and drop back to the
+    /// `MessagesContent` view. On failure, flip the draft's status to
+    /// `Failed` so the footer surfaces the reason; the user can press
+    /// `e` to re-edit or `q` to abandon.
+    fn apply_draft_send(&mut self) {
+        let compose = match self.draft.state() {
+            Some(state) => state.compose.clone(),
+            None => return,
+        };
+        let account = self.resolve_active_account();
+        match crate::compose::send(&compose, &account) {
+            Ok(sent_path) => {
+                self.draft.clear();
+                self.layout.current_view = View::MessagesContent;
+                self.layout.active_pane = ActivePane::Messages;
+                self.publish_focus();
+                let label = sent_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Sent".to_string());
+                self.status_message = Some(format!("Sent: {}", label));
+            }
+            Err(e) => {
+                self.draft
+                    .set_status(crate::components::draft::DraftStatus::Failed(e.to_string()));
+                self.status_message = Some(format!("Send failed: {}", e));
+            }
+        }
+    }
+
+    /// Discard the in-flight draft (`q`/Esc in the Draft pane).
+    /// `DraftComponent` clears its own state via the bus; AppRoot just
+    /// navigates back to the pre-compose view.
+    fn apply_draft_discard(&mut self) {
+        self.layout.current_view = View::MessagesContent;
+        self.layout.active_pane = ActivePane::Messages;
+        self.publish_focus();
+        self.status_message = Some("Draft discarded".into());
+    }
+
+    /// Park a fresh editor launch on the current draft (`e` in the
+    /// Draft pane). The run loop picks it up the same way it does for
+    /// the initial `DraftStart`. No-op when no draft is in flight.
+    fn apply_draft_edit_relaunch(&mut self) {
+        let compose = match self.draft.state() {
+            Some(state) => state.compose.clone(),
+            None => return,
+        };
+        let template = default_template(&compose);
+        self.pending_editor = Some(PendingEditorLaunch { template });
     }
 
     /// Build the reply template for the cursor email, install it on
@@ -3403,6 +3524,208 @@ mod tests {
         assert_eq!(state.compose.subject, "Fwd: Lunch tomorrow?");
         assert!(state.compose.in_reply_to.is_none());
         assert!(state.compose.body.contains("Forwarded message"));
+    }
+
+    /// `S` in the Draft pane invokes `compose::send`. With a mock SMTP
+    /// command that swallows stdin and exits 0, the runtime must:
+    ///   - file a Sent copy under `<maildir>/Sent/cur/`,
+    ///   - clear the draft (`has_draft()` returns false),
+    ///   - drop back to MessagesContent with focus on Messages,
+    ///   - surface a "Sent: <filename>" status message.
+    #[test]
+    fn capital_s_in_draft_pane_invokes_send_and_clears_draft() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+
+        // Plug in a single account with a mock SMTP command. The
+        // command reads stdin and discards it; `compose::send` then
+        // writes the Sent copy itself, so this exercises the full
+        // pipe-and-file flow without requiring msmtp.
+        let mut cfg = Config::default();
+        cfg.accounts.insert(
+            "primary".into(),
+            crate::config::AccountConfig {
+                name: "Primary".into(),
+                email: "me@example.com".into(),
+                maildir_path: temp.path().to_path_buf(),
+                smtp_command: Some("cat > /dev/null".to_string()),
+                signature: None,
+            },
+        );
+        root.accounts = AccountsComponent::with_config(&cfg);
+        root.config = cfg;
+
+        // Start a reply, install the parsed editor result, focus Draft.
+        root.layout.active_pane = ActivePane::Messages;
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+        // Simulate the editor exiting with the parsed Compose. AppRoot's
+        // run loop would normally call this after `$EDITOR`; the test
+        // calls it directly because we don't actually launch one.
+        let pending = root.take_pending_editor().expect("editor parked");
+        let parsed = crate::compose::parse_compose_from_text(&pending.template).unwrap();
+        root.apply_editor_result(parsed);
+        assert_eq!(
+            root.draft().state().expect("draft ready").status,
+            crate::components::draft::DraftStatus::ReadyToSend,
+        );
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+
+        // Press 'S' — must route through the Draft per-pane handler,
+        // not the global 'q'-style quit, and not back to Messages.
+        let big_s = Event::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        root.process_event(big_s).unwrap();
+
+        // Draft cleared, view dropped back to MessagesContent.
+        assert!(
+            !root.draft().has_draft(),
+            "draft must be cleared after send"
+        );
+        assert_eq!(root.layout.current_view, View::MessagesContent);
+        assert_eq!(root.layout.active_pane, ActivePane::Messages);
+
+        // Sent/ folder gained exactly one file.
+        let sent_dir = temp.path().join("Sent").join("cur");
+        let entries: Vec<_> = std::fs::read_dir(&sent_dir)
+            .expect("Sent/cur/ created")
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one Sent copy written");
+    }
+
+    /// SMTP failure must leave the draft in `Failed` so the user can
+    /// fix and resend. The Sent copy must NOT be written.
+    #[test]
+    fn capital_s_smtp_failure_surfaces_failed_status() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+
+        let mut cfg = Config::default();
+        cfg.accounts.insert(
+            "primary".into(),
+            crate::config::AccountConfig {
+                name: "Primary".into(),
+                email: "me@example.com".into(),
+                maildir_path: temp.path().to_path_buf(),
+                // Non-zero exit — simulates msmtp rejecting the message.
+                smtp_command: Some("cat > /dev/null; exit 67".to_string()),
+                signature: None,
+            },
+        );
+        root.accounts = AccountsComponent::with_config(&cfg);
+        root.config = cfg;
+
+        root.layout.active_pane = ActivePane::Messages;
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+        let pending = root.take_pending_editor().unwrap();
+        let parsed = crate::compose::parse_compose_from_text(&pending.template).unwrap();
+        root.apply_editor_result(parsed);
+
+        let big_s = Event::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        root.process_event(big_s).unwrap();
+
+        // Draft survives in `Failed` state — user can press `e` to
+        // re-edit or `q` to abandon.
+        let state = root.draft().state().expect("draft preserved on failure");
+        assert!(matches!(
+            state.status,
+            crate::components::draft::DraftStatus::Failed(_)
+        ));
+        // View stays on the Draft pane so the failure footer is visible.
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+        // Sent/ NOT written.
+        assert!(!temp.path().join("Sent").join("cur").exists());
+    }
+
+    /// `q` in the Draft pane discards the draft and drops back to
+    /// MessagesContent — it must NOT quit the app.
+    #[test]
+    fn q_in_draft_pane_discards_instead_of_quitting() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+
+        root.layout.active_pane = ActivePane::Messages;
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+        // Drain the parked launch so the next event is interpreted in
+        // the Draft pane (the run loop would do this).
+        let _ = root.take_pending_editor();
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+
+        let q = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        let should_quit = root.process_event(q).unwrap();
+
+        assert!(!should_quit, "q in Draft pane must not quit the app");
+        assert!(!root.draft().has_draft(), "q must discard the draft");
+        assert_eq!(root.layout.current_view, View::MessagesContent);
+        assert_eq!(root.layout.active_pane, ActivePane::Messages);
+    }
+
+    /// `e` in the Draft pane parks a new editor launch built from the
+    /// live draft compose. Used to fix a typo after the editor exit
+    /// before pressing `S`.
+    #[test]
+    fn e_in_draft_pane_reparks_editor_launch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+
+        root.layout.active_pane = ActivePane::Messages;
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+        let pending = root.take_pending_editor().unwrap();
+        let parsed = crate::compose::parse_compose_from_text(&pending.template).unwrap();
+        root.apply_editor_result(parsed);
+        assert!(!root.has_pending_editor());
+
+        let e = Event::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        root.process_event(e).unwrap();
+
+        assert!(root.has_pending_editor(), "e must park a fresh launch");
+        // Status flipped back to `Editing` so the footer doesn't lie.
+        assert_eq!(
+            root.draft().state().unwrap().status,
+            crate::components::draft::DraftStatus::Editing,
+        );
+    }
+
+    /// 'l' from the Content view jumps to ContentDraft when a draft
+    /// exists. Without a draft, 'l' stays put (Content is the
+    /// rightmost view in the normal progression).
+    #[test]
+    fn l_from_content_view_jumps_to_content_draft_when_draft_present() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mut root = make_root_with_one_real_email(temp.path().to_path_buf());
+
+        // No draft yet — Content is terminal.
+        root.layout.current_view = View::Content;
+        root.layout.active_pane = ActivePane::Content;
+        let l = Event::Key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        root.process_event(l).unwrap();
+        assert_eq!(
+            root.layout.current_view,
+            View::Content,
+            "without a draft, l from Content stays put",
+        );
+
+        // Start a draft, navigate back to Content, then 'l' jumps.
+        root.layout.active_pane = ActivePane::Messages;
+        let r = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        root.process_event(r).unwrap();
+        let _ = root.take_pending_editor();
+        // Force the view back to Content as if the user navigated away.
+        root.layout.current_view = View::Content;
+        root.layout.active_pane = ActivePane::Content;
+        let l = Event::Key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        root.process_event(l).unwrap();
+        assert_eq!(root.layout.current_view, View::ContentDraft);
+        assert_eq!(root.layout.active_pane, ActivePane::Draft);
+
+        // 'h' from ContentDraft drops back to MessagesContent.
+        let h = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        root.process_event(h).unwrap();
+        assert_eq!(root.layout.current_view, View::MessagesContent);
     }
 
     /// `R` (reply-later) must NOT launch the editor. Instead it writes

@@ -154,6 +154,23 @@ impl Component for DraftComponent {
                 }
                 Vec::new()
             }
+            Msg::DraftDiscard => {
+                // `q`/Esc from the Draft pane. Drop the draft so the
+                // pane returns to its tombstone and the user can start
+                // a new one. View progression back to MessagesContent
+                // is AppRoot's job.
+                self.state = None;
+                Vec::new()
+            }
+            Msg::DraftEditRelaunch => {
+                // AppRoot parks a fresh editor launch; we flip the
+                // footer back to `Editing` so the pre-send "ready" hint
+                // doesn't lie about the current state.
+                if let Some(state) = self.state.as_mut() {
+                    state.status = DraftStatus::Editing;
+                }
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
