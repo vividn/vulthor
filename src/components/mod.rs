@@ -1,11 +1,14 @@
-// Component-based state management — Phase 0.2.1 scaffold (vu-m6s).
+// Component-based state management.
 //
-// Step 1 of the migration in DESIGN-COMPONENTS.md: this module introduces
-// the `Component` trait, the flat `Msg` enum, the read-only `Ctx`, and a
-// dead-code `AppRoot` wrapper. No pane has been migrated yet. Wiring into
-// `main.rs` lands in vu-q31 (FoldersComponent extraction).
+// Phase 0.2.1 (vu-m6s) introduced the `Component` trait, the flat `Msg`
+// enum, the read-only `Ctx`, and an inert `AppRoot` scaffold.
+// Phase 0.2.2a (vu-gje) made `AppRoot` the live main-loop driver — it now
+// owns the message queue, intercepts global keys, dispatches via
+// `apply_root` against the legacy `App`, and renders by delegating to
+// today's `ui::UI::draw`. No pane has been migrated to a component yet;
+// that lands in vu-sd6 (FoldersComponent) and beyond.
 
-// Step 1 lands the scaffold without callers; vu-q31 onward wires panes in.
+// `Component`-related items remain unused until the first pane migrates.
 #![allow(dead_code, unused_imports)]
 
 mod ctx;

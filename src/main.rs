@@ -12,23 +12,22 @@ mod web;
 #[cfg(test)]
 mod test_fixtures;
 
-use app::{App, AppState, SharedAppState};
+use app::{App, SharedAppState};
 use clap::Parser;
+use components::AppRoot;
 use config::{CliArgs, Config};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use email::EmailStore;
 use error::Result;
-use input::handle_input;
 use maildir::MaildirScanner;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     io,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use ui::UI;
 use web::WebServer;
@@ -97,7 +96,8 @@ async fn main() -> Result<()> {
     );
     println!("Press 'q' to quit, '?' for help");
 
-    let result = run_app(&mut terminal, &mut ui, shared_app_state.clone()).await;
+    let mut app_root = AppRoot::new(shared_app_state.clone());
+    let result = run_app(&mut terminal, &mut ui, &mut app_root).await;
 
     disable_raw_mode()?;
     execute!(
@@ -121,39 +121,23 @@ async fn main() -> Result<()> {
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ui: &mut UI,
-    app_state: SharedAppState,
+    app_root: &mut AppRoot,
 ) -> Result<()> {
     loop {
-        {
-            let mut app = app_state.lock().unwrap();
-            terminal.draw(|f| ui.draw(f, &mut app))?;
-
-            if app.should_quit || matches!(app.state, AppState::Quit) {
-                break;
-            }
+        if app_root.render(terminal, ui)? {
+            break;
         }
-
-        if event::poll(Duration::from_millis(100))? {
-            let event = event::read()?;
-            let mut app = app_state.lock().unwrap();
-
-            if !matches!(event, Event::Resize(_, _)) {
-                app.clear_status();
-            }
-
-            let should_quit = handle_input(&mut app, event);
-            if should_quit {
-                break;
-            }
+        if app_root.tick()? {
+            break;
         }
     }
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AppState;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
