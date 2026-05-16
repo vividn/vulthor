@@ -1,17 +1,14 @@
 use crate::app::{ActivePane, App, AppState, View};
-use crate::components::{Component, Ctx, FoldersComponent, MessagesComponent};
+use crate::components::{Component, ContentComponent, Ctx, FoldersComponent, MessagesComponent};
 use crate::config::Config;
 use crate::email::EmailLoadState;
 use crate::theme::VulthorTheme;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Wrap,
-    },
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 pub struct UI {
@@ -37,6 +34,7 @@ impl UI {
         app: &mut App,
         folders: &FoldersComponent,
         messages: &MessagesComponent,
+        content: &ContentComponent,
     ) {
         let size = f.area();
 
@@ -45,7 +43,7 @@ impl UI {
                 self.draw_help_screen(f, size);
             }
             _ => {
-                self.draw_main_layout(f, app, folders, messages, size);
+                self.draw_main_layout(f, app, folders, messages, content, size);
             }
         }
     }
@@ -56,6 +54,7 @@ impl UI {
         app: &mut App,
         folders: &FoldersComponent,
         messages: &MessagesComponent,
+        content: &ContentComponent,
         area: Rect,
     ) {
         match app.current_view {
@@ -90,12 +89,12 @@ impl UI {
                 let is_content_active = matches!(app.active_pane, ActivePane::Content);
 
                 Self::draw_messages_pane(f, app, messages, chunks[0], is_messages_active);
-                self.draw_content_pane(f, app, chunks[1], is_content_active);
+                Self::render_content_pane(f, app, content, chunks[1], is_content_active);
             }
             View::Content => {
                 // Single pane: content only
                 let is_content_active = matches!(app.active_pane, ActivePane::Content);
-                self.draw_content_pane(f, app, area, is_content_active);
+                Self::render_content_pane(f, app, content, area, is_content_active);
             }
             View::Messages => {
                 // Single pane: messages only (when content hidden)
@@ -157,106 +156,27 @@ impl UI {
         messages.render_with_folder(f, area, is_active, folder_to_display, &folder_path);
     }
 
-    fn draw_content_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {
-        let border_style = if is_active {
-            Style::default().fg(VulthorTheme::CYAN_LIGHT)
-        } else {
-            Style::default()
+    /// Delegate Content-pane drawing to `ContentComponent`. The pane
+    /// pulls the selected email straight from `Ctx::store`, so unlike
+    /// the Messages pane there's no view-specific folder pick to wire
+    /// through here — `ui.rs` only builds the `Ctx` and hands off.
+    /// Phase 0.2.3b (vu-iva) removed the inline `draw_content_pane`
+    /// that mutated `app.selection.scroll_offset`.
+    fn render_content_pane(
+        f: &mut Frame,
+        app: &App,
+        content: &ContentComponent,
+        area: Rect,
+        is_active: bool,
+    ) {
+        let theme = VulthorTheme;
+        let config = Config::default();
+        let ctx = Ctx {
+            theme: &theme,
+            config: &config,
+            store: &app.email_store,
         };
-
-        // Get email info first for headers (no markdown conversion needed)
-        let email_info = app.email_store.get_selected_email_headers();
-
-        if let Some(email) = email_info {
-            // Split content pane into header and body
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(6), Constraint::Min(0)])
-                .split(area);
-
-            // Draw headers
-            let header_block = Block::default()
-                .borders(Borders::ALL)
-                .style(border_style)
-                .title("Headers");
-
-            let header_text = email.get_header_display();
-            let header_paragraph = Paragraph::new(header_text.as_str())
-                .block(header_block)
-                .wrap(Wrap { trim: true });
-
-            f.render_widget(header_paragraph, chunks[0]);
-
-            // Draw body - only convert to markdown when content pane is visible
-            let mut body_title = "Content".to_string();
-            if email.has_attachments() {
-                body_title = format!("Content ({} attachments)", email.attachment_count());
-            }
-
-            let body_block = Block::default()
-                .borders(Borders::ALL)
-                .style(border_style)
-                .title(body_title);
-
-            // Non-blocking read: the body loader (`BodyLoader` in `components::body_loader`)
-            // parses bodies off-thread. Until it lands a result, `body_text` is empty and
-            // `load_state` is `HeadersOnly` — show a placeholder so the user knows
-            // selection succeeded.
-            let body_text = match email.load_state {
-                EmailLoadState::HeadersOnly => "Loading body…".to_string(),
-                EmailLoadState::FullyLoaded => app
-                    .email_store
-                    .get_selected_email_markdown()
-                    .unwrap_or_default(),
-            };
-
-            let body_paragraph = Paragraph::new(body_text.as_str())
-                .block(body_block)
-                .wrap(Wrap { trim: true })
-                .scroll((app.selection.scroll_offset as u16, 0));
-
-            f.render_widget(body_paragraph, chunks[1]);
-
-            // Draw scrollbar if content is scrollable
-            if is_active {
-                let scrollbar = Scrollbar::default()
-                    .orientation(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(Some("↑"))
-                    .end_symbol(Some("↓"));
-
-                let mut scrollbar_state = ScrollbarState::default()
-                    .content_length(body_text.lines().count())
-                    .position(app.selection.scroll_offset);
-
-                f.render_stateful_widget(
-                    scrollbar,
-                    chunks[1].inner(Margin {
-                        vertical: 1,
-                        horizontal: 1,
-                    }),
-                    &mut scrollbar_state,
-                );
-            }
-        } else {
-            // No email selected
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .style(border_style)
-                .title("Content");
-
-            let current_folder = app.email_store.get_current_folder();
-            let text = if current_folder.emails.is_empty() {
-                "No emails in this folder"
-            } else {
-                "Select an email to view its content"
-            };
-
-            let paragraph = Paragraph::new(text)
-                .block(block)
-                .style(Style::default().fg(VulthorTheme::GRAY_DARK));
-
-            f.render_widget(paragraph, area);
-        }
+        content.render(f, area, is_active, &ctx);
     }
 
     fn draw_attachments_pane(&mut self, f: &mut Frame, app: &mut App, area: Rect, is_active: bool) {

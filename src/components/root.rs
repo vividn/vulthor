@@ -42,8 +42,8 @@ use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
 use super::{
-    BodyLoader, Component, Ctx, FolderScannerHandle, FoldersComponent, HeadersLoader,
-    LoadFolderRequest, MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
+    BodyLoader, Component, ContentComponent, Ctx, FolderScannerHandle, FoldersComponent,
+    HeadersLoader, LoadFolderRequest, MAX_DISPATCH_DEPTH, MessagesComponent, Msg,
 };
 
 pub struct AppRoot {
@@ -53,8 +53,14 @@ pub struct AppRoot {
     /// cursor and the cross-pane remembered-cursor slot. AppRoot mirrors
     /// its `email_index` into `app.selection.email_index` after each
     /// dispatch step so legacy readers in `ui.rs` and the web server
-    /// keep working until ContentComponent lands (vu-iva).
+    /// keep working.
     messages: MessagesComponent,
+    /// Content pane component (Phase 0.2.3b, vu-iva). Sole writer of the
+    /// body scroll position. AppRoot mirrors `scroll_offset` into
+    /// `app.selection.scroll_offset` so legacy readers in `input.rs`
+    /// (handle_back_navigation, handle_folder_selection_and_switch_view)
+    /// and direct-App tests see the same value.
+    content: ContentComponent,
     queue: VecDeque<Msg>,
     /// Off-thread email body parser (Phase 0.3.2, vu-6td). The render path
     /// reads only in-memory state; selection changes enqueue a request here,
@@ -93,6 +99,7 @@ impl AppRoot {
             state: state.clone(),
             folders: FoldersComponent::with_index(initial_index),
             messages: MessagesComponent::new(),
+            content: ContentComponent::new(),
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
@@ -167,6 +174,12 @@ impl AppRoot {
         &self.messages
     }
 
+    /// Read-only handle to the content pane component. Used by `main.rs`
+    /// to thread the component into `UI::draw` for rendering.
+    pub fn content(&self) -> &ContentComponent {
+        &self.content
+    }
+
     /// Render one frame. Locks the app, drains any body-load responses that
     /// have arrived (so the next draw shows them), delegates to `ui::UI::draw`,
     /// and returns whether the loop should exit (quit state observed).
@@ -185,7 +198,8 @@ impl AppRoot {
         self.request_body_if_needed(&app);
         let folders = &self.folders;
         let messages = &self.messages;
-        terminal.draw(|f| ui.draw(f, &mut app, folders, messages))?;
+        let content = &self.content;
+        terminal.draw(|f| ui.draw(f, &mut app, folders, messages, content))?;
         // The Messages pane render writes its live visible-row count into
         // `messages.visible_rows`. Mirror it into App so the legacy
         // header-load sizing in `request_folder_load_if_needed` keeps
@@ -256,6 +270,19 @@ impl AppRoot {
                 let ctx_msg = {
                     let ctx = Self::make_ctx(&app);
                     self.messages.on_key(key, &ctx)
+                };
+                if let Some(msg) = ctx_msg {
+                    self.queue.push_back(msg);
+                    self.drain(&mut app);
+                    return Ok(app.should_quit);
+                }
+            }
+            // 4. Content-pane keys go to ContentComponent (Phase 0.2.3b,
+            //    vu-iva). j/k/Up/Down/PageUp/PageDown.
+            if matches!(app.active_pane, ActivePane::Content) {
+                let ctx_msg = {
+                    let ctx = Self::make_ctx(&app);
+                    self.content.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
                     self.queue.push_back(msg);
@@ -465,6 +492,7 @@ impl AppRoot {
                 let ctx = Self::make_ctx(app);
                 let mut fu = self.folders.handle_msg(&msg, &ctx);
                 fu.extend(self.messages.handle_msg(&msg, &ctx));
+                fu.extend(self.content.handle_msg(&msg, &ctx));
                 fu
             };
             self.queue.extend(follow_ups);
@@ -532,8 +560,9 @@ impl AppRoot {
             }
             Msg::FolderMove(_) => {
                 // FoldersComponent already updated its index;
-                // MessagesComponent already reset email_index. Mirror
-                // both into App so legacy readers (status bar, web
+                // MessagesComponent already reset email_index;
+                // ContentComponent already reset scroll_offset. Mirror
+                // all three into App so legacy readers (status bar, web
                 // pane) keep working. Phase 0.3.3 (vu-kx9) moved the
                 // headers load off-thread: the keystroke updates
                 // selection synchronously (instant), and the headers
@@ -541,6 +570,7 @@ impl AppRoot {
                 app.selection.folder_index = self.folders.folder_index;
                 app.selection.email_index = self.messages.email_index;
                 app.selection.remembered_email_index = self.messages.remembered_email_index;
+                app.selection.scroll_offset = self.content.scroll_offset;
 
                 let indices = crate::input::get_folder_path_from_display_index(
                     &app.email_store.root_folder,
@@ -568,6 +598,8 @@ impl AppRoot {
                 // reset email_index/remembered. Mirror into App.
                 app.selection.email_index = self.messages.email_index;
                 app.selection.remembered_email_index = self.messages.remembered_email_index;
+                // ContentComponent already reset its scroll_offset.
+                app.selection.scroll_offset = self.content.scroll_offset;
             }
             Msg::FolderExitParent => {
                 // Components already reset their indices in handle_msg.
@@ -576,7 +608,7 @@ impl AppRoot {
                 app.email_store.exit_folder();
                 app.selection.folder_index = self.folders.folder_index;
                 app.selection.email_index = self.messages.email_index;
-                app.selection.scroll_offset = 0;
+                app.selection.scroll_offset = self.content.scroll_offset;
                 app.selection.remembered_email_index = self.messages.remembered_email_index;
                 app.set_state(AppState::FolderView);
             }
@@ -602,6 +634,15 @@ impl AppRoot {
                     app.set_state(AppState::EmailContent);
                     app.selection.email_index = idx;
                 }
+            }
+            Msg::ContentScroll(_, _) => {
+                // ContentComponent already updated `scroll_offset`.
+                // Mirror so the web server and direct-App tests see the
+                // same value. The legacy `App::scroll` path is left in
+                // place as a safety net for tests that drive
+                // `handle_input` directly (see `input::handle_navigation`
+                // Content branch and the PageUp/PageDown handler).
+                app.selection.scroll_offset = self.content.scroll_offset;
             }
             Msg::StoreLoadMore(idx) => {
                 // The MessagesComponent fanned out a load-ahead hint as
@@ -663,6 +704,9 @@ impl AppRoot {
         }
         if self.messages.remembered_email_index != app.selection.remembered_email_index {
             self.messages.remembered_email_index = app.selection.remembered_email_index;
+        }
+        if self.content.scroll_offset != app.selection.scroll_offset {
+            self.content.scroll_offset = app.selection.scroll_offset;
         }
     }
 
@@ -1459,5 +1503,119 @@ mod tests {
             "near-tail scroll must trigger load_more (had {} emails)",
             app.email_store.get_current_folder().emails.len(),
         );
+    }
+
+    /// vu-iva acceptance: `j` from the Content pane routes to
+    /// `ContentComponent::on_key`, increments the component's
+    /// `scroll_offset`, and mirrors into `app.selection.scroll_offset`
+    /// so legacy readers (web server, direct-App tests) keep working.
+    /// Folders/Messages component state must remain untouched.
+    #[test]
+    fn key_j_in_content_pane_scrolls_via_component() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/INBOX/m0")));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.current_folder = vec![0];
+        store.select_email(0);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(store, scanner);
+        app.active_pane = ActivePane::Content;
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        root.process_event(j).unwrap();
+
+        assert_eq!(
+            root.content.scroll_offset, 1,
+            "ContentComponent must be sole writer of scroll_offset",
+        );
+        let app = root.state.lock().unwrap();
+        assert_eq!(
+            app.selection.scroll_offset, 1,
+            "AppRoot must mirror ContentComponent into legacy App field",
+        );
+    }
+
+    /// vu-iva: PageDown from the Content pane scrolls by 10 lines
+    /// (matches the legacy `input::handle_main_view_input` constant).
+    #[test]
+    fn key_pagedown_in_content_pane_scrolls_by_ten() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/INBOX/m0")));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.current_folder = vec![0];
+        store.select_email(0);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(store, scanner);
+        app.active_pane = ActivePane::Content;
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        let pd = Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        root.process_event(pd).unwrap();
+
+        assert_eq!(root.content.scroll_offset, 10);
+        let app = root.state.lock().unwrap();
+        assert_eq!(app.selection.scroll_offset, 10);
+    }
+
+    /// vu-iva: PageUp from `scroll_offset = 0` must not panic (saturating
+    /// subtract) and must leave the offset at 0. Mirrors into App field.
+    #[test]
+    fn key_pageup_in_content_pane_saturates_at_zero() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/INBOX/m0")));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.current_folder = vec![0];
+        store.select_email(0);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(store, scanner);
+        app.active_pane = ActivePane::Content;
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        let pu = Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        root.process_event(pu).unwrap();
+
+        assert_eq!(root.content.scroll_offset, 0);
+        let app = root.state.lock().unwrap();
+        assert_eq!(app.selection.scroll_offset, 0);
+    }
+
+    /// vu-iva: entering a new folder must clear any prior `scroll_offset`
+    /// so the user lands at the top of the new email's content. Mirrors
+    /// the legacy reset in `AppRoot::enter_selected_folder_async`.
+    #[test]
+    fn folder_enter_resets_content_scroll_offset() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/INBOX/m0")));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let app = App::new(store, scanner);
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        // Pretend the user has scrolled into the body, then triggers Enter
+        // from the Folders pane.
+        root.content.scroll_offset = 42;
+        {
+            let mut app = root.state.lock().unwrap();
+            app.selection.scroll_offset = 42;
+            app.active_pane = ActivePane::Folders;
+        }
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        root.process_event(enter).unwrap();
+
+        assert_eq!(root.content.scroll_offset, 0);
+        assert_eq!(root.state.lock().unwrap().selection.scroll_offset, 0);
     }
 }
