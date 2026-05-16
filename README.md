@@ -1,5 +1,7 @@
 # 📧 Vulthor
 
+[![CI](https://github.com/vividn/vulthor/actions/workflows/ci.yml/badge.svg)](https://github.com/vividn/vulthor/actions/workflows/ci.yml)
+
 A modern TUI (Terminal User Interface) email client with integrated HTML display, built in Rust.
 
 Vulthor provides a powerful vim-style email reading experience in your terminal while simultaneously serving beautiful HTML versions of your emails in a web browser.
