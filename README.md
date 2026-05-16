@@ -44,6 +44,23 @@ cargo build --release
 # binary at target/release/vulthor
 ```
 
+### Packaging
+
+Templates for downstream packagers live under `packaging/`:
+
+- **Arch (AUR)** — `packaging/aur/PKGBUILD`. The `sha256sums` line is `SKIP`
+  until the first release tarball is cut; replace it with the real sha before
+  uploading to AUR.
+- **Debian / Ubuntu** — `packaging/build-deb.sh` drives `cargo-deb`:
+  ```bash
+  cargo install cargo-deb
+  cargo build --release
+  packaging/build-deb.sh
+  # .deb is written to target/debian/
+  ```
+  The `[package.metadata.deb]` block in `Cargo.toml` declares runtime
+  dependencies (notmuch, msmtp, isync) and the install layout.
+
 ### Pairing tools
 
 Vulthor is intentionally minimal — it does not sync, search, or send mail by
