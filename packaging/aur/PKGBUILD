@@ -1,0 +1,29 @@
+# Maintainer: vividn <vividn@users.noreply.github.com>
+pkgname=vulthor
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Modern TUI email client with an integrated HTML viewer (MailDir-native)"
+arch=('x86_64')
+url="https://github.com/vividn/vulthor"
+license=('AGPL-3.0-or-later')
+makedepends=('rust' 'cargo')
+depends=('notmuch' 'msmtp' 'isync')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/vividn/vulthor/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # TODO: replace with real sha256 once v1.0.0 tag is cut
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "target/release/vulthor" "$pkgdir/usr/bin/vulthor"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
