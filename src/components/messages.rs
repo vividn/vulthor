@@ -381,10 +381,7 @@ impl MessagesComponent {
             Some(c) => Self::pad_to_width(&c.to_string(), AI_CHIP_WIDTH),
             None => " ".repeat(AI_CHIP_WIDTH),
         };
-        spans.push(Span::styled(
-            ai_chip_text,
-            style.fg(VulthorTheme::CYAN),
-        ));
+        spans.push(Span::styled(ai_chip_text, style.fg(VulthorTheme::CYAN)));
 
         let sender = if is_sent_folder {
             Self::extract_email_address(&email.headers.to)
@@ -1206,14 +1203,8 @@ mod tests {
         drafts.insert("orig-1@x".to_string(), draft(false));
 
         let noop = NoopClassifier;
-        let with_spans = MessagesComponent::build_email_row_spans(
-            &with_match,
-            80,
-            false,
-            &drafts,
-            &noop,
-            0.6,
-        );
+        let with_spans =
+            MessagesComponent::build_email_row_spans(&with_match, 80, false, &drafts, &noop, 0.6);
         let without_spans =
             MessagesComponent::build_email_row_spans(&without, 80, false, &drafts, &noop, 0.6);
 
@@ -1310,9 +1301,7 @@ mod tests {
             action: Action::Archive,
             confidence: 0.9,
         });
-        let spans = MessagesComponent::build_email_row_spans(
-            &email, 80, false, &drafts, &clf, 0.6,
-        );
+        let spans = MessagesComponent::build_email_row_spans(&email, 80, false, &drafts, &clf, 0.6);
         let row: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             row.contains('a'),

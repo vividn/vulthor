@@ -104,10 +104,17 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Build the AI classifier from `[ai]` config. Phase 5.a always
+    // returns NoopClassifier (chip slot blank, `;` no-op); Phase 6 will
+    // start honoring `[ai].enabled = true` to load a real backend.
+    let classifier = classifier::build_classifier(&config.ai);
+    let ai_threshold = config.ai.threshold;
+
     let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
     app_root.set_web_port(web_port);
     app_root.set_theme(resolved_theme);
+    app_root.set_classifier(classifier, ai_threshold);
     app_root.init_maildir_watcher();
 
     let web_server = WebServer::new(

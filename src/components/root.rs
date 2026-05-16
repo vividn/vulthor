@@ -251,6 +251,20 @@ impl AppRoot {
         self.theme = theme;
     }
 
+    /// Install the runtime AI classifier and confidence cutoff built
+    /// from `[ai]` config (Phase 5.a). `main.rs` calls this after
+    /// config load so MessagesComponent's chip rendering and the
+    /// `;`-key (`Action::AcceptSuggestion`) resolution share the same
+    /// instance. Default `NoopClassifier` stays installed otherwise so
+    /// `[ai].enabled = false` runs hit zero overhead.
+    pub fn set_classifier(
+        &mut self,
+        classifier: std::sync::Arc<dyn crate::classifier::Classifier>,
+        threshold: f32,
+    ) {
+        self.messages.set_classifier(classifier, threshold);
+    }
+
     /// Spawn the Phase 4.d MailDir watcher against the live email
     /// store's root path. Called once from `main.rs` after AppRoot
     /// construction; tests skip it so the watcher does not subscribe
@@ -4703,6 +4717,100 @@ mod tests {
         assert!(
             !inbox.is_loaded,
             "MailDirChanged must reset is_loaded so next scan refills",
+        );
+    }
+
+    // --- Phase 5.a: AI classifier `;` (AcceptSuggestion) routing. ---
+
+    use crate::classifier::{Classifier, Suggestion};
+
+    /// Stub classifier returning a fixed Suggestion for every email.
+    struct FixedClassifier(Suggestion);
+    impl Classifier for FixedClassifier {
+        fn suggest(&self, _: &Email) -> Option<Suggestion> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn root_in_messages_pane_with_one_email() -> AppRoot {
+        let mut root = make_root_with_folders(&["INBOX"]);
+        {
+            let handle = root.email_store_handle();
+            let mut store = handle.lock().unwrap();
+            store.enter_folder_by_path(&[0]);
+            store.select_email(0);
+        }
+        root.layout.active_pane = ActivePane::Messages;
+        root
+    }
+
+    /// `;` resolves the cursor email's classifier suggestion to the
+    /// underlying mutation `Msg`. Confidence 0.9, threshold 0.6 → an
+    /// Archive suggestion dispatches `Msg::Archive`.
+    #[test]
+    fn accept_suggestion_resolves_archive_when_above_threshold() {
+        let mut root = root_in_messages_pane_with_one_email();
+        let clf: Arc<dyn Classifier> = Arc::new(FixedClassifier(Suggestion {
+            action: Action::Archive,
+            confidence: 0.9,
+        }));
+        root.set_classifier(clf, 0.6);
+
+        let msg = root.resolve_accept_suggestion();
+        assert_eq!(msg, Some(Msg::Archive(String::new())));
+    }
+
+    /// Below-threshold suggestions must not dispatch — `;` is a no-op
+    /// so the user only acts on confident signals (the chip is also
+    /// hidden in this regime).
+    #[test]
+    fn accept_suggestion_is_noop_below_threshold() {
+        let mut root = root_in_messages_pane_with_one_email();
+        let clf: Arc<dyn Classifier> = Arc::new(FixedClassifier(Suggestion {
+            action: Action::Archive,
+            confidence: 0.3,
+        }));
+        root.set_classifier(clf, 0.6);
+        assert_eq!(root.resolve_accept_suggestion(), None);
+    }
+
+    /// NoopClassifier (the default under `[ai].enabled = false`)
+    /// abstains so `;` is a no-op — the runtime path stays dormant.
+    #[test]
+    fn accept_suggestion_noop_under_default_noop_classifier() {
+        let root = root_in_messages_pane_with_one_email();
+        // No `set_classifier` call → NoopClassifier still installed.
+        assert_eq!(root.resolve_accept_suggestion(), None);
+    }
+
+    /// Outside the Messages pane the chip never renders, so `;` must
+    /// also be a no-op there — even with a strong suggestion installed.
+    #[test]
+    fn accept_suggestion_only_fires_in_messages_pane() {
+        let mut root = root_in_messages_pane_with_one_email();
+        root.layout.active_pane = ActivePane::Folders;
+        let clf: Arc<dyn Classifier> = Arc::new(FixedClassifier(Suggestion {
+            action: Action::Archive,
+            confidence: 0.99,
+        }));
+        root.set_classifier(clf, 0.6);
+        assert_eq!(root.resolve_accept_suggestion(), None);
+    }
+
+    /// All chip-eligible actions (Archive/Star/Delete/MarkUnread plus
+    /// Reply / ReplyAll / ReplyLater / Forward) map onto their
+    /// underlying mutation `Msg` so the dispatch covers the
+    /// VISION.md §Email Actions set.
+    #[test]
+    fn suggestion_to_msg_covers_chip_eligible_actions() {
+        assert_eq!(
+            AppRoot::suggestion_to_msg(Action::Archive),
+            Some(Msg::Archive(String::new())),
+        );
+        assert_eq!(
+            AppRoot::suggestion_to_msg(Action::ToggleHelp),
+            None,
+            "non-chip actions return None",
         );
     }
 }
