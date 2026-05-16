@@ -14,7 +14,7 @@ mod test_fixtures;
 
 use app::{App, SharedAppState};
 use clap::Parser;
-use components::AppRoot;
+use components::{AppRoot, FolderScannerHandle};
 use config::{CliArgs, Config};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -52,24 +52,15 @@ async fn main() -> Result<()> {
         config.maildir_path = maildir_path;
     }
 
-    // Initialize maildir scanner and scan folder structure
-    println!(
-        "Scanning MailDir structure at: {}",
-        config.maildir_path.display()
-    );
+    // Phase 0.3.4 (vu-w9i): the folder-structure scan moved off the
+    // main thread. We start the worker here but do NOT block on it;
+    // the TUI comes up immediately and renders a splash until the
+    // scan reply lands inside `AppRoot::drain_scanned_folders`.
     let scanner = MaildirScanner::new(config.maildir_path.clone());
-    let root_folder = match scanner.scan() {
-        Ok(folder) => folder,
-        Err(e) => {
-            eprintln!("Error scanning MailDir: {}", e);
-            eprintln!("Make sure the path exists and contains a valid MailDir structure.");
-            std::process::exit(1);
-        }
-    };
+    let folder_scanner_handle = FolderScannerHandle::spawn(config.maildir_path.clone());
 
-    // Create email store and app
     let mut email_store = EmailStore::new(config.maildir_path.clone());
-    email_store.root_folder = root_folder;
+    email_store.scanning_folders = true;
     let app = App::new(email_store, scanner);
     let shared_app_state: SharedAppState = Arc::new(Mutex::new(app));
 
@@ -97,6 +88,7 @@ async fn main() -> Result<()> {
     println!("Press 'q' to quit, '?' for help");
 
     let mut app_root = AppRoot::new(shared_app_state.clone());
+    app_root.attach_folder_scanner(folder_scanner_handle);
     let result = run_app(&mut terminal, &mut ui, &mut app_root).await;
 
     disable_raw_mode()?;

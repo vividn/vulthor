@@ -41,7 +41,9 @@ use crate::error::Result;
 use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
-use super::{BodyLoader, Component, Ctx, FoldersComponent, MAX_DISPATCH_DEPTH, Msg};
+use super::{
+    BodyLoader, Component, Ctx, FolderScannerHandle, FoldersComponent, MAX_DISPATCH_DEPTH, Msg,
+};
 
 pub struct AppRoot {
     state: SharedAppState,
@@ -55,6 +57,11 @@ pub struct AppRoot {
     /// and double-counts when the user rapidly toggles between the same
     /// email.
     loading_paths: HashSet<PathBuf>,
+    /// Off-thread folder-structure scanner (Phase 0.3.4, vu-w9i). Set by
+    /// `attach_folder_scanner` at launch and reaped on first successful
+    /// `try_recv`, after which it is dropped. `None` once consumed or
+    /// when never attached (tests, post-scan).
+    folder_scanner: Option<FolderScannerHandle>,
 }
 
 impl AppRoot {
@@ -72,7 +79,16 @@ impl AppRoot {
             queue: VecDeque::new(),
             body_loader: BodyLoader::spawn(),
             loading_paths: HashSet::new(),
+            folder_scanner: None,
         }
+    }
+
+    /// Hand the root the off-thread folder scanner started in `main`.
+    /// Called once at launch. The scan reply is drained by `tick` and
+    /// `render` (the first of either to fire after the worker finishes
+    /// reaps it).
+    pub fn attach_folder_scanner(&mut self, handle: FolderScannerHandle) {
+        self.folder_scanner = Some(handle);
     }
 
     /// Enqueue a message for the next dispatch cycle. Exposed primarily for
@@ -110,6 +126,7 @@ impl AppRoot {
         // with `self`, leaving `&mut self` free for the helper calls.
         let state = self.state.clone();
         let mut app = state.lock().unwrap();
+        self.drain_scanned_folders(&mut app);
         self.drain_loaded_bodies(&mut app);
         self.request_body_if_needed(&app);
         let folders = &self.folders;
@@ -125,6 +142,7 @@ impl AppRoot {
         {
             let state = self.state.clone();
             let mut app = state.lock().unwrap();
+            self.drain_scanned_folders(&mut app);
             self.drain_loaded_bodies(&mut app);
         }
         if !event::poll(Duration::from_millis(100))? {
@@ -184,6 +202,48 @@ impl AppRoot {
         // already in flight.
         self.request_body_if_needed(&app);
         Ok(should_quit || app.should_quit)
+    }
+
+    /// Reap the off-thread folder-structure scan (Phase 0.3.4, vu-w9i).
+    /// On the first successful `try_recv`, swap the scanned tree into
+    /// `EmailStore::root_folder`, clear the "scanning" splash flag, and
+    /// re-seed `FoldersComponent::folder_index` from the auto-INBOX
+    /// rule. Reset `initial_loading_done` so the next render triggers
+    /// the messages-pane load for the newly-selected folder.
+    ///
+    /// On scan error, surface it as a status message and clear the
+    /// splash so the user is not stuck staring at "Scanning folders…"
+    /// forever. The empty `root_folder` left over from launch stays in
+    /// place — every code path that walks it tolerates an empty tree.
+    fn drain_scanned_folders(&mut self, app: &mut App) {
+        let Some(handle) = self.folder_scanner.as_ref() else {
+            return;
+        };
+        match handle.try_recv() {
+            Ok(Ok(root)) => {
+                app.email_store.root_folder = root;
+                app.email_store.scanning_folders = false;
+                let new_index = FoldersComponent::auto_select_inbox(&app.email_store.root_folder);
+                self.folders.folder_index = new_index;
+                app.selection.folder_index = new_index;
+                // The pre-scan first draw set this true without
+                // actually loading anything (the tree was empty). Force
+                // a retry now that there is something to load.
+                app.initial_loading_done = false;
+                self.folder_scanner = None;
+            }
+            Ok(Err(e)) => {
+                app.email_store.scanning_folders = false;
+                app.set_status(format!("Error scanning MailDir: {}", e));
+                self.folder_scanner = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                app.email_store.scanning_folders = false;
+                app.set_status("Folder scanner thread died before replying".into());
+                self.folder_scanner = None;
+            }
+        }
     }
 
     /// Drain any body-load responses that arrived since the last call and
@@ -650,5 +710,79 @@ mod tests {
         }
         assert_eq!(before, root.loading_paths.len());
         assert!(root.loading_paths.contains(&path));
+    }
+
+    /// vu-w9i acceptance: with a folder scanner attached, the AppRoot
+    /// starts in "scanning" mode (empty `root_folder`, `scanning_folders
+    /// = true`). After the worker finishes, the first `drain_scanned_
+    /// folders` call must:
+    ///   - swap in the scanned tree
+    ///   - clear the splash flag
+    ///   - reset `initial_loading_done` so the next render loads INBOX
+    ///   - hoist `folder_index` to the auto-INBOX position
+    #[test]
+    fn drain_scanned_folders_swaps_in_scan_and_resets_loading() {
+        use crate::components::FolderScannerHandle;
+        use std::fs;
+        use std::time::{Duration, Instant};
+
+        // Build a small maildir with INBOX + a few siblings so auto-
+        // INBOX picks a non-zero index — proves we updated the
+        // selection, not just left it at the default.
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        for name in &["Archive", "Drafts", "INBOX", "Sent"] {
+            fs::create_dir_all(root.join(name).join("cur")).unwrap();
+            fs::create_dir_all(root.join(name).join("new")).unwrap();
+            fs::create_dir_all(root.join(name).join("tmp")).unwrap();
+        }
+
+        // Seed an AppRoot in the same "pre-scan" state main.rs
+        // produces: empty root_folder, scanning_folders = true,
+        // initial_loading_done has been flipped on by an earlier
+        // pre-scan render (simulated here by setting it directly).
+        let mut store = EmailStore::new(root.to_path_buf());
+        store.scanning_folders = true;
+        let scanner = MaildirScanner::new(root.to_path_buf());
+        let mut app = App::new(store, scanner);
+        app.initial_loading_done = true;
+        let shared = Arc::new(Mutex::new(app));
+        let mut approot = AppRoot::new(shared.clone());
+        approot.attach_folder_scanner(FolderScannerHandle::spawn(root.to_path_buf()));
+
+        // Spin until the drain method actually reaps a reply. Bounded
+        // wait — the worker only has 4 stat calls to do.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            {
+                let mut app = shared.lock().unwrap();
+                approot.drain_scanned_folders(&mut app);
+                if !app.email_store.scanning_folders {
+                    break;
+                }
+            }
+            if Instant::now() > deadline {
+                panic!("folder scan never landed");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let app = shared.lock().unwrap();
+        assert!(!app.email_store.scanning_folders);
+        assert_eq!(app.email_store.root_folder.subfolders.len(), 4);
+        assert!(
+            !app.initial_loading_done,
+            "drain must reset initial_loading_done so INBOX messages load",
+        );
+
+        // Auto-INBOX: sorted subfolders are Archive, Drafts, INBOX,
+        // Sent → INBOX at index 2.
+        let sorted = app.email_store.root_folder.get_sorted_subfolders();
+        let inbox_idx = sorted
+            .iter()
+            .position(|f| f.get_display_name().eq_ignore_ascii_case("INBOX"))
+            .expect("INBOX is in the fixture");
+        assert_eq!(approot.folders.folder_index, inbox_idx);
+        assert_eq!(app.selection.folder_index, inbox_idx);
     }
 }

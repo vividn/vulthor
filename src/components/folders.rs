@@ -25,7 +25,8 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::email::Folder;
@@ -108,8 +109,6 @@ impl Component for FoldersComponent {
     }
 
     fn render(&self, f: &mut Frame, area: Rect, focused: bool, ctx: &Ctx) {
-        let folder_items = Self::build_folder_list(&ctx.store.root_folder, 0);
-
         let style = if focused {
             Style::default().fg(VulthorTheme::ACCENT)
         } else {
@@ -121,6 +120,24 @@ impl Component for FoldersComponent {
             .style(style)
             .title("Folders");
 
+        // Phase 0.3.4 (vu-w9i): the initial folder-structure scan now
+        // runs off-thread. Until it lands, the store carries no folders;
+        // render a splash instead of an empty list so the user sees that
+        // launch is making progress rather than that their maildir is
+        // empty.
+        if ctx.store.scanning_folders {
+            let splash = Paragraph::new(vec![Line::from(Span::styled(
+                "Scanning folders…",
+                Style::default().add_modifier(Modifier::ITALIC),
+            ))])
+            .block(block)
+            .style(style)
+            .wrap(Wrap { trim: true });
+            f.render_widget(splash, area);
+            return;
+        }
+
+        let folder_items = Self::build_folder_list(&ctx.store.root_folder, 0);
         let list = List::new(folder_items)
             .block(block)
             .style(style)

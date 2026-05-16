@@ -13,12 +13,14 @@
 
 mod body_loader;
 mod ctx;
+mod folder_scanner;
 mod folders;
 mod msg;
 mod root;
 
 pub use body_loader::{BodyLoader, LoadedBody, ParsedBody};
 pub use ctx::Ctx;
+pub use folder_scanner::FolderScannerHandle;
 pub use folders::FoldersComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
 pub use root::AppRoot;

@@ -251,6 +251,11 @@ pub struct EmailStore {
     pub root_folder: Folder,
     pub current_folder: Vec<usize>, // Path to current folder (indices in subfolder arrays)
     pub selected_email: Option<usize>, // Index of selected email in current folder
+    /// True while the initial off-thread folder-structure scan is in
+    /// flight (Phase 0.3.4, vu-w9i). The folder pane uses this to
+    /// render a "Scanning folders…" splash instead of an empty list.
+    /// Flips to false when `AppRoot` reaps the scanner reply.
+    pub scanning_folders: bool,
 }
 
 impl EmailStore {
@@ -259,6 +264,7 @@ impl EmailStore {
             root_folder: Folder::new("Mail".to_string(), maildir_path),
             current_folder: Vec::new(),
             selected_email: None,
+            scanning_folders: false,
         }
     }
 
