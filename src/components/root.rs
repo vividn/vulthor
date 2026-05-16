@@ -26,8 +26,9 @@
 // Help-state keys also skip global interception so the legacy "any
 // key exits help" behavior is preserved.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -35,16 +36,25 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::app::{ActivePane, App, AppState, PaneSwitchDirection, SharedAppState};
 use crate::config::Config;
+use crate::email::EmailLoadState;
 use crate::error::Result;
 use crate::theme::VulthorTheme;
 use crate::ui::UI;
 
-use super::{Component, Ctx, FoldersComponent, MAX_DISPATCH_DEPTH, Msg};
+use super::{BodyLoader, Component, Ctx, FoldersComponent, MAX_DISPATCH_DEPTH, Msg};
 
 pub struct AppRoot {
     state: SharedAppState,
     folders: FoldersComponent,
     queue: VecDeque<Msg>,
+    /// Off-thread email body parser (Phase 0.3.2, vu-6td). The render path
+    /// reads only in-memory state; selection changes enqueue a request here,
+    /// and `drain_loaded_bodies` lands the parsed body into the store.
+    body_loader: BodyLoader,
+    /// Paths the worker is currently parsing. Prevents duplicate requests
+    /// and double-counts when the user rapidly toggles between the same
+    /// email.
+    loading_paths: HashSet<PathBuf>,
 }
 
 impl AppRoot {
@@ -60,6 +70,8 @@ impl AppRoot {
             state,
             folders: FoldersComponent::with_index(initial_index),
             queue: VecDeque::new(),
+            body_loader: BodyLoader::spawn(),
+            loading_paths: HashSet::new(),
         }
     }
 
@@ -86,14 +98,20 @@ impl AppRoot {
         &self.folders
     }
 
-    /// Render one frame. Locks the app, delegates to `ui::UI::draw`, and
-    /// returns whether the loop should exit (quit state observed).
+    /// Render one frame. Locks the app, drains any body-load responses that
+    /// have arrived (so the next draw shows them), delegates to `ui::UI::draw`,
+    /// and returns whether the loop should exit (quit state observed).
     pub fn render(
-        &self,
+        &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         ui: &mut UI,
     ) -> Result<bool> {
-        let mut app = self.state.lock().unwrap();
+        // Clone the Arc so the guard's borrow lifetime does not entangle
+        // with `self`, leaving `&mut self` free for the helper calls.
+        let state = self.state.clone();
+        let mut app = state.lock().unwrap();
+        self.drain_loaded_bodies(&mut app);
+        self.request_body_if_needed(&app);
         let folders = &self.folders;
         terminal.draw(|f| ui.draw(f, &mut app, folders))?;
         Ok(app.should_quit || matches!(app.state, AppState::Quit))
@@ -101,7 +119,14 @@ impl AppRoot {
 
     /// Poll for an input event (with the same 100ms tick the legacy loop
     /// used) and process it. Returns `true` when the runtime should exit.
+    /// Body-load responses are drained before polling so the next render
+    /// has up-to-date state even when no input arrives.
     pub fn tick(&mut self) -> Result<bool> {
+        {
+            let state = self.state.clone();
+            let mut app = state.lock().unwrap();
+            self.drain_loaded_bodies(&mut app);
+        }
         if !event::poll(Duration::from_millis(100))? {
             return Ok(false);
         }
@@ -154,7 +179,44 @@ impl AppRoot {
         // (only Backspace does today). Pull the change back so the
         // component stays canonical.
         self.sync_app_to_folders(&app);
+        // Any input that changed the selection is a chance to fire off a
+        // body-load request. Cheap when the email is already loaded or
+        // already in flight.
+        self.request_body_if_needed(&app);
         Ok(should_quit || app.should_quit)
+    }
+
+    /// Drain any body-load responses that arrived since the last call and
+    /// write them back into the email store. Always reaps the in-flight
+    /// slot, even when parsing failed, so a transient failure doesn't
+    /// leave the email stuck in the loading state.
+    fn drain_loaded_bodies(&mut self, app: &mut App) {
+        while let Ok(loaded) = self.body_loader.try_recv() {
+            self.loading_paths.remove(&loaded.path);
+            if let Some(parsed) = loaded.parsed {
+                app.email_store.apply_loaded_body(
+                    &loaded.path,
+                    parsed.body_text,
+                    parsed.body_html,
+                    parsed.attachments,
+                );
+            }
+        }
+    }
+
+    /// If the currently selected email is `HeadersOnly` and not already in
+    /// flight, ask the worker to parse it. No-op when nothing is selected.
+    fn request_body_if_needed(&mut self, app: &App) {
+        let Some(email) = app.email_store.get_selected_email() else {
+            return;
+        };
+        if !matches!(email.load_state, EmailLoadState::HeadersOnly) {
+            return;
+        }
+        let path = email.file_path.clone();
+        if self.loading_paths.insert(path.clone()) {
+            self.body_loader.request(path);
+        }
     }
 
     /// Translate a key event into a global `Msg`, or `None` if the key
@@ -492,5 +554,101 @@ mod tests {
     fn approot_new_auto_selects_inbox() {
         let root = make_root_with_folders(&["Drafts", "Sent", "INBOX", "Archive"]);
         assert_eq!(root.folders.folder_index, 0);
+    }
+
+    /// Phase 0.3.2 (vu-6td) acceptance: pressing a key that changes the
+    /// selected email must not block the input handler on full-body parse.
+    /// We construct an email whose path does not exist on disk — if any
+    /// code on the render/input path called `parse_from_file`, the email
+    /// would still be `HeadersOnly` afterwards regardless, so we also
+    /// assert the request landed in the body-loader's in-flight set: that
+    /// proves the work was *handed off* rather than done inline.
+    #[test]
+    fn selection_change_dispatches_body_load_without_blocking() {
+        // One folder with one email, already inside the folder, selected.
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        let phantom_path = PathBuf::from("/definitely/does/not/exist/for/vu-6td.eml");
+        inbox.add_email(Email::new(phantom_path.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut app = App::new(store, scanner);
+        // Force into Messages pane so j/k navigation operates on emails,
+        // not folders. AppRoot::new's auto-INBOX picked folder index 0;
+        // we're already inside that folder.
+        app.active_pane = ActivePane::Messages;
+        app.email_store.current_folder = vec![0];
+        app.email_store.select_email(0);
+
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        // The first event of any kind should trigger request_body_if_needed
+        // for the already-selected email. A no-op key (e.g. 'x') is enough
+        // — process_event's tail unconditionally calls the helper.
+        let x = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        root.process_event(x).unwrap();
+
+        assert!(
+            root.loading_paths.contains(&phantom_path),
+            "selection must enqueue an off-thread body-load request, got {:?}",
+            root.loading_paths,
+        );
+
+        // The email itself must NOT have been touched on the render/input
+        // thread: load_state remains HeadersOnly and body_text is empty.
+        let app = root.state.lock().unwrap();
+        let email = app
+            .email_store
+            .get_selected_email()
+            .expect("email is selected");
+        assert!(
+            matches!(email.load_state, crate::email::EmailLoadState::HeadersOnly),
+            "input thread must not call parse_from_file",
+        );
+        assert!(
+            email.body_text.is_empty(),
+            "body_text must stay empty until the worker lands a reply",
+        );
+    }
+
+    /// Re-requesting a load while one is already in flight is a no-op:
+    /// the in-flight set dedups, so we don't flood the worker queue with
+    /// duplicate parses on every keystroke.
+    #[test]
+    fn duplicate_body_load_requests_are_deduped() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        let path = PathBuf::from("/nonexistent/dedup.eml");
+        inbox.add_email(Email::new(path.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let scanner = MaildirScanner::new(PathBuf::from("/tmp"));
+        let app = App::new(store, scanner);
+        let mut root = AppRoot::new(Arc::new(Mutex::new(app)));
+
+        // Call request_body_if_needed twice; the second call must not
+        // re-insert (HashSet::insert returns false the second time, which
+        // we use as the request-or-not gate). Clone the Arc to escape the
+        // self-borrow trap (`self.state.lock()` extends the guard's life-
+        // time over a `&mut self` call).
+        let shared = root.state.clone();
+        {
+            let app = shared.lock().unwrap();
+            root.request_body_if_needed(&app);
+        }
+        let before = root.loading_paths.len();
+        {
+            let app = shared.lock().unwrap();
+            root.request_body_if_needed(&app);
+        }
+        assert_eq!(before, root.loading_paths.len());
+        assert!(root.loading_paths.contains(&path));
     }
 }

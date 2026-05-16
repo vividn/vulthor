@@ -11,11 +11,13 @@
 // `Component`-related items remain unused until the first pane migrates.
 #![allow(dead_code, unused_imports)]
 
+mod body_loader;
 mod ctx;
 mod folders;
 mod msg;
 mod root;
 
+pub use body_loader::{BodyLoader, LoadedBody, ParsedBody};
 pub use ctx::Ctx;
 pub use folders::FoldersComponent;
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};

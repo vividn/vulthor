@@ -1,7 +1,7 @@
 use crate::app::{ActivePane, App, AppState, View};
 use crate::components::{Component, Ctx, FoldersComponent};
 use crate::config::Config;
-use crate::email::Email;
+use crate::email::{Email, EmailLoadState};
 use crate::theme::VulthorTheme;
 use chrono::{DateTime, Local};
 use ratatui::{
@@ -261,11 +261,17 @@ impl UI {
                 .style(border_style)
                 .title(body_title);
 
-            // Get markdown content lazily only when content pane is being drawn
-            let body_text = app
-                .email_store
-                .get_selected_email_markdown()
-                .unwrap_or_else(|| "Error loading email content".to_string());
+            // Non-blocking read: the body loader (`BodyLoader` in `components::body_loader`)
+            // parses bodies off-thread. Until it lands a result, `body_text` is empty and
+            // `load_state` is `HeadersOnly` — show a placeholder so the user knows
+            // selection succeeded.
+            let body_text = match email.load_state {
+                EmailLoadState::HeadersOnly => "Loading body…".to_string(),
+                EmailLoadState::FullyLoaded => app
+                    .email_store
+                    .get_selected_email_markdown()
+                    .unwrap_or_default(),
+            };
 
             let body_paragraph = Paragraph::new(body_text.as_str())
                 .block(body_block)
@@ -369,13 +375,19 @@ impl UI {
 
                 f.render_stateful_widget(list, area, &mut self.attachment_list_state);
             } else {
-                // No attachments
+                // `email.attachments` is populated as a side effect of full-body parse.
+                // Distinguish "still loading" from "no attachments" so the user doesn't
+                // see a false negative for a multipart message in flight.
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .style(border_style)
                     .title("Attachments");
 
-                let paragraph = Paragraph::new("No attachments in this email")
+                let text = match email.load_state {
+                    EmailLoadState::HeadersOnly => "Loading attachments…",
+                    EmailLoadState::FullyLoaded => "No attachments in this email",
+                };
+                let paragraph = Paragraph::new(text)
                     .block(block)
                     .style(Style::default().fg(VulthorTheme::GRAY_DARK));
 

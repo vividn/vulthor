@@ -382,24 +382,18 @@ impl EmailStore {
         }
     }
 
-    /// Get currently selected email (ensures it's fully loaded)
-    pub fn get_selected_email(&mut self) -> Option<&Email> {
-        if let Some(index) = self.selected_email {
-            let current = self.get_current_folder_mut();
-            if let Some(email) = current.emails.get_mut(index) {
-                // Ensure email is fully loaded when accessed for reading
-                email.ensure_fully_loaded().ok()?;
-                return current.emails.get(index);
-            }
-        }
-        None
-    }
-
-    /// Get currently selected email (read-only, may be headers-only)
-    pub fn get_selected_email_headers(&self) -> Option<&Email> {
+    /// Get currently selected email (non-blocking — returns whatever state the email is in).
+    /// Body-loading happens off the render thread via the body-loader worker; callers that
+    /// need a guaranteed-loaded email use `get_selected_email_mut().ensure_fully_loaded()`.
+    pub fn get_selected_email(&self) -> Option<&Email> {
         let current = self.get_current_folder();
         self.selected_email
             .and_then(|index| current.emails.get(index))
+    }
+
+    /// Alias retained for clarity at call sites that explicitly want "headers only".
+    pub fn get_selected_email_headers(&self) -> Option<&Email> {
+        self.get_selected_email()
     }
 
     /// Get currently selected email mutably
@@ -409,15 +403,51 @@ impl EmailStore {
         selected.and_then(move |index| current.emails.get_mut(index))
     }
 
-    /// Get markdown content for the currently selected email (lazy conversion)
-    pub fn get_selected_email_markdown(&mut self) -> Option<String> {
-        if let Some(email) = self.get_selected_email_mut() {
-            // Ensure email is fully loaded
-            email.ensure_fully_loaded().ok()?;
-            Some(email.body_text.clone())
-        } else {
-            None
+    /// Get markdown content for the currently selected email (non-blocking).
+    /// Returns the in-memory `body_text`; empty while the email is still
+    /// `HeadersOnly`. The UI checks `load_state` to show a "Loading body…"
+    /// placeholder in that window.
+    pub fn get_selected_email_markdown(&self) -> Option<String> {
+        self.get_selected_email().map(|e| e.body_text.clone())
+    }
+
+    /// Apply a body load result (from the off-thread body loader) to the
+    /// matching email anywhere in the folder tree. Returns true if an email
+    /// matched and was updated. The match key is `file_path` so late
+    /// responses still find the email after the user navigates away.
+    pub fn apply_loaded_body(
+        &mut self,
+        path: &std::path::Path,
+        body_text: String,
+        body_html: Option<String>,
+        attachments: Vec<Attachment>,
+    ) -> bool {
+        let mut payload = Some((body_text, body_html, attachments));
+        Self::apply_loaded_body_to_folder(&mut self.root_folder, path, &mut payload)
+    }
+
+    fn apply_loaded_body_to_folder(
+        folder: &mut Folder,
+        path: &std::path::Path,
+        payload: &mut Option<(String, Option<String>, Vec<Attachment>)>,
+    ) -> bool {
+        for email in &mut folder.emails {
+            if email.file_path == path {
+                if let Some((body_text, body_html, attachments)) = payload.take() {
+                    email.body_text = body_text;
+                    email.body_html = body_html;
+                    email.attachments = attachments;
+                    email.load_state = EmailLoadState::FullyLoaded;
+                }
+                return true;
+            }
         }
+        for sub in &mut folder.subfolders {
+            if Self::apply_loaded_body_to_folder(sub, path, payload) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get folder path as breadcrumb string
@@ -928,5 +958,93 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
             !store.get_current_folder().is_loaded,
             "partial load must not mark folder fully loaded",
         );
+    }
+
+    /// Phase 0.3.2 (vu-6td) acceptance: the render-path getters never touch
+    /// the disk. We point an `Email` at a path that does not exist; if the
+    /// getters still called `parse_from_file`, the email would either error
+    /// or, in the old code, the call would block on a filesystem stat. Here
+    /// we verify the `load_state` stays `HeadersOnly` and the returned body
+    /// is empty (since nothing has parsed it yet).
+    #[test]
+    fn render_path_getters_do_not_load_body() {
+        let mut store = EmailStore::new(PathBuf::from("/nonexistent_root"));
+        let mut inbox = Folder::new(
+            "INBOX".to_string(),
+            PathBuf::from("/nonexistent_root/INBOX"),
+        );
+        inbox.add_email(Email::new(PathBuf::from(
+            "/definitely/does/not/exist/email.eml",
+        )));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        // Render-path: get_selected_email_markdown. Must return Some("") and
+        // must NOT transition the email to FullyLoaded.
+        let markdown = store.get_selected_email_markdown();
+        assert_eq!(markdown.as_deref(), Some(""));
+        let email = store.get_selected_email().expect("email is selected");
+        assert!(
+            matches!(email.load_state, EmailLoadState::HeadersOnly),
+            "render-path getter must not transition load_state",
+        );
+
+        // Render-path: get_selected_email (attachments pane). Same contract.
+        let email = store.get_selected_email().expect("email is selected");
+        assert!(email.attachments.is_empty());
+        assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
+    }
+
+    /// Phase 0.3.2 (vu-6td): `apply_loaded_body` writes a parsed body back
+    /// into the store and transitions the email to FullyLoaded. The match is
+    /// by file path so late responses still land after the user navigates.
+    #[test]
+    fn apply_loaded_body_updates_email_state() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let path = PathBuf::from("/tmp/some/email.eml");
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(path.clone()));
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+
+        store.enter_folder_by_path(&[0]);
+        store.select_email(0);
+
+        let attachments = vec![Attachment {
+            filename: "doc.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 1024,
+        }];
+        let applied = store.apply_loaded_body(
+            &path,
+            "body text".to_string(),
+            Some("<p>body</p>".to_string()),
+            attachments,
+        );
+        assert!(applied, "apply_loaded_body must find the email by path");
+
+        let email = store.get_selected_email().unwrap();
+        assert_eq!(email.body_text, "body text");
+        assert_eq!(email.body_html.as_deref(), Some("<p>body</p>"));
+        assert_eq!(email.attachments.len(), 1);
+        assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
+    }
+
+    /// Phase 0.3.2 (vu-6td): `apply_loaded_body` returns `false` when no
+    /// email matches the path — covers the "user navigated and the email is
+    /// gone" race so the worker's reply is dropped cleanly.
+    #[test]
+    fn apply_loaded_body_returns_false_for_unknown_path() {
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        inbox.add_email(Email::new(PathBuf::from("/tmp/a")));
+        store.root_folder.add_subfolder(inbox);
+
+        let applied =
+            store.apply_loaded_body(&PathBuf::from("/tmp/b"), "x".to_string(), None, Vec::new());
+        assert!(!applied);
     }
 }
