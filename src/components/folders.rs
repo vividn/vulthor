@@ -103,6 +103,14 @@ impl Component for FoldersComponent {
                     self.folder_index -= 1;
                 }
             }
+            Msg::FolderExitParent => {
+                // Back-navigation collapses the selection to the top of
+                // the (now parent) folder pane — matches the legacy
+                // `handle_back_navigation` behavior and resolves the
+                // vu-sd6 Backspace observation by writing through the
+                // component instead of `app.selection.folder_index`.
+                self.folder_index = 0;
+            }
             _ => {}
         }
         Vec::new()
@@ -180,6 +188,7 @@ impl Component for FoldersComponent {
                     _ => Some(Msg::FolderEnter),
                 }
             }
+            KeyCode::Backspace => Some(Msg::FolderExitParent),
             _ => None,
         }
     }

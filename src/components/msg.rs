@@ -59,11 +59,34 @@ pub enum Msg {
     FolderMove(Dir),
     FolderEnter,
     FolderLoaded(FolderPath),
+    /// Back-navigation out of the current folder (Backspace from the
+    /// Folders or Messages pane). Replaces the legacy
+    /// `handle_back_navigation` path that wrote `selection.folder_index`
+    /// directly (see notes/observations/2026-05-16-vu-sd6-backspace-...).
+    /// `AppRoot::apply_root` pops the store path and resets scroll;
+    /// `FoldersComponent`/`MessagesComponent` reset their own indices in
+    /// `handle_msg`.
+    FolderExitParent,
 
     // Messages
     MessageMove(Dir),
     MessageOpen(MessageId),
     MessageMarkRead(MessageId),
+    /// Fired by `AppRoot` after a focus change that just blurred the
+    /// Folders pane (focus moved Folders → Messages). `MessagesComponent`
+    /// uses it to restore the remembered email selection — or pick the
+    /// first email when there is none.
+    FoldersBlur,
+    /// Fired by `AppRoot` after a focus change that just blurred the
+    /// Messages pane (focus moved Messages → Folders).
+    /// `MessagesComponent` snapshots the current `email_index` into
+    /// `remembered_email_index` so the next `FoldersBlur` can restore it.
+    MessagesBlur,
+    /// The user just scrolled to a message near the tail and the store
+    /// may need another chunk of headers. `AppRoot` translates this into
+    /// `load_more_messages_if_needed`. Carries the cursor index so the
+    /// store knows where the user is reading.
+    StoreLoadMore(usize),
 
     // Content
     ContentScroll(Dir, usize),

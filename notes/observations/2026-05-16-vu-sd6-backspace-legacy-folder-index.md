@@ -58,3 +58,17 @@ When vu-3yj lands, replace the legacy Backspace branch with a
 
 Until then, the mirror is harmless: every Backspace clamps both sides to 0
 in the same tick.
+
+## Resolution (vu-3ko)
+
+Resolved by Phase 0.2.3a (vu-3ko). `Msg::FolderExitParent` now carries
+back-navigation. `FoldersComponent::on_key` and
+`MessagesComponent::on_key` both map `Backspace` to that variant; the
+respective `handle_msg` impls reset `folder_index = 0` /
+`email_index = 0`; `AppRoot::apply_root` calls `exit_folder()` and
+resets `scroll_offset` + state. The legacy `handle_back_navigation`
+write to `app.selection.folder_index` survives only as a fall-through
+for direct-App tests — the runtime path no longer hits it. The
+`sync_app_to_folders` helper was generalized to
+`sync_app_to_components`, which mirrors any leftover legacy writes back
+into both components.
