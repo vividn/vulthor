@@ -126,6 +126,7 @@ impl Email {
     }
 
     /// Ensure email is fully loaded
+    #[allow(dead_code)]
     pub fn ensure_fully_loaded(&mut self) -> Result<()> {
         match self.load_state {
             EmailLoadState::HeadersOnly => self.parse_from_file(),
@@ -340,6 +341,7 @@ impl EmailStore {
     }
 
     /// Load emails for a folder at a specific path with visible row limit
+    #[allow(dead_code)]
     pub fn ensure_folder_at_path_loaded(
         &mut self,
         path: &[usize],
@@ -377,6 +379,7 @@ impl EmailStore {
     }
 
     /// Load limited number of emails for current folder (for fast startup)
+    #[allow(dead_code)]
     pub fn ensure_current_folder_loaded_with_limit(
         &mut self,
         scanner: &crate::maildir::MaildirScanner,
@@ -465,6 +468,7 @@ impl EmailStore {
     }
 
     /// Get currently selected email mutably
+    #[allow(dead_code)]
     pub fn get_selected_email_mut(&mut self) -> Option<&mut Email> {
         let selected = self.selected_email;
         let current = self.get_current_folder_mut();

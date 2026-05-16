@@ -26,6 +26,7 @@ pub enum VulthorError {
     MailParser,
 
     #[error("Invalid folder path")]
+    #[allow(dead_code)]
     InvalidFolderPath,
 
     #[error("MailDir path does not exist: {0}")]

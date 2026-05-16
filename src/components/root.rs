@@ -370,10 +370,10 @@ impl AppRoot {
                 if matches!(self.layout.active_pane, ActivePane::Attachments) =>
             {
                 let store = self.email_store.lock().unwrap();
-                if let Some(email) = store.get_selected_email() {
-                    if self.layout.selection.attachment_index + 1 < email.attachments.len() {
-                        self.layout.selection.attachment_index += 1;
-                    }
+                if let Some(email) = store.get_selected_email()
+                    && self.layout.selection.attachment_index + 1 < email.attachments.len()
+                {
+                    self.layout.selection.attachment_index += 1;
                 }
             }
             KeyCode::Char('k') | KeyCode::Up

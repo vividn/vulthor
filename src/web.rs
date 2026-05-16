@@ -764,24 +764,24 @@ fn markdown_to_html(markdown: &str) -> String {
             continue;
         }
 
-        if trimmed.starts_with("# ") {
+        if let Some(rest) = trimmed.strip_prefix("# ") {
             if in_paragraph {
                 html.push_str("</p>\n");
                 in_paragraph = false;
             }
-            html.push_str(&format!("<h1>{}</h1>\n", escape_html(&trimmed[2..])));
-        } else if trimmed.starts_with("## ") {
+            html.push_str(&format!("<h1>{}</h1>\n", escape_html(rest)));
+        } else if let Some(rest) = trimmed.strip_prefix("## ") {
             if in_paragraph {
                 html.push_str("</p>\n");
                 in_paragraph = false;
             }
-            html.push_str(&format!("<h2>{}</h2>\n", escape_html(&trimmed[3..])));
-        } else if trimmed.starts_with("### ") {
+            html.push_str(&format!("<h2>{}</h2>\n", escape_html(rest)));
+        } else if let Some(rest) = trimmed.strip_prefix("### ") {
             if in_paragraph {
                 html.push_str("</p>\n");
                 in_paragraph = false;
             }
-            html.push_str(&format!("<h3>{}</h3>\n", escape_html(&trimmed[4..])));
+            html.push_str(&format!("<h3>{}</h3>\n", escape_html(rest)));
         } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             if in_paragraph {
                 html.push_str("</p>\n");

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 pub struct TestMailDir {
+    #[allow(dead_code)]
     pub temp_dir: TempDir,
     pub root_path: PathBuf,
 }
@@ -720,6 +721,7 @@ CLICK HERE IMMEDIATELY to claim your prize:
         count
     }
 
+    #[allow(dead_code)]
     pub fn create_empty_folder(&self, folder_name: &str) {
         self.create_maildir_folder(folder_name);
     }
@@ -804,6 +806,7 @@ pub struct TestMaildirStats {
 }
 
 impl TestMaildirStats {
+    #[allow(dead_code)]
     pub fn print_summary(&self) {
         println!("Test MailDir Statistics:");
         println!("  Folders: {}", self.total_folders);

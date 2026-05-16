@@ -3,6 +3,7 @@ use ratatui::style::Color;
 /// Vulthor color theme matching the bird logo
 pub struct VulthorTheme;
 
+#[allow(dead_code)]
 impl VulthorTheme {
     /// Dark teal/navy from bird body
     pub const DARK: Color = Color::Rgb(26, 47, 58);

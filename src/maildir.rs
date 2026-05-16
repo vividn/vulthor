@@ -37,25 +37,23 @@ impl MaildirScanner {
     fn scan_folder_structure_only(&self, folder: &mut Folder, path: &Path) -> Result<()> {
         // Look for subfolders only
         if let Ok(entries) = fs::read_dir(path) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        let dir_name = entry_path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("Unknown");
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    let dir_name = entry_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Unknown");
 
-                        // Skip the maildir special directories and hidden directories
-                        if matches!(dir_name, "cur" | "new" | "tmp") || dir_name.starts_with('.') {
-                            continue;
-                        }
-
-                        // Create subfolder and recursively scan its structure only
-                        let mut subfolder = Folder::new(dir_name.to_string(), entry_path.clone());
-                        self.scan_folder_structure_only(&mut subfolder, &entry_path)?;
-                        folder.add_subfolder(subfolder);
+                    // Skip the maildir special directories and hidden directories
+                    if matches!(dir_name, "cur" | "new" | "tmp") || dir_name.starts_with('.') {
+                        continue;
                     }
+
+                    // Create subfolder and recursively scan its structure only
+                    let mut subfolder = Folder::new(dir_name.to_string(), entry_path.clone());
+                    self.scan_folder_structure_only(&mut subfolder, &entry_path)?;
+                    folder.add_subfolder(subfolder);
                 }
             }
         }
@@ -222,10 +220,10 @@ impl MaildirScanner {
         let mut count = 0;
         for entry in WalkDir::new(dir_path).min_depth(1).max_depth(1) {
             // Check limit early to avoid unnecessary processing
-            if let Some(limit) = limit {
-                if count >= limit {
-                    break;
-                }
+            if let Some(limit) = limit
+                && count >= limit
+            {
+                break;
             }
 
             let entry = entry?;
@@ -234,10 +232,8 @@ impl MaildirScanner {
             if path.is_file() {
                 // Check if this looks like an email file
                 if self.is_email_file(path) {
-                    let is_unread = dir_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map_or(false, |name| name == "new");
+                    let is_unread =
+                        dir_path.file_name().and_then(|name| name.to_str()) == Some("new");
 
                     let mut email = Email::new(path.to_path_buf());
                     email.is_unread = is_unread;

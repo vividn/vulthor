@@ -85,10 +85,10 @@ impl Config {
             return None;
         }
         let ordered = self.ordered_accounts();
-        if let Some(key) = &self.default_account {
-            if let Some(idx) = ordered.iter().position(|(k, _)| k == key) {
-                return Some(idx);
-            }
+        if let Some(key) = &self.default_account
+            && let Some(idx) = ordered.iter().position(|(k, _)| k == key)
+        {
+            return Some(idx);
         }
         Some(0)
     }
@@ -159,7 +159,7 @@ mod tests {
     fn test_cli_args_default_values() {
         use clap::Parser;
 
-        let args = CliArgs::parse_from(&["vulthor"]);
+        let args = CliArgs::parse_from(["vulthor"]);
         assert_eq!(args.port, 8080);
         assert!(args.config_path.is_none());
     }
@@ -168,10 +168,10 @@ mod tests {
     fn test_cli_args_port_override() {
         use clap::Parser;
 
-        let args = CliArgs::parse_from(&["vulthor", "-p", "3000"]);
+        let args = CliArgs::parse_from(["vulthor", "-p", "3000"]);
         assert_eq!(args.port, 3000);
 
-        let args = CliArgs::parse_from(&["vulthor", "--port", "9090"]);
+        let args = CliArgs::parse_from(["vulthor", "--port", "9090"]);
         assert_eq!(args.port, 9090);
     }
 
@@ -179,10 +179,10 @@ mod tests {
     fn test_cli_args_config_path() {
         use clap::Parser;
 
-        let args = CliArgs::parse_from(&["vulthor", "-c", "/custom/config.toml"]);
+        let args = CliArgs::parse_from(["vulthor", "-c", "/custom/config.toml"]);
         assert_eq!(args.config_path, Some(PathBuf::from("/custom/config.toml")));
 
-        let args = CliArgs::parse_from(&["vulthor", "--config", "/another/path.toml"]);
+        let args = CliArgs::parse_from(["vulthor", "--config", "/another/path.toml"]);
         assert_eq!(args.config_path, Some(PathBuf::from("/another/path.toml")));
     }
 
@@ -190,10 +190,10 @@ mod tests {
     fn test_cli_args_maildir_path() {
         use clap::Parser;
 
-        let args = CliArgs::parse_from(&["vulthor", "-m", "/custom/maildir"]);
+        let args = CliArgs::parse_from(["vulthor", "-m", "/custom/maildir"]);
         assert_eq!(args.maildir_path, Some(PathBuf::from("/custom/maildir")));
 
-        let args = CliArgs::parse_from(&["vulthor", "--maildir", "/another/maildir"]);
+        let args = CliArgs::parse_from(["vulthor", "--maildir", "/another/maildir"]);
         assert_eq!(args.maildir_path, Some(PathBuf::from("/another/maildir")));
     }
 
@@ -201,7 +201,7 @@ mod tests {
     fn test_cli_args_combined() {
         use clap::Parser;
 
-        let args = CliArgs::parse_from(&[
+        let args = CliArgs::parse_from([
             "vulthor",
             "-p",
             "9000",
