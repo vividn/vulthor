@@ -86,7 +86,7 @@ pub struct AppRoot {
 impl AppRoot {
     /// Construct an AppRoot whose Accounts pane mirrors the config's
     /// `[accounts.*]` tables. Use this for the runtime. Tests that
-    /// don't exercise multi-account behavior can call [`new`] which
+    /// don't exercise multi-account behavior can call [`Self::new`] which
     /// substitutes `Config::default()`.
     pub fn with_config(
         email_store: Arc<Mutex<EmailStore>>,
@@ -143,7 +143,7 @@ impl AppRoot {
     }
 
     /// Default-config shim. Tests that don't exercise the Accounts
-    /// pane use this; the runtime always uses [`with_config`].
+    /// pane use this; the runtime always uses [`Self::with_config`].
     pub fn new(email_store: Arc<Mutex<EmailStore>>, scanner: MaildirScanner) -> Self {
         Self::with_config(email_store, scanner, Config::default())
     }

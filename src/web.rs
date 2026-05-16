@@ -33,8 +33,16 @@ use tokio::time::sleep;
 /// the client refetches once the body lands.
 #[derive(Clone)]
 pub struct WebState {
+    /// Shared store handle. Locked briefly to clone the focused email
+    /// snapshot; never held across an `fs::read` or a body parse.
     pub email_store: Arc<Mutex<EmailStore>>,
+    /// Encoded focused pane (see [`ActivePane::to_u8`]). Lets the
+    /// server decide between rendering the selected email and showing
+    /// the welcome screen without taking the store lock.
     pub focused_pane: Arc<AtomicU8>,
+    /// Outbound request channel to the shared `BodyLoader` worker.
+    /// Handlers forward `HeadersOnly` emails here so the body parse
+    /// happens off the axum executor.
     pub body_request_tx: Sender<PathBuf>,
 }
 
@@ -71,12 +79,21 @@ struct AttachmentData {
     size: String,
 }
 
+/// Axum-based HTML viewer for the currently focused email. Bound to
+/// `127.0.0.1:<port>`, it serves rendered HTML and an SSE event stream
+/// that pushes refresh notifications as the TUI's selection changes.
+/// The server is render-only (VISION.md): it never sends mail and
+/// never mutates the store.
 pub struct WebServer {
     port: u16,
     state: WebState,
 }
 
 impl WebServer {
+    /// Construct (but do not start) the server. `email_store` and
+    /// `focused_pane` are shared with the TUI; `body_request_tx` is
+    /// the request side of the same `BodyLoader` worker the TUI feeds,
+    /// so the web handlers never do `fs::read` themselves.
     pub fn new(
         port: u16,
         email_store: Arc<Mutex<EmailStore>>,
@@ -93,6 +110,11 @@ impl WebServer {
         }
     }
 
+    /// Bind to `127.0.0.1:<port>` and serve until the listener errors.
+    /// Returns the underlying I/O error wrapped in [`VulthorError`] on
+    /// bind / serve failure. Designed to be spawned onto a tokio
+    /// runtime; the call blocks the current task for the lifetime of
+    /// the server.
     pub async fn start(&self) -> Result<()> {
         let app = Router::new()
             .route("/", get(serve_email))

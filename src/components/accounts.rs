@@ -35,6 +35,8 @@ use crate::theme::VulthorTheme;
 
 use super::{AccountId, Component, Ctx, Dir, Msg};
 
+/// Title rendered on the Accounts pane's bordered block. Tests grep
+/// for this exact string; runtime renders it too.
 pub const ACCOUNTS_TITLE: &str = "Accounts";
 
 /// Body rendered when no `[accounts.*]` sections are configured —
@@ -53,6 +55,9 @@ struct AccountRow {
     unread: usize,
 }
 
+/// Accounts pane state. Owns its own cursor and a snapshot of the
+/// configured accounts taken at construction. See module docs for the
+/// "no live `Ctx::config` reads in render" invariant.
 pub struct AccountsComponent {
     accounts: Vec<AccountRow>,
     selected_index: usize,
@@ -102,10 +107,14 @@ impl AccountsComponent {
         }
     }
 
+    /// Number of accounts seeded from config. AppRoot uses this to
+    /// gate the multi-account-only `View::AccountsFolders` transition.
     pub fn account_count(&self) -> usize {
         self.accounts.len()
     }
 
+    /// Current cursor position. Zero-based index into the seeded
+    /// accounts list.
     pub fn selected_index(&self) -> usize {
         self.selected_index
     }

@@ -37,8 +37,17 @@ use super::{Component, Ctx, Dir, Msg};
 /// in `EmailStore::load_more_messages_if_needed`.
 const SCROLL_LOOKAHEAD: usize = 5;
 
+/// Messages pane state. Owns the email cursor, the
+/// remembered-cursor handoff slot used across pane focus changes,
+/// and a `Cell` mirroring the last-rendered row count so handle_msg
+/// can size lookahead loads.
 pub struct MessagesComponent {
+    /// Cursor into the current folder's `emails`. Reset to 0 on
+    /// folder enter / exit.
     pub email_index: usize,
+    /// Cursor snapshotted when focus last left the Messages pane.
+    /// Restored on `FoldersBlur`; `None` if focus has never settled
+    /// here yet.
     pub remembered_email_index: Option<usize>,
     /// Number of email rows the pane could display at its last render.
     /// Set by `render_with_folder` from the pane area; read by AppRoot
@@ -51,6 +60,9 @@ pub struct MessagesComponent {
 }
 
 impl MessagesComponent {
+    /// Build a fresh component: cursor at 0, no remembered index,
+    /// `visible_rows` seeded to 20 so pre-render `handle_msg` calls
+    /// still get a sensible answer.
     pub fn new() -> Self {
         Self {
             email_index: 0,

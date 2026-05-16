@@ -19,17 +19,34 @@ mod messages;
 mod msg;
 mod root;
 
+/// Re-exported: [`AccountsComponent`].
 pub use accounts::AccountsComponent;
+/// Re-exported: off-thread body parser types ([`BodyLoader`],
+/// [`LoadedBody`], [`ParsedBody`]).
 pub use body_loader::{BodyLoader, LoadedBody, ParsedBody};
+/// Re-exported: [`ContentComponent`].
 pub use content::ContentComponent;
+/// Re-exported: shared read-only [`Ctx`].
 pub use ctx::Ctx;
+/// Re-exported: [`DraftComponent`].
 pub use draft::DraftComponent;
+/// Re-exported: [`FolderPickerComponent`] modal.
 pub use folder_picker::FolderPickerComponent;
+/// Re-exported: off-thread folder-structure scanner
+/// [`FolderScannerHandle`].
 pub use folder_scanner::FolderScannerHandle;
+/// Re-exported: [`FoldersComponent`].
 pub use folders::FoldersComponent;
+/// Re-exported: off-thread folder-headers loader types
+/// ([`HeadersLoader`], [`LoadFolderRequest`], [`LoadedFolder`]).
 pub use headers_loader::{HeadersLoader, LoadFolderRequest, LoadedFolder};
+/// Re-exported: [`MessagesComponent`].
 pub use messages::MessagesComponent;
+/// Re-exported: cross-component message types and id aliases
+/// ([`Msg`], [`Dir`], [`ReplyKind`], [`AccountId`], [`FolderPath`],
+/// [`MessageId`]).
 pub use msg::{AccountId, Dir, FolderPath, MessageId, Msg, ReplyKind};
+/// Re-exported: main-loop driver [`AppRoot`].
 pub use root::AppRoot;
 
 use std::collections::VecDeque;

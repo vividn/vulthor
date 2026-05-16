@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// Command-line arguments parsed by `clap` at startup. Each option may
+/// override the corresponding value from the resolved [`Config`] —
+/// `maildir_path` in particular wins over both the config file and
+/// `default_account`'s maildir.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliArgs {
@@ -27,17 +31,26 @@ pub struct CliArgs {
 /// [`AccountId`]: crate::components::AccountId
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AccountConfig {
+    /// Human-facing label rendered in the Accounts pane.
     pub name: String,
+    /// Account's "From" address. Used by compose / send.
     pub email: String,
+    /// On-disk MailDir root for this account.
     pub maildir_path: PathBuf,
     /// Optional; required for sending mail, but read-only multi-account
     /// switching does not need it.
     #[serde(default)]
     pub smtp_command: Option<String>,
+    /// Optional trailing signature appended by the compose flow when
+    /// templating a new draft.
     #[serde(default)]
     pub signature: Option<String>,
 }
 
+/// Top-level configuration loaded from `vulthor.toml`. Search order is
+/// `-c <path>` → `~/.config/vulthor/config.toml` → `./vulthor.toml` →
+/// [`Config::default`]. Holds the global maildir fallback plus the
+/// `[accounts.*]` table that drives the Accounts pane.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     /// Path to the MailDir directory. Used when no `[accounts.*]` table

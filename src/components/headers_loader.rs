@@ -23,13 +23,24 @@ use std::thread;
 use crate::email::{Email, Folder};
 use crate::maildir::MaildirScanner;
 
+/// One unit of work for the headers worker: parse up to `limit`
+/// headers under the folder at `fs_path`.
 pub struct LoadFolderRequest {
+    /// Filesystem path of the folder to scan (typically a child of
+    /// the maildir root).
     pub fs_path: PathBuf,
+    /// Cap on the number of headers to parse. `None` means "load
+    /// every email and mark the folder fully loaded."
     pub limit: Option<usize>,
 }
 
+/// Reply payload from the headers worker. AppRoot routes this back
+/// into the store via `EmailStore::apply_loaded_folder`.
 pub struct LoadedFolder {
+    /// Folder path the request named. Used to find the right folder
+    /// to update even if the user has navigated past it.
     pub fs_path: PathBuf,
+    /// Parsed-header `Email` rows in scan order.
     pub emails: Vec<Email>,
     /// True when the worker finished a complete scan (no limit, or empty
     /// / non-maildir folder). `AppRoot` uses this to flip `Folder::is_loaded`
@@ -37,6 +48,9 @@ pub struct LoadedFolder {
     pub fully_loaded: bool,
 }
 
+/// Handle to the off-thread folder-headers worker. Owns the request /
+/// reply channels; the worker thread itself runs to completion only
+/// when `tx` is dropped (i.e. on AppRoot shutdown).
 pub struct HeadersLoader {
     tx: Sender<LoadFolderRequest>,
     rx: Receiver<LoadedFolder>,
@@ -84,10 +98,17 @@ impl HeadersLoader {
         }
     }
 
+    /// Enqueue a folder-headers request. Fire-and-forget — a closed
+    /// channel is treated as silent shutdown. AppRoot dedups in-flight
+    /// requests via its own `loading_folder_paths` set.
     pub fn request(&self, req: LoadFolderRequest) {
         let _ = self.tx.send(req);
     }
 
+    /// Non-blocking poll for a finished folder-headers load. Same
+    /// `TryRecvError` semantics as [`BodyLoader::try_recv`].
+    ///
+    /// [`BodyLoader::try_recv`]: crate::components::BodyLoader::try_recv
     pub fn try_recv(&self) -> Result<LoadedFolder, TryRecvError> {
         self.rx.try_recv()
     }

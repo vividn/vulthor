@@ -15,23 +15,39 @@
 
 use crate::email::Folder;
 
+/// One step in the left-to-right view progression (VISION.md
+/// § "The View Progression"). Each variant picks which two adjacent
+/// panes are visible; `h` / `l` move between adjacent views, while
+/// `Tab` cycles focus inside the current view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
+    /// Folders + Messages — the default entry view.
     FolderMessages,
+    /// Messages + Content (rendered email body).
     MessagesContent,
+    /// Content alone (full-width body view).
     Content,
+    /// Messages alone (active when Alt+c hides the content pane).
     Messages,
+    /// Messages + Attachments (content-hidden mode, attachment focus).
     MessagesAttachments,
     // Slot-only scaffolds: `AccountsFolders` is reachable only when more
     // than one account is configured; `ContentDraft` is reachable only
     // while a reply draft exists.
+    /// Accounts + Folders. Only reachable when more than one account
+    /// is configured (`Config::is_multi_account`).
     #[allow(dead_code)]
     AccountsFolders,
+    /// Content + Draft (reply pre-send view). Only reachable while a
+    /// reply draft exists for the current email.
     #[allow(dead_code)]
     ContentDraft,
 }
 
 impl View {
+    /// Ordered list of panes visible in this view, honoring the Alt+c
+    /// content-pane toggle. The order matches the left-to-right Tab
+    /// cycle inside the view.
     pub fn get_available_panes(&self, content_hidden: bool) -> Vec<ActivePane> {
         if content_hidden {
             match self {
@@ -53,6 +69,9 @@ impl View {
         }
     }
 
+    /// Pane to focus when entering this view fresh (no prior cursor).
+    /// Used after every `h`/`l` view transition and after toggling the
+    /// content pane.
     pub fn get_default_active_pane(&self, content_hidden: bool) -> ActivePane {
         if content_hidden {
             match self {
@@ -74,6 +93,9 @@ impl View {
         }
     }
 
+    /// The view one step deeper (rightward, via `l`). Returns `None`
+    /// at the rightmost view; respects `content_hidden` so Alt+c
+    /// doesn't surface views with the hidden pane.
     pub fn next_view(&self, content_hidden: bool) -> Option<View> {
         if content_hidden {
             match self {
@@ -94,6 +116,8 @@ impl View {
         }
     }
 
+    /// The view one step broader (leftward, via `h`). Inverse of
+    /// [`Self::next_view`]; returns `None` at `FolderMessages`.
     pub fn prev_view(&self, content_hidden: bool) -> Option<View> {
         if content_hidden {
             match self {
@@ -113,14 +137,23 @@ impl View {
     }
 }
 
+/// Identifier for a focusable pane. Encoded into the
+/// `Arc<AtomicU8>` the web server reads, so the numbering is stable
+/// (see [`Self::to_u8`] / [`Self::from_u8`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
+    /// Folder tree pane.
     Folders,
+    /// Email list pane.
     Messages,
+    /// Rendered body pane.
     Content,
+    /// Attachment list pane (content-hidden alternative).
     Attachments,
+    /// Accounts pane (multi-account installs only).
     #[allow(dead_code)]
     Accounts,
+    /// Reply-draft pane (active during compose / pre-send).
     #[allow(dead_code)]
     Draft,
 }
@@ -139,6 +172,10 @@ impl ActivePane {
         }
     }
 
+    /// Decode a value previously produced by [`Self::to_u8`]. Unknown
+    /// values fall back to `Folders` rather than panicking, so a stale
+    /// `Arc<AtomicU8>` from a renumbered variant cannot crash the web
+    /// server.
     pub fn from_u8(v: u8) -> Self {
         match v {
             1 => ActivePane::Messages,
@@ -163,30 +200,57 @@ impl ActivePane {
     }
 }
 
+/// Cursor indices mirrored from the per-pane components into
+/// [`Layout`] so AppRoot can publish a single coherent snapshot. The
+/// component (`FoldersComponent`, `MessagesComponent`,
+/// `ContentComponent`) remains the source of truth; these fields are
+/// kept in sync after each dispatch.
 #[derive(Debug, Default, Clone)]
 pub struct SelectionState {
+    /// Cursor in the folder pane (flat display index, not the path
+    /// breadcrumb).
     pub folder_index: usize,
+    /// Cursor in the message list.
     pub email_index: usize,
+    /// Body-pane scroll offset, in lines.
     pub scroll_offset: usize,
+    /// Cursor in the attachment list.
     pub attachment_index: usize,
+    /// Last `email_index` snapshotted before focus left the Messages
+    /// pane. Restored on next focus-in so Tab round-trips don't reset
+    /// the cursor.
     pub remembered_email_index: Option<usize>,
 }
 
+/// Direction passed to [`Layout::switch_pane`] for Tab / Shift-Tab.
 #[derive(Debug, Clone)]
 pub enum PaneSwitchDirection {
+    /// Shift-Tab — previous pane in the view's order (wraps to last).
     Left,
+    /// Tab — next pane in the view's order (wraps to first).
     Right,
 }
 
+/// Pane composition state owned directly by `AppRoot`. Encapsulates
+/// which [`View`] is visible, which [`ActivePane`] has focus, whether
+/// the content pane is hidden (Alt+c), and the mirrored cursor
+/// indices in [`SelectionState`].
 #[derive(Debug)]
 pub struct Layout {
+    /// Currently visible view (h/l progression).
     pub current_view: View,
+    /// Focused pane within `current_view` (Tab / Shift-Tab cycles it).
     pub active_pane: ActivePane,
+    /// Alt+c toggle: when true, the content pane is hidden and views
+    /// shift to their content-less alternatives.
     pub content_pane_hidden: bool,
+    /// Cursor positions mirrored from the per-pane components.
     pub selection: SelectionState,
 }
 
 impl Layout {
+    /// Default startup layout: `FolderMessages` view with focus on the
+    /// Folders pane, content pane visible, all cursors at zero.
     pub fn new() -> Self {
         Self {
             current_view: View::FolderMessages,
@@ -227,6 +291,9 @@ impl Layout {
             .get_default_active_pane(self.content_pane_hidden);
     }
 
+    /// Advance one step rightward in the view progression (`l`).
+    /// No-op when already at the rightmost view. Focus snaps to the
+    /// new view's default pane.
     pub fn next_view(&mut self) {
         if let Some(new_view) = self.current_view.next_view(self.content_pane_hidden) {
             self.current_view = new_view;
@@ -236,6 +303,8 @@ impl Layout {
         }
     }
 
+    /// Move one step leftward in the view progression (`h`). No-op at
+    /// the leftmost view. Focus snaps to the new view's default pane.
     pub fn prev_view(&mut self) {
         if let Some(new_view) = self.current_view.prev_view(self.content_pane_hidden) {
             self.current_view = new_view;

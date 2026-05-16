@@ -6,12 +6,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Read-only MailDir filesystem scanner. Walks `root_path` to build
+/// the folder tree, paged-loads message headers, and builds the
+/// drafts-by-parent-id index. Cloning is cheap (just a `PathBuf`),
+/// which lets the off-thread workers (`FolderScannerHandle`,
+/// `HeadersLoader`) own their own copy without contention.
 #[derive(Debug, Clone)]
 pub struct MaildirScanner {
     root_path: PathBuf,
 }
 
 impl MaildirScanner {
+    /// Build a scanner rooted at `root_path`. No filesystem work
+    /// happens until one of the scan / load methods runs.
     pub fn new(root_path: PathBuf) -> Self {
         Self { root_path }
     }

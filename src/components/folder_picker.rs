@@ -38,15 +38,26 @@ use crate::theme::VulthorTheme;
 
 use super::{Component, Ctx, Msg};
 
+/// Modal folder picker state. The picker absorbs every key event
+/// while `visible == true`; AppRoot routes input here first and
+/// resumes normal dispatch once the modal closes.
 pub struct FolderPickerComponent {
+    /// True while the modal is shown.
     pub visible: bool,
+    /// Substring filter typed by the user. Matched case-insensitively
+    /// against folder display labels.
     pub filter_text: String,
+    /// Cursor in the *filtered* view (not into `folder_list`).
     pub selected_index: usize,
+    /// Flat snapshot of every selectable folder taken when the modal
+    /// opens. Each entry is `(display_label, filesystem_path)`.
     pub folder_list: Vec<(String, PathBuf)>,
     list_state: RefCell<ListState>,
 }
 
 impl FolderPickerComponent {
+    /// Build a closed picker. Stays invisible until [`Self::open`] is
+    /// called via `Msg::OpenFolderPicker`.
     pub fn new() -> Self {
         Self {
             visible: false,

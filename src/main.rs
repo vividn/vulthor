@@ -1,3 +1,15 @@
+//! Vulthor — a TUI email client with an HTML render-pane companion.
+//!
+//! The binary entry point wires together the four runtime concerns: the
+//! component tree (`components`), the MailDir scanner that feeds it, the
+//! configuration loaded from CLI + TOML, and the embedded web server used to
+//! render HTML bodies in a browser. The TUI runs on the main thread; the web
+//! server and folder scanner run on tokio tasks and communicate with the TUI
+//! over channels.
+//!
+//! See `VISION.md` for product scope and `CLAUDE.md` for architectural notes.
+#![deny(missing_docs)]
+
 mod components;
 mod compose;
 mod config;

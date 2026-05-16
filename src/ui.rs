@@ -14,6 +14,10 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
+/// Stateless-ish ratatui render facade. Holds only the interior state
+/// the widgets need across frames (currently just the attachment
+/// list's selection). All real state lives in `AppRoot` / its
+/// components; `UI::draw` borrows them per frame.
 pub struct UI {
     attachment_list_state: ListState,
 }
@@ -25,12 +29,20 @@ impl Default for UI {
 }
 
 impl UI {
+    /// Build a fresh UI with default widget state. There is normally
+    /// one `UI` per process, owned by the main event loop.
     pub fn new() -> Self {
         Self {
             attachment_list_state: ListState::default(),
         }
     }
 
+    /// Render the entire frame. Picks between the help overlay and
+    /// the main pane layout based on `help_visible`, draws the status
+    /// bar, then overlays the folder-picker modal if it's open.
+    /// `store` is borrowed mutably only to let interior widget state
+    /// (e.g. ratatui list scroll) settle; no email mutations happen
+    /// here.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
