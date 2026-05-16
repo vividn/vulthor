@@ -26,7 +26,12 @@ use crate::theme::VulthorTheme;
 
 use super::{Component, Ctx, Dir, Msg};
 
+/// Folder pane state. Tracks the cursor index and the ratatui list
+/// state used to render the highlight. The folder tree itself is read
+/// from `Ctx::store.root_folder`.
 pub struct FoldersComponent {
+    /// Flat display-order index of the highlighted folder (subfolders
+    /// listed depth-first, INBOX first).
     pub folder_index: usize,
     list_state: RefCell<ListState>,
 }

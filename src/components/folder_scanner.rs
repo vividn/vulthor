@@ -25,10 +25,16 @@ use crate::maildir::MaildirScanner;
 /// same worker so the TUI takes one swap, not two — a half-applied
 /// state would leave chips pointing at the wrong tree.
 pub struct ScannedMaildir {
+    /// Root of the freshly scanned folder tree.
     pub root: Folder,
+    /// Drafts index keyed by parent (replied-to) message-id.
     pub drafts: HashMap<String, DraftInfo>,
 }
 
+/// Reaping handle for the off-thread folder-structure scan. Holds the
+/// receive side of the worker's reply channel; AppRoot polls
+/// [`Self::try_recv`] each tick and applies the result wholesale to
+/// the store.
 pub struct FolderScannerHandle {
     rx: Receiver<Result<ScannedMaildir>>,
 }
@@ -53,6 +59,10 @@ impl FolderScannerHandle {
         Self { rx }
     }
 
+    /// Non-blocking poll for the scan result. The outer
+    /// `Result<…, TryRecvError>` distinguishes "no reply yet"
+    /// (`Empty`) and "worker dropped" (`Disconnected`); the inner
+    /// `Result<ScannedMaildir>` is the scan's own success / failure.
     pub fn try_recv(&self) -> std::result::Result<Result<ScannedMaildir>, TryRecvError> {
         self.rx.try_recv()
     }

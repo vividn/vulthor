@@ -15,25 +15,55 @@ pub fn maildir_flag_in_filename(path: &Path, flag: char) -> bool {
         .unwrap_or(false)
 }
 
+/// Parsed RFC-822 header fields surfaced in the TUI. Strings are
+/// pre-formatted for display (`"Name <addr@host>"` for addresses,
+/// RFC-3339 for the date) so the render path never touches the raw
+/// `mail-parser` types.
 #[derive(Debug, Clone)]
 pub struct EmailHeaders {
+    /// Formatted sender — `"Name <addr@host>"`, `"addr@host"`, or
+    /// `"Unknown"` when the header is unparseable.
     pub from: String,
+    /// Formatted first recipient. Same shape as [`Self::from`]; Cc/Bcc
+    /// are not surfaced here yet.
     pub to: String,
+    /// Subject line, or `"(no subject)"` when the header is absent.
     pub subject: String,
+    /// RFC-3339 date string, or empty when the header is absent /
+    /// unparseable.
     pub date: String,
+    /// `Message-ID` header value (bare id, no angle brackets), or empty
+    /// when absent. Used as the cross-reference key for drafts.
     pub message_id: String,
 }
 
+/// Lightweight attachment descriptor. Carries display metadata only —
+/// the attachment bytes stay on disk and are re-read on demand by the
+/// web pane / save action.
 #[derive(Debug, Clone)]
 pub struct Attachment {
+    /// Filename advertised by the part's `Content-Disposition`, or a
+    /// `"unnamed_attachment"` placeholder when missing.
     pub filename: String,
+    /// MIME type formatted as `"type/subtype"`, defaulting to
+    /// `"application/octet-stream"` when the part has no
+    /// `Content-Type`.
     pub content_type: String,
+    /// Decoded payload size in bytes (as reported by `mail-parser`).
     pub size: usize,
 }
 
+/// Lazy-load progress for an [`Email`]. The MailDir scanner only parses
+/// headers up front; full bodies and attachments are fetched off-thread
+/// by `BodyLoader` and applied via [`EmailStore::apply_loaded_body`].
+/// The render path branches on this enum to decide between rendering
+/// the body and showing a "Loading body…" placeholder.
 #[derive(Debug, Clone)]
 pub enum EmailLoadState {
+    /// Only the [`EmailHeaders`] are populated. `body_text`,
+    /// `body_html`, and `attachments` are empty.
     HeadersOnly,
+    /// Full parse succeeded — body and attachments are populated.
     FullyLoaded,
 }
 
@@ -44,7 +74,10 @@ pub enum EmailLoadState {
 /// stays consistent with disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkReadPlan {
+    /// Existing file path under `<folder>/new/`.
     pub from: PathBuf,
+    /// Target path under `<folder>/cur/` — same filename, sibling
+    /// directory. The handler `fs::rename`s `from` → `to`.
     pub to: PathBuf,
 }
 
@@ -61,13 +94,29 @@ fn derive_cur_path(p: &std::path::Path) -> Option<PathBuf> {
     Some(parent.parent()?.join("cur").join(name))
 }
 
+/// In-memory representation of a single MailDir message.
+///
+/// Loaded lazily: the scanner constructs an [`Email`] in
+/// [`EmailLoadState::HeadersOnly`] (only [`EmailHeaders`] populated);
+/// `BodyLoader` upgrades it to [`EmailLoadState::FullyLoaded`] later
+/// off-thread. `file_path` is the canonical identifier — it follows
+/// the message across `new/`→`cur/` renames and Archive/Trash moves.
 #[derive(Debug, Clone)]
 pub struct Email {
+    /// Parsed RFC-822 headers (always populated post-scan).
     pub headers: EmailHeaders,
+    /// Plain-text body; empty while [`EmailLoadState::HeadersOnly`].
     pub body_text: String,
+    /// HTML body, when the message carries one. Served to the web pane.
     pub body_html: Option<String>,
+    /// Attachment metadata; populated alongside the body.
     pub attachments: Vec<Attachment>,
+    /// Current filesystem path. Updated in lockstep with on-disk
+    /// renames so identity survives mark-read, move, and undo.
     pub file_path: PathBuf,
+    /// Mirror of the MailDir `S` info flag (inverted): true when the
+    /// message lives under `new/` or otherwise lacks `S` in its
+    /// `:2,…` suffix.
     pub is_unread: bool,
     /// MailDir `F` (Flagged) info flag — `s` toggles this, undo reverses
     /// it. Mirror of the on-disk filename's `:2,…F…` suffix; the
@@ -75,10 +124,17 @@ pub struct Email {
     /// lockstep with the file rename. See VISION.md § "Action
     /// Keybindings" (`s` / `F`) and `crate::undo::Mutation::ToggleStar`.
     pub is_flagged: bool,
+    /// Whether the body + attachments have been parsed yet. See
+    /// [`EmailLoadState`].
     pub load_state: EmailLoadState,
 }
 
 impl Email {
+    /// Construct an unparsed email pointing at `file_path`. `is_flagged`
+    /// is seeded from the filename's `:2,…F…` suffix so the in-memory
+    /// state matches the on-disk MailDir info flags without a parse.
+    /// Every other field is empty until `parse_headers_only` or
+    /// `parse_from_file` runs.
     pub fn new(file_path: PathBuf) -> Self {
         let is_flagged = maildir_flag_in_filename(&file_path, 'F');
         Self {
@@ -237,18 +293,37 @@ impl Email {
     }
 }
 
+/// Node in the in-memory folder tree mirroring the MailDir hierarchy.
+/// Leaves are maildir directories (containing `cur/`, `new/`, `tmp/`);
+/// inner nodes are simple containers. `emails` and counts cover only
+/// this folder — subfolder totals are not aggregated.
 #[derive(Debug, Clone)]
 pub struct Folder {
+    /// Folder name as it appears in the tree (last path component).
     pub name: String,
+    /// Filesystem path to the folder's root directory.
     pub path: PathBuf,
+    /// Emails loaded for this folder, in scan order (may be partial —
+    /// see `is_loaded`).
     pub emails: Vec<Email>,
+    /// Direct children. Sorted via `get_sorted_subfolders` at render time.
     pub subfolders: Vec<Folder>,
+    /// Count of `emails` with `is_unread == true`. Maintained by
+    /// `add_email` and the read-state helpers; not derived on demand.
     pub unread_count: usize,
+    /// Count of emails added via `add_email`. Same caveat as
+    /// `unread_count`.
     pub total_count: usize,
-    pub is_loaded: bool, // Track if emails have been loaded for this folder
+    /// True once a non-limited header scan has populated `emails`. The
+    /// paged loader short-circuits when this is set, so future scrolls
+    /// stop re-walking the directory.
+    pub is_loaded: bool,
 }
 
 impl Folder {
+    /// Build an empty folder node. Counts start at zero and `is_loaded`
+    /// is false — the caller must run a scanner to populate `emails`
+    /// and (typically) `subfolders`.
     pub fn new(name: String, path: PathBuf) -> Self {
         Self {
             name,
@@ -261,6 +336,9 @@ impl Folder {
         }
     }
 
+    /// Append an email, updating `total_count` and (when unread)
+    /// `unread_count`. The only correct way to grow `emails` —
+    /// pushing directly would desync the cached counts.
     pub fn add_email(&mut self, email: Email) {
         if email.is_unread {
             self.unread_count += 1;
@@ -269,10 +347,15 @@ impl Folder {
         self.emails.push(email);
     }
 
+    /// Append a child folder. No counts to maintain — Vulthor does not
+    /// roll subfolder totals into the parent.
     pub fn add_subfolder(&mut self, folder: Folder) {
         self.subfolders.push(folder);
     }
 
+    /// Subfolders sorted for display: INBOX first, then case-sensitive
+    /// alphabetical. Used by both the folder pane and the move-to
+    /// picker.
     pub fn get_sorted_subfolders(&self) -> Vec<&Folder> {
         let mut sorted: Vec<&Folder> = self.subfolders.iter().collect();
         sorted.sort_by(|a, b| match (&a.name[..], &b.name[..]) {
@@ -283,6 +366,8 @@ impl Folder {
         sorted
     }
 
+    /// Folder name decorated with the unread-count chip: `"INBOX (5)"`
+    /// when there are unread emails, plain `"INBOX"` otherwise.
     pub fn get_display_name(&self) -> String {
         match self.unread_count {
             0 => self.name.clone(),
@@ -299,15 +384,33 @@ impl Folder {
 /// chip beside the original email row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DraftInfo {
+    /// On-disk path of the draft message inside `Drafts/cur/` or
+    /// `Drafts/new/`.
     pub path: PathBuf,
+    /// True when the draft body is whitespace-only — used to pick
+    /// between the `✏` (in-progress) and `⏰` (reply-later) chip in
+    /// the Messages pane.
     pub body_empty: bool,
 }
 
+/// The single shared data plane between the TUI and the web pane.
+/// Holds the folder tree, the user's navigation state (which folder /
+/// which email is selected), and the drafts cross-reference index.
+/// Lives behind `Arc<Mutex<EmailStore>>` because the axum handlers
+/// read it on tokio executor threads; all mutations happen on the TUI
+/// thread under `AppRoot`.
 #[derive(Debug)]
 pub struct EmailStore {
+    /// Root of the folder tree. The literal "Mail" folder is a
+    /// synthetic container — its `subfolders` are the actual top-level
+    /// MailDir entries.
     pub root_folder: Folder,
-    pub current_folder: Vec<usize>, // Path to current folder (indices in subfolder arrays)
-    pub selected_email: Option<usize>, // Index of selected email in current folder
+    /// Breadcrumb of subfolder indices from `root_folder` to the
+    /// currently focused folder. Empty when sitting at root.
+    pub current_folder: Vec<usize>,
+    /// Index of the highlighted email within the current folder's
+    /// `emails`. `None` when no email has been selected yet.
+    pub selected_email: Option<usize>,
     /// True while the initial off-thread folder-structure scan is in
     /// flight. The folder pane uses this to render a "Scanning folders…"
     /// splash instead of an empty list. Flips to false when `AppRoot`
@@ -322,6 +425,10 @@ pub struct EmailStore {
 }
 
 impl EmailStore {
+    /// Build an empty store rooted at `maildir_path`. The root folder
+    /// is named "Mail" by convention; the off-thread scanner
+    /// (`FolderScannerHandle`) replaces the tree wholesale once it
+    /// finishes walking the directory.
     pub fn new(maildir_path: PathBuf) -> Self {
         Self {
             root_folder: Folder::new("Mail".to_string(), maildir_path),

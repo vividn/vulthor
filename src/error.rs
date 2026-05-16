@@ -8,6 +8,12 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Unified error type for the crate. Every fallible operation in
+/// Vulthor returns [`Result<T>`]; this enum is the closed set of
+/// failure modes. `Send + Sync` so it crosses tokio task boundaries
+/// without bespoke boxing, and implements `std::error::Error` so `?`
+/// still coerces to `Box<dyn Error>` at module boundaries that haven't
+/// migrated yet.
 #[derive(Debug, Error)]
 pub enum VulthorError {
     #[error("I/O error: {0}")]
@@ -53,6 +59,8 @@ pub enum VulthorError {
     },
 }
 
+/// Crate-wide result alias: every fallible Vulthor API returns
+/// `Result<T>` rather than `std::result::Result<T, VulthorError>`.
 pub type Result<T> = std::result::Result<T, VulthorError>;
 
 #[cfg(test)]

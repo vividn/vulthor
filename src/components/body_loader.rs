@@ -23,16 +23,28 @@ use crate::email::{Attachment, Email};
 /// Result of a body-load attempt. `parsed` is `None` when `parse_from_file`
 /// failed; AppRoot still uses the path to free its in-flight slot.
 pub struct LoadedBody {
+    /// File path the original request named. Used as the match key
+    /// when applying the result back into [`crate::email::EmailStore`].
     pub path: PathBuf,
+    /// Parsed body on success, `None` when `parse_from_file` failed
+    /// (missing file, malformed message, etc.).
     pub parsed: Option<ParsedBody>,
 }
 
+/// Successfully parsed body payload — the body-bearing slice of an
+/// [`Email`]. Used in [`LoadedBody::parsed`].
 pub struct ParsedBody {
+    /// Plain-text body, decoded and flattened by `mail-parser`.
     pub body_text: String,
+    /// HTML body, when the message carries one.
     pub body_html: Option<String>,
+    /// Attachment metadata.
     pub attachments: Vec<Attachment>,
 }
 
+/// Handle to the off-thread body-parser worker. Holds the request /
+/// reply channels; the worker thread itself owns no state visible
+/// from outside.
 pub struct BodyLoader {
     tx: Sender<PathBuf>,
     rx: Receiver<LoadedBody>,
@@ -68,6 +80,10 @@ impl BodyLoader {
         }
     }
 
+    /// Enqueue a body-parse request. Fire-and-forget: a closed worker
+    /// channel is treated as silent shutdown (no error returned). Safe
+    /// to call repeatedly for the same path — the SSE refire dedups
+    /// at the client.
     pub fn request(&self, path: PathBuf) {
         let _ = self.tx.send(path);
     }
@@ -79,6 +95,10 @@ impl BodyLoader {
         self.tx.clone()
     }
 
+    /// Non-blocking poll for a finished body parse. Returns
+    /// `TryRecvError::Empty` when no reply is ready and
+    /// `TryRecvError::Disconnected` when the worker thread has exited.
+    /// AppRoot drains this once per tick.
     pub fn try_recv(&self) -> Result<LoadedBody, TryRecvError> {
         self.rx.try_recv()
     }

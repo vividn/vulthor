@@ -26,10 +26,15 @@ pub const DRAFT_TITLE: &str = "Draft";
 /// this exact string renders when the pane is active.
 pub const DRAFT_PLACEHOLDER: &str = "Coming in Phase 2";
 
+/// Draft pane scaffold. Currently a zero-state placeholder that
+/// reserves the pane's slot in the layout and the message addressing.
+/// Real state arrives in Phase 2 (compose / reply flow).
 #[derive(Default)]
 pub struct DraftComponent;
 
 impl DraftComponent {
+    /// Build the stateless component. Equivalent to
+    /// `DraftComponent::default()`.
     pub fn new() -> Self {
         Self
     }

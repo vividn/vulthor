@@ -28,12 +28,17 @@ use super::{Component, Ctx, Dir, Msg};
 /// legacy `input::handle_main_view_input` constant of 10.
 const PAGE_SCROLL_STEP: usize = 10;
 
+/// Content pane state. Holds the scroll offset for the body and the
+/// scrollbar's ratatui state.
 pub struct ContentComponent {
+    /// Lines scrolled past the top of the body. `j`/`k` and arrows
+    /// step by 1; PageUp/PageDown step by `PAGE_SCROLL_STEP`.
     pub scroll_offset: usize,
     scrollbar_state: RefCell<ScrollbarState>,
 }
 
 impl ContentComponent {
+    /// Build a fresh content pane with scroll at the top of the body.
     pub fn new() -> Self {
         Self {
             scroll_offset: 0,

@@ -71,7 +71,7 @@ impl Compose {
     /// Render the compose into a wire-format RFC 5322 message. The
     /// returned string includes a trailing newline.
     ///
-    /// Headers emitted: Date, Message-ID, From, To, [Cc], [Bcc],
+    /// Headers emitted: Date, Message-ID, From, To, Cc, Bcc,
     /// Subject, [In-Reply-To, References], MIME-Version,
     /// Content-Type, Content-Transfer-Encoding.
     pub fn serialize_rfc822(&self) -> String {
