@@ -429,9 +429,10 @@ impl AppRoot {
             return;
         };
         match handle.try_recv() {
-            Ok(Ok(root)) => {
+            Ok(Ok(scanned)) => {
                 let mut store = self.email_store.lock().unwrap();
-                store.root_folder = root;
+                store.root_folder = scanned.root;
+                store.drafts = scanned.drafts;
                 store.scanning_folders = false;
                 let new_index = FoldersComponent::auto_select_inbox(&store.root_folder);
                 self.folders.folder_index = new_index;

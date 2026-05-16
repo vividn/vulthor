@@ -1,6 +1,7 @@
-use crate::email::{Email, Folder};
+use crate::email::{DraftInfo, Email, Folder};
 use crate::error::{Result, VulthorError};
-use std::collections::HashSet;
+use mail_parser::{HeaderValue, MessageParser};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -259,6 +260,91 @@ impl MaildirScanner {
         Ok(())
     }
 
+    /// Build the original-message-id → draft index (Phase 2.c, vu-nof).
+    /// Walks the maildir tree looking for any folder named `Drafts/` and
+    /// parses every message in its `cur/` and `new/` subdirs, recording
+    /// the parent (`In-Reply-To`, falling back to the last `References`
+    /// entry) and whether the draft body is empty.
+    ///
+    /// Runs on the folder-scanner worker thread so the TUI never
+    /// touches disk on this path. Failures (unparseable drafts, missing
+    /// directories) are silently skipped — a broken draft must not
+    /// prevent the rest of the index from building.
+    pub fn build_drafts_index(&self) -> HashMap<String, DraftInfo> {
+        let mut index = HashMap::new();
+        Self::collect_drafts_recursive(&self.root_path, &mut index);
+        index
+    }
+
+    fn collect_drafts_recursive(dir: &Path, index: &mut HashMap<String, DraftInfo>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if matches!(name, "cur" | "new" | "tmp") || name.starts_with('.') {
+                continue;
+            }
+            if name == "Drafts" {
+                Self::scan_drafts_folder(&path, index);
+            } else {
+                Self::collect_drafts_recursive(&path, index);
+            }
+        }
+    }
+
+    fn scan_drafts_folder(folder: &Path, index: &mut HashMap<String, DraftInfo>) {
+        for sub in &["cur", "new"] {
+            let dir = folder.join(sub);
+            if !dir.is_dir() {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let file = entry.path();
+                if !file.is_file() {
+                    continue;
+                }
+                let fname = file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if fname.starts_with('.')
+                    || fname.ends_with(".lock")
+                    || fname.ends_with(".tmp")
+                {
+                    continue;
+                }
+                let Ok(content) = fs::read(&file) else {
+                    continue;
+                };
+                let Some(message) = MessageParser::default().parse(&content) else {
+                    continue;
+                };
+                let parent = first_message_id(message.in_reply_to())
+                    .or_else(|| last_message_id(message.references()));
+                let Some(parent) = parent else { continue };
+                let body_empty = message
+                    .body_text(0)
+                    .map(|t| t.trim().is_empty())
+                    .unwrap_or(true);
+                index.insert(
+                    parent,
+                    DraftInfo {
+                        path: file,
+                        body_empty,
+                    },
+                );
+            }
+        }
+    }
+
     /// Check if a file looks like an email file
     fn is_email_file(&self, path: &Path) -> bool {
         path.file_name()
@@ -273,9 +359,47 @@ impl MaildirScanner {
     }
 }
 
+/// Normalize a Message-ID by stripping surrounding angle brackets and
+/// whitespace. `mail-parser` usually returns the bare id but defensively
+/// strip in case a malformed draft slips through.
+fn normalize_msg_id(s: &str) -> String {
+    s.trim().trim_start_matches('<').trim_end_matches('>').to_string()
+}
+
+fn first_message_id(h: &HeaderValue) -> Option<String> {
+    match h {
+        HeaderValue::Text(s) => {
+            let n = normalize_msg_id(s);
+            if n.is_empty() {
+                None
+            } else {
+                Some(n)
+            }
+        }
+        HeaderValue::TextList(list) => list.first().map(|s| normalize_msg_id(s)).filter(|s| !s.is_empty()),
+        _ => None,
+    }
+}
+
+fn last_message_id(h: &HeaderValue) -> Option<String> {
+    match h {
+        HeaderValue::Text(s) => {
+            let n = normalize_msg_id(s);
+            if n.is_empty() {
+                None
+            } else {
+                Some(n)
+            }
+        }
+        HeaderValue::TextList(list) => list.last().map(|s| normalize_msg_id(s)).filter(|s| !s.is_empty()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::TestMailDir;
     use std::fs;
     use tempfile::TempDir;
 
@@ -418,6 +542,83 @@ mod tests {
         // Once is_loaded is true, subsequent calls short-circuit.
         let d = scanner.load_more_folder_emails(folder, 20).unwrap();
         assert_eq!(d, 0);
+    }
+
+    // --- Phase 2.c (vu-nof): drafts-index acceptance. ---
+
+    /// The fixture's `Drafts/` contains two reply drafts referencing
+    /// known INBOX message-ids. `build_drafts_index` must surface both,
+    /// with the correct `body_empty` flag per draft.
+    #[test]
+    fn build_drafts_index_populates_from_fixture_drafts() {
+        let test_maildir = TestMailDir::new();
+        let scanner = MaildirScanner::new(test_maildir.root_path.clone());
+
+        let index = scanner.build_drafts_index();
+
+        let welcome = index
+            .get("welcome-001@vulthor.example.com")
+            .expect("draft for welcome must be indexed");
+        assert!(
+            !welcome.body_empty,
+            "draft_with_body has body content -> body_empty=false",
+        );
+        assert!(welcome.path.starts_with(&test_maildir.root_path));
+        assert!(welcome.path.ends_with("1234567907.draft_with_body"));
+
+        let meeting = index
+            .get("meeting-001@company.com")
+            .expect("draft for meeting must be indexed");
+        assert!(
+            meeting.body_empty,
+            "draft_empty has whitespace-only body -> body_empty=true",
+        );
+        assert!(meeting.path.ends_with("1234567908.draft_empty"));
+    }
+
+    /// A draft with no `In-Reply-To` header (and no `References`) is a
+    /// pure new compose, not a reply — it must not appear in the index.
+    #[test]
+    fn build_drafts_index_skips_drafts_without_parent_id() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("Drafts/cur")).unwrap();
+        fs::create_dir_all(root.join("Drafts/new")).unwrap();
+        fs::create_dir_all(root.join("Drafts/tmp")).unwrap();
+
+        let orphan = "From: user@example.com\r\nTo: someone@example.com\r\nSubject: brand new\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\nMessage-ID: <new-compose@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nNew compose, not a reply.\r\n";
+        fs::write(root.join("Drafts/cur/orphan"), orphan).unwrap();
+
+        let scanner = MaildirScanner::new(root.to_path_buf());
+        let index = scanner.build_drafts_index();
+        assert!(
+            index.is_empty(),
+            "drafts without In-Reply-To/References must not be indexed: {:?}",
+            index,
+        );
+    }
+
+    /// Falls back to the last entry of `References` when `In-Reply-To`
+    /// is missing — common when a draft is replying to a deep thread.
+    #[test]
+    fn build_drafts_index_falls_back_to_last_references_entry() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("Drafts/cur")).unwrap();
+        fs::create_dir_all(root.join("Drafts/new")).unwrap();
+        fs::create_dir_all(root.join("Drafts/tmp")).unwrap();
+
+        let draft = "From: user@example.com\r\nTo: someone@example.com\r\nSubject: Re: deep thread\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\nMessage-ID: <deep-reply@example.com>\r\nReferences: <root@example.com> <middle@example.com> <leaf@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nContinuing the thread.\r\n";
+        fs::write(root.join("Drafts/cur/deep"), draft).unwrap();
+
+        let scanner = MaildirScanner::new(root.to_path_buf());
+        let index = scanner.build_drafts_index();
+        // Last entry of References is the immediate parent.
+        assert!(
+            index.contains_key("leaf@example.com"),
+            "must key by leaf (last References entry), got {:?}",
+            index.keys().collect::<Vec<_>>(),
+        );
     }
 
     /// Dedup: if the same path is already in `folder.emails`, the paged

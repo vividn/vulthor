@@ -144,6 +144,20 @@ impl TestMailDir {
             &self.create_draft_email(),
         );
 
+        // Phase 2.c (vu-nof) fixtures: two drafts pointing at INBOX
+        // originals so the drafts-index test has predictable inputs.
+        // One has body content (✏ chip), the other is empty (⏰ chip).
+        self.write_email(
+            "Drafts/cur",
+            "1234567907.draft_with_body",
+            &Self::create_reply_draft_with_body(),
+        );
+        self.write_email(
+            "Drafts/cur",
+            "1234567908.draft_empty",
+            &Self::create_reply_draft_empty(),
+        );
+
         // Add deleted email
         self.write_email(
             "Trash/cur",
@@ -668,6 +682,41 @@ Let me know your thoughts on this approach.
 Best,
 [Need to finish this...]"#
             .to_string()
+    }
+
+    /// Phase 2.c (vu-nof) — draft pointing at INBOX `welcome-001` with
+    /// non-empty body. Expected to render the `✏` chip on the original.
+    fn create_reply_draft_with_body() -> String {
+        r#"From: user@example.com
+To: welcome@vulthor.example.com
+Subject: Re: Welcome to Vulthor Email Client!
+Date: Mon, 01 Jan 2024 11:00:00 +0000
+Message-ID: <draft-reply-welcome@example.com>
+In-Reply-To: <welcome-001@vulthor.example.com>
+References: <welcome-001@vulthor.example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Thanks for the welcome message — really excited to try the new client.
+"#
+        .to_string()
+    }
+
+    /// Phase 2.c (vu-nof) — empty-body draft pointing at INBOX
+    /// `meeting-001`. Expected to render the `⏰` reply-later chip.
+    fn create_reply_draft_empty() -> String {
+        r#"From: user@example.com
+To: sarah.johnson@company.com
+Subject: Re: Team Meeting Tomorrow - Project Sync
+Date: Tue, 02 Jan 2024 15:30:00 +0000
+Message-ID: <draft-reply-meeting@example.com>
+In-Reply-To: <meeting-001@company.com>
+References: <meeting-001@company.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+"#
+        .to_string()
     }
 
     fn create_deleted_email(&self) -> String {

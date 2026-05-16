@@ -19,6 +19,7 @@
 // is written exclusively by `render` from the live pane area.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -31,7 +32,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::email::{Email, Folder};
+use crate::email::{DraftInfo, Email, Folder};
 use crate::theme::VulthorTheme;
 
 use super::{Component, Ctx, Dir, Msg};

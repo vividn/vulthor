@@ -1,5 +1,6 @@
 use crate::error::{Result, VulthorError};
 use mail_parser::{Message, MessageParser, MimeHeaders};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -290,6 +291,18 @@ impl Folder {
     }
 }
 
+/// Resolved draft for an original message (Phase 2.c, vu-nof). One row
+/// in `EmailStore::drafts`: an original-message-id (the In-Reply-To /
+/// References parent we found in the Drafts folder) maps to where the
+/// draft lives on disk and whether its body is non-empty. The Messages
+/// pane reads this to render the `✏` (in-progress) / `⏰` (reply-later)
+/// chip beside the original email row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftInfo {
+    pub path: PathBuf,
+    pub body_empty: bool,
+}
+
 #[derive(Debug)]
 pub struct EmailStore {
     pub root_folder: Folder,
@@ -300,6 +313,12 @@ pub struct EmailStore {
     /// render a "Scanning folders…" splash instead of an empty list.
     /// Flips to false when `AppRoot` reaps the scanner reply.
     pub scanning_folders: bool,
+    /// Index from original-message-id → draft (Phase 2.c, vu-nof). Built
+    /// off-thread alongside the folder-structure scan by walking every
+    /// `Drafts/` maildir under the root and parsing each draft's
+    /// `In-Reply-To` / `References` headers. Re-populated wholesale each
+    /// time the scanner replies; never partially mutated by the TUI.
+    pub drafts: HashMap<String, DraftInfo>,
 }
 
 impl EmailStore {
@@ -309,6 +328,7 @@ impl EmailStore {
             current_folder: Vec::new(),
             selected_email: None,
             scanning_folders: false,
+            drafts: HashMap::new(),
         }
     }
 
