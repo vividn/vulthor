@@ -1,6 +1,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
+
+/// Process-wide lock for tests that mutate `$PATH`. `cargo test` runs
+/// threads in parallel and `std::env::set_var` is process-global;
+/// every PATH-touching test in the crate must hold this lock so two
+/// tests don't trample each other's environment.
+pub fn path_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 pub struct TestMailDir {
     #[allow(dead_code)]

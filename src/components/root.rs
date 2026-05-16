@@ -1834,14 +1834,12 @@ mod tests {
         AppRoot::new(Arc::new(Mutex::new(store)), scanner)
     }
 
-    /// Process-wide lock guarding tests that mutate `PATH`. `cargo
-    /// test` runs threads in parallel and `std::env::set_var` is
-    /// process-global; without this, two tests racing on `PATH`
-    /// trample each other.
+    /// Process-wide lock guarding tests that mutate `PATH`. Delegates
+    /// to the crate-wide lock in `test_fixtures` so the search and
+    /// html-viewer integration tests in `phase3_integration_tests`
+    /// serialize against the in-tree tests here.
     fn path_lock() -> &'static std::sync::Mutex<()> {
-        use std::sync::{Mutex, OnceLock};
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::test_fixtures::path_lock()
     }
 
     fn make_root_with_folders(names: &[&str]) -> AppRoot {
@@ -4176,13 +4174,14 @@ mod tests {
     /// test doesn't depend on the host's `PATH`.
     #[test]
     fn open_search_input_with_no_notmuch_sets_status_and_skips_modal() {
+        let _guard = path_lock().lock().unwrap();
         let mut root = make_root();
         // SearchComponent::handle_msg flips `visible` true on
         // OpenSearchInput. apply_open_search_input must close it back
         // if notmuch is missing.
         let original_path = std::env::var_os("PATH");
-        // SAFETY: tests in this module run single-threaded by default
-        // and don't otherwise mutate $PATH; restore after the probe.
+        // SAFETY: serialized via `path_lock`; PATH is restored before
+        // returning so no other test sees the override.
         unsafe {
             std::env::set_var("PATH", "/nonexistent-vulthor-search-path");
         }

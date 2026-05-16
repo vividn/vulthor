@@ -28,6 +28,9 @@ mod test_fixtures;
 #[cfg(test)]
 mod integration_tests;
 
+#[cfg(test)]
+mod phase3_integration_tests;
+
 use clap::Parser;
 use components::{AppRoot, FolderScannerHandle};
 use config::{CliArgs, Config};

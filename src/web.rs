@@ -139,7 +139,7 @@ impl WebServer {
     }
 }
 
-async fn serve_email(State(state): State<WebState>) -> Response {
+pub(crate) async fn serve_email(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
     // Hold the lock just long enough to clone what we need; never call
     // `parse_from_file` under the mutex.
@@ -198,7 +198,7 @@ async fn serve_letters() -> Response {
 /// without a pre-rasterized multi-size set. `theme_color` /
 /// `background_color` track [`VulthorTheme::PRIMARY_HEX`] /
 /// [`VulthorTheme::DARK_HEX`] so a palette rotation flows through.
-async fn serve_manifest() -> Response {
+pub(crate) async fn serve_manifest() -> Response {
     let body = format!(
         r#"{{
   "name": "Vulthor",
@@ -227,7 +227,7 @@ async fn serve_manifest() -> Response {
 /// pass-through. We are not chasing offline mail — the goal is just to
 /// satisfy Chrome/Edge's installability heuristic so the OS-level
 /// "Install Vulthor" entry appears (see VISION.md).
-async fn serve_service_worker() -> Response {
+pub(crate) async fn serve_service_worker() -> Response {
     let body = r#"const CACHE = 'vulthor-shell-v1';
 const SHELL = ['/', '/styles.css', '/vulthor_bird.png'];
 
