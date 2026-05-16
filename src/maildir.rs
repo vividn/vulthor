@@ -260,7 +260,7 @@ impl MaildirScanner {
         Ok(())
     }
 
-    /// Build the original-message-id → draft index (Phase 2.c, vu-nof).
+    /// Build the original-message-id → draft index (Phase 2.c).
     /// Walks the maildir tree looking for any folder named `Drafts/` and
     /// parses every message in its `cur/` and `new/` subdirs, recording
     /// the parent (`In-Reply-To`, falling back to the last `References`
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(d, 0);
     }
 
-    // --- Phase 2.c (vu-nof): drafts-index acceptance. ---
+    // --- Phase 2.c: drafts-index acceptance. ---
 
     /// The fixture's `Drafts/` contains two reply drafts referencing
     /// known INBOX message-ids. `build_drafts_index` must surface both,

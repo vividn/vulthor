@@ -568,8 +568,8 @@ impl AppRoot {
             (KeyCode::Char('l'), m) if m.is_empty() => {
                 // Defer to per-pane handlers for panes whose 'l' has
                 // select semantics (Folders: enter folder; Accounts:
-                // switch account — vu-4bg). Other panes use 'l' as
-                // the view-right shortcut.
+                // switch account). Other panes use 'l' as the view-right
+                // shortcut.
                 if matches!(active_pane, ActivePane::Folders | ActivePane::Accounts) {
                     None
                 } else {
@@ -1257,7 +1257,7 @@ mod tests {
     fn handle_global_key_l_from_folders_defers() {
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         assert!(AppRoot::handle_global_key(key, &ActivePane::Folders).is_none());
-        // Accounts pane also defers so AccountSelect can fire (vu-4bg).
+        // Accounts pane also defers so AccountSelect can fire.
         assert!(AppRoot::handle_global_key(key, &ActivePane::Accounts).is_none());
         assert_eq!(
             AppRoot::handle_global_key(key, &ActivePane::Messages),
@@ -1991,7 +1991,7 @@ mod tests {
 
     #[test]
     fn l_on_accounts_pane_switches_account_end_to_end() {
-        // vu-4bg regression: the global 'l' handler must defer to the
+        // Regression: the global 'l' handler must defer to the
         // AccountsComponent so its `Char('l') => AccountSelect` mapping
         // actually fires. Drive 'h' → Tab → j → 'l' through
         // `process_event` so we catch any future router change that
@@ -2696,7 +2696,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 1.g (vu-2y8): integration tests for full action workflows.
+    // Phase 1.g: integration tests for full action workflows.
     //
     // These tests drive AppRoot through realistic multi-step user
     // flows. The per-feature unit tests above prove each step in

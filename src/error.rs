@@ -35,7 +35,7 @@ pub enum VulthorError {
     #[error("MailDir path is not a directory: {0}")]
     MaildirPathNotDirectory(PathBuf),
 
-    // Phase 2.a (vu-537) — compose / send pipeline.
+    // Phase 2.a — compose / send pipeline.
     #[error("Editor process failed: {0}")]
     ComposeEditorFailed(String),
 

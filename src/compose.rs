@@ -1,4 +1,4 @@
-// Compose / send pipeline — Phase 2.a (vu-537).
+// Compose / send pipeline — Phase 2.a.
 //
 // `Compose` is the in-memory message under construction. `launch_editor`
 // drops the user into `$EDITOR` with a header/body template and parses

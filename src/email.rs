@@ -291,7 +291,7 @@ impl Folder {
     }
 }
 
-/// Resolved draft for an original message (Phase 2.c, vu-nof). One row
+/// Resolved draft for an original message (Phase 2.c). One row
 /// in `EmailStore::drafts`: an original-message-id (the In-Reply-To /
 /// References parent we found in the Drafts folder) maps to where the
 /// draft lives on disk and whether its body is non-empty. The Messages
@@ -313,7 +313,7 @@ pub struct EmailStore {
     /// splash instead of an empty list. Flips to false when `AppRoot`
     /// reaps the scanner reply.
     pub scanning_folders: bool,
-    /// Index from original-message-id → draft (Phase 2.c, vu-nof). Built
+    /// Index from original-message-id → draft (Phase 2.c). Built
     /// off-thread alongside the folder-structure scan by walking every
     /// `Drafts/` maildir under the root and parsing each draft's
     /// `In-Reply-To` / `References` headers. Re-populated wholesale each

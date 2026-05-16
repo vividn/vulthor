@@ -144,7 +144,7 @@ impl TestMailDir {
             &self.create_draft_email(),
         );
 
-        // Phase 2.c (vu-nof) fixtures: two drafts pointing at INBOX
+        // Phase 2.c fixtures: two drafts pointing at INBOX
         // originals so the drafts-index test has predictable inputs.
         // One has body content (✏ chip), the other is empty (⏰ chip).
         self.write_email(
@@ -684,7 +684,7 @@ Best,
             .to_string()
     }
 
-    /// Phase 2.c (vu-nof) — draft pointing at INBOX `welcome-001` with
+    /// Phase 2.c — draft pointing at INBOX `welcome-001` with
     /// non-empty body. Expected to render the `✏` chip on the original.
     fn create_reply_draft_with_body() -> String {
         r#"From: user@example.com
@@ -702,7 +702,7 @@ Thanks for the welcome message — really excited to try the new client.
         .to_string()
     }
 
-    /// Phase 2.c (vu-nof) — empty-body draft pointing at INBOX
+    /// Phase 2.c — empty-body draft pointing at INBOX
     /// `meeting-001`. Expected to render the `⏰` reply-later chip.
     fn create_reply_draft_empty() -> String {
         r#"From: user@example.com

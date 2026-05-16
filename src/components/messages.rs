@@ -205,7 +205,7 @@ impl MessagesComponent {
     }
 
     /// Pick the chip character for an original message based on the
-    /// drafts index (Phase 2.c, vu-nof). `Some('✏')` for an in-progress
+    /// drafts index (Phase 2.c). `Some('✏')` for an in-progress
     /// reply, `Some('⏰')` for an empty reply-later placeholder, `None`
     /// when there's no draft for this id. Pulled out of the renderer so
     /// it can be tested without a full Frame.
@@ -886,7 +886,7 @@ mod tests {
         );
     }
 
-    // --- Phase 2.c (vu-nof): chip selection contract. ---
+    // --- Phase 2.c: chip selection contract. ---
 
     fn draft(body_empty: bool) -> DraftInfo {
         DraftInfo {

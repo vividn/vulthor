@@ -21,7 +21,7 @@ use crate::error::Result;
 use crate::maildir::MaildirScanner;
 
 /// Off-thread scan payload: the folder-structure tree plus the
-/// drafts-by-parent-id index (Phase 2.c, vu-nof). Both are built on the
+/// drafts-by-parent-id index (Phase 2.c). Both are built on the
 /// same worker so the TUI takes one swap, not two — a half-applied
 /// state would leave chips pointing at the wrong tree.
 pub struct ScannedMaildir {
