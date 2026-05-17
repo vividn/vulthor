@@ -1,18 +1,18 @@
-// Phase 5.a — AI classifier interface stub.
-//
-// VISION.md §AI Classifier promises the classifier interface (trait,
-// suggestion chip, `;` accept key) ships in v1 disabled-by-default so
-// users can opt in later without code changes. This module owns the
-// trait, the [`Suggestion`] value type, and a [`NoopClassifier`] that
-// always returns `None`. Phase 6 will plug in the real embeddings
-// backend behind `[ai].backend = "embeddings"`; until then
-// [`build_classifier`] always hands back the no-op.
+// AI classifier interface. Phase 5.a shipped the trait + NoopClassifier
+// disabled-by-default. Phase 6.a (vu-po7) layers an embedding-backed
+// classifier behind the optional `ai` feature: a k-NN over a labelled
+// index of subject+body embeddings, gated at runtime by `[ai].enabled`
+// and the presence of an ONNX model file. Default builds (no feature)
+// still get NoopClassifier and pay none of the fastembed/ort cost.
 
 use std::sync::Arc;
 
 use crate::config::AiConfig;
 use crate::email::Email;
 use crate::keymap::Action;
+
+#[cfg(feature = "ai")]
+pub mod embedding;
 
 /// A single classifier suggestion for one email. `action` is one of the
 /// keymap intents the chip / `;` accept key resolves into; `confidence`
@@ -39,8 +39,8 @@ pub trait Classifier: Send + Sync {
 
 /// Disabled-by-default classifier. Always returns `None` so the chip
 /// never renders and the `;` accept key is a no-op. Used whenever
-/// `[ai].enabled = false` (the default) or the real backend is not
-/// available yet.
+/// `[ai].enabled = false` (the default), the `ai` feature is not
+/// compiled in, or model/index loading fails at startup.
 pub struct NoopClassifier;
 
 impl Classifier for NoopClassifier {
@@ -49,12 +49,36 @@ impl Classifier for NoopClassifier {
     }
 }
 
-/// Build the runtime classifier from the `[ai]` config block. Phase 5.a
-/// always returns `NoopClassifier`; Phase 6 will branch on
-/// `config.enabled` / `config.backend` to load the real embeddings model.
-/// Returning an `Arc` lets AppRoot share the same instance with
-/// MessagesComponent without re-instantiating per render.
-pub fn build_classifier(_config: &AiConfig) -> Arc<dyn Classifier> {
+/// Build the runtime classifier from the `[ai]` config block.
+///
+/// Order of precedence (highest first):
+/// 1. `ai` feature not compiled in → `NoopClassifier`.
+/// 2. `config.enabled = false` → `NoopClassifier`.
+/// 3. `config.backend != "embeddings"` → `NoopClassifier`.
+/// 4. `config.model_path` missing/unset or model fails to load →
+///    `NoopClassifier` (with a stderr warning).
+/// 5. Otherwise → `EmbeddingClassifier` with the on-disk index loaded
+///    from `~/.local/share/vulthor/classifier.idx` (empty if the file
+///    does not exist yet — predictions return `None` until trained).
+pub fn build_classifier(config: &AiConfig) -> Arc<dyn Classifier> {
+    if !config.enabled {
+        return Arc::new(NoopClassifier);
+    }
+
+    #[cfg(feature = "ai")]
+    {
+        if config.backend == "embeddings" {
+            match embedding::build(config) {
+                Ok(c) => return Arc::new(c),
+                Err(e) => {
+                    eprintln!(
+                        "AI classifier disabled: failed to initialize embeddings backend ({e}). Falling back to NoopClassifier."
+                    );
+                }
+            }
+        }
+    }
+    let _ = config; // suppress unused warning when feature off
     Arc::new(NoopClassifier)
 }
 
@@ -94,9 +118,8 @@ mod tests {
         assert_eq!(c.suggest(&email()), None);
     }
 
-    /// Default config (`enabled = false`) wires up the no-op. Phase 6
-    /// will start returning a real backend when `enabled = true`; the
-    /// stub keeps the contract by always returning `NoopClassifier`.
+    /// Default config (`enabled = false`) wires up the no-op regardless
+    /// of feature compilation state.
     #[test]
     fn build_classifier_returns_noop_for_default_config() {
         let cfg = AiConfig::default();
@@ -104,12 +127,13 @@ mod tests {
         assert!(c.suggest(&email()).is_none());
     }
 
-    /// Even with `enabled = true`, Phase 5.a still hands back the
-    /// no-op — the real model lands in Phase 6. Asserting this here
-    /// makes the placeholder explicit so a future change to
-    /// `build_classifier` updates the test in lockstep.
+    /// Without the `ai` feature, even `enabled = true` resolves to the
+    /// no-op — the feature gate is the hard guard. With the feature on
+    /// but no `model_path`, the embeddings builder errors and we fall
+    /// back to NoopClassifier (covered separately in the embedding
+    /// module tests). Either way the public contract is the same.
     #[test]
-    fn build_classifier_is_noop_even_when_enabled_in_phase_5a() {
+    fn build_classifier_is_noop_without_model_path() {
         let cfg = AiConfig {
             enabled: true,
             ..AiConfig::default()
