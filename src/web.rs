@@ -5,13 +5,15 @@ use axum::{
     Router,
     extract::State,
     http::{HeaderValue, StatusCode},
-    middleware::{Next, from_fn},
+    middleware::{Next, from_fn, from_fn_with_state},
     response::{Html, IntoResponse, Json, Response, Sse},
     routing::get,
 };
 use futures::stream::{self, Stream};
+use rand::RngCore;
 use serde::Serialize;
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
@@ -19,6 +21,50 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
+
+/// Generate a 128-bit cryptographically random token, hex-encoded.
+///
+/// Used as the per-launch shared secret gating the web pane. The output is
+/// 32 ASCII hex chars (URL-safe without encoding) so it can ride in both
+/// `?t=<token>` query strings and the `X-Vulthor-Token` header without
+/// escape rules. New token on every `WebServer::new` — no on-disk persistence.
+pub fn generate_token() -> String {
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+/// Return `true` when `bind` parses as a non-loopback IP literal.
+///
+/// `Config::validate` already rejects non-IP values, so anything that fails
+/// to parse here is treated as non-public (it could never have reached
+/// runtime). Public binds (`0.0.0.0`, a LAN IP, etc.) trigger a startup
+/// WARN because the per-launch token is then the *only* gate between
+/// untrusted clients and the focused email.
+pub fn is_public_bind(bind: &str) -> bool {
+    bind.parse::<IpAddr>()
+        .map(|ip| !ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Constant-time byte-slice equality. Length-leaking but otherwise
+/// branch-free over the contents — enough to deny a remote attacker the
+/// ability to recover the token byte-by-byte via timing. We avoid pulling
+/// in `subtle` for a single comparison.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
 
 /// State threaded through axum handlers.
 ///
@@ -45,6 +91,11 @@ pub struct WebState {
     /// Handlers forward `HeadersOnly` emails here so the body parse
     /// happens off the axum executor.
     pub body_request_tx: Sender<PathBuf>,
+    /// Per-launch loopback token. Required on every request (`?t=<token>`
+    /// or `X-Vulthor-Token: <token>`) except `/healthz` and `/health`. The
+    /// HTML shells embed it into subresource URLs; `app.js` reads it from
+    /// `window.location.search` for SSE / fetch.
+    pub token: Arc<str>,
 }
 
 impl WebState {
@@ -104,6 +155,7 @@ impl WebServer {
         focused_pane: Arc<AtomicU8>,
         body_request_tx: Sender<PathBuf>,
     ) -> Self {
+        let token: Arc<str> = Arc::from(generate_token());
         Self {
             bind,
             port,
@@ -111,8 +163,22 @@ impl WebServer {
                 email_store,
                 focused_pane,
                 body_request_tx,
+                token,
             },
         }
+    }
+
+    /// The opaque shared secret a client must present on every non-health
+    /// request. Surfaced for the startup banner so the TUI can print a
+    /// URL that immediately works in a browser. Not stored to disk.
+    pub fn token(&self) -> &str {
+        &self.state.token
+    }
+
+    /// Full URL clients should open, with `?t=<token>` appended. Cheap
+    /// to call — formats from `bind`/`port`/`token`.
+    pub fn url(&self) -> String {
+        format!("http://{}:{}/?t={}", self.bind, self.port, self.token())
     }
 
     /// Bind to `<bind>:<port>` and serve until the listener errors.
@@ -177,6 +243,55 @@ async fn security_headers_middleware(
     apply_security_headers(next.run(req).await)
 }
 
+/// Paths exempt from token auth. Kept tiny on purpose — every additional
+/// exempt path is a route that can be read without holding the per-launch
+/// secret, and the design intent (vu-fi1) is "/healthz only". `/health`
+/// rides along because it has been there pre-token and the phase-4
+/// integration test pokes it from the same shell that doesn't know the
+/// token; both names trivially answer the same liveness check.
+fn is_auth_exempt(path: &str) -> bool {
+    matches!(path, "/healthz" | "/health")
+}
+
+/// Pull the presented token out of an incoming request. The `?t=<token>`
+/// query param is the wire form embedded by the HTML shells and used by
+/// `app.js`; the `X-Vulthor-Token` header is provided as the
+/// scriptable alternative so a fetch client can avoid leaking the token
+/// into server access logs via the request line. First match wins.
+fn presented_token(req: &axum::http::Request<axum::body::Body>) -> Option<String> {
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            if let Some(value) = pair.strip_prefix("t=") {
+                return Some(value.to_string());
+            }
+        }
+    }
+    req.headers()
+        .get("x-vulthor-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+/// Reject every non-exempt request that does not present the per-launch
+/// token. Constant-time comparison so an attacker probing 127.0.0.1
+/// cannot recover the token via response-time differences.
+pub(crate) async fn auth_middleware(
+    State(state): State<WebState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if is_auth_exempt(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let presented = presented_token(&req);
+    if let Some(t) = presented {
+        if ct_eq(t.as_bytes(), state.token.as_bytes()) {
+            return next.run(req).await;
+        }
+    }
+    StatusCode::UNAUTHORIZED.into_response()
+}
+
 /// Build the full axum router with all routes and middleware applied.
 /// Used by both [`WebServer::start`] and by tests so they exercise the
 /// same wiring (including the security-headers layer).
@@ -184,6 +299,7 @@ pub(crate) fn build_router(state: WebState) -> Router {
     Router::new()
         .route("/", get(serve_email))
         .route("/health", get(health_check))
+        .route("/healthz", get(health_check))
         .route("/styles.css", get(serve_styles))
         .route("/app.js", get(serve_app_js))
         .route("/vulthor_bird.png", get(serve_bird))
@@ -193,6 +309,10 @@ pub(crate) fn build_router(state: WebState) -> Router {
         .route("/sw.js", get(serve_service_worker))
         .route("/events", get(email_events))
         .route("/api/current-email", get(get_current_email_json))
+        // Auth runs *before* the handler (so unauthorized clients never reach
+        // it) but *after* the security-headers layer is registered — order is
+        // last-registered-runs-first, so security headers wrap the 401 too.
+        .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(from_fn(security_headers_middleware))
         .with_state(state)
 }
@@ -215,13 +335,14 @@ pub(crate) async fn serve_email(State(state): State<WebState>) -> Response {
         store.current_email_for_web(pane).cloned()
     };
 
+    let token = state.token.as_ref();
     if let Some(email) = snapshot {
         if matches!(email.load_state, EmailLoadState::HeadersOnly) {
             state.request_body_load(email.file_path.clone());
         }
-        Html(generate_email_html(&email)).into_response()
+        Html(generate_email_html(&email, token)).into_response()
     } else {
-        Html(generate_welcome_html()).into_response()
+        Html(generate_welcome_html(token)).into_response()
     }
 }
 
@@ -372,6 +493,20 @@ async fn email_events(
     )
 }
 
+/// Add `Cache-Control: no-store` and `Vary: Origin` to a response.
+///
+/// The JSON endpoint surfaces email content keyed to the TUI's focus; a cache
+/// hit on a stale message would leak whichever message was focused before.
+/// `Vary: Origin` keeps an intermediate cache from collapsing cross-origin
+/// preflight variants (we don't expect CORS hits, but the header costs
+/// nothing and matches the spec called out in vu-fi1).
+fn apply_no_cache_headers(mut response: Response) -> Response {
+    let h = response.headers_mut();
+    h.insert("cache-control", HeaderValue::from_static("no-store"));
+    h.insert("vary", HeaderValue::from_static("Origin"));
+    response
+}
+
 async fn get_current_email_json(State(state): State<WebState>) -> Response {
     let pane = state.focused_pane();
     // Snapshot the visible state under the lock, then drop it before doing
@@ -381,20 +516,22 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
         let store = match state.email_store.lock() {
             Ok(s) => s,
             Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(EmailData {
-                        has_email: false,
-                        subject: String::new(),
-                        from: String::new(),
-                        to: String::new(),
-                        date: String::new(),
-                        body_html: "Error: Could not access application state".to_string(),
-                        attachments: vec![],
-                        email_id: "error".to_string(),
-                    }),
-                )
-                    .into_response();
+                return apply_no_cache_headers(
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(EmailData {
+                            has_email: false,
+                            subject: String::new(),
+                            from: String::new(),
+                            to: String::new(),
+                            date: String::new(),
+                            body_html: "Error: Could not access application state".to_string(),
+                            attachments: vec![],
+                            email_id: "error".to_string(),
+                        }),
+                    )
+                        .into_response(),
+                );
             }
         };
         let folder_indices = store.current_folder.clone();
@@ -436,33 +573,37 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
             })
             .collect();
 
-        Json(EmailData {
-            has_email: true,
-            subject: email.headers.subject.clone(),
-            from: email.headers.from.clone(),
-            to: email.headers.to.clone(),
-            date: email.headers.date.clone(),
-            body_html: body_content,
-            attachments,
-            email_id,
-        })
-        .into_response()
+        apply_no_cache_headers(
+            Json(EmailData {
+                has_email: true,
+                subject: email.headers.subject.clone(),
+                from: email.headers.from.clone(),
+                to: email.headers.to.clone(),
+                date: email.headers.date.clone(),
+                body_html: body_content,
+                attachments,
+                email_id,
+            })
+            .into_response(),
+        )
     } else {
-        Json(EmailData {
-            has_email: false,
-            subject: String::new(),
-            from: String::new(),
-            to: String::new(),
-            date: String::new(),
-            body_html: String::new(),
-            attachments: vec![],
-            email_id,
-        })
-        .into_response()
+        apply_no_cache_headers(
+            Json(EmailData {
+                has_email: false,
+                subject: String::new(),
+                from: String::new(),
+                to: String::new(),
+                date: String::new(),
+                body_html: String::new(),
+                attachments: vec![],
+                email_id,
+            })
+            .into_response(),
+        )
     }
 }
 
-fn generate_email_html(email: &crate::email::Email) -> String {
+fn generate_email_html(email: &crate::email::Email, token: &str) -> String {
     let body_content = if let Some(html) = &email.body_html {
         html.clone()
     } else {
@@ -470,6 +611,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
         markdown_to_html(&email.body_text)
     };
     let body_srcdoc = escape_html_attr(&body_content);
+    let t = token;
 
     let attachments_html = if email.has_attachments() {
         let mut attachments_list = String::new();
