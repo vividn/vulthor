@@ -30,6 +30,7 @@ tokio = { version = "1.0", features = ["full"] }
 axum = "0.7"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
 mail-parser = "0.11"
 walkdir = "2.0"
@@ -44,7 +45,6 @@ ammonia = "4"
 rand = "0.8"
 
 [dev-dependencies]
-serde_json = "1.0"
 tower = { version = "0.5", features = ["util"] }
 criterion = "0.5"
 insta = "1.41"
