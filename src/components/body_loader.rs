@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
-use crate::email::{Attachment, Email, InlineImage};
+use crate::email::{Attachment, Email};
 
 /// Result of a body-load attempt. `parsed` is `None` when `parse_from_file`
 /// failed; AppRoot still uses the path to free its in-flight slot.
@@ -34,14 +34,12 @@ pub struct LoadedBody {
 /// Successfully parsed body payload — the body-bearing slice of an
 /// [`Email`]. Used in [`LoadedBody::parsed`].
 pub struct ParsedBody {
-    /// `text/plain` body, when the message carries one.
-    pub body_plain: Option<String>,
-    /// `text/html` body (sanitized), when the message carries one.
+    /// Plain-text body, decoded and flattened by `mail-parser`.
+    pub body_text: String,
+    /// HTML body, when the message carries one.
     pub body_html: Option<String>,
-    /// Regular attachment metadata.
+    /// Attachment metadata.
     pub attachments: Vec<Attachment>,
-    /// Inline-image parts (cid-referenced).
-    pub inline_images: Vec<InlineImage>,
 }
 
 /// Handle to the off-thread body-parser worker. Holds the request /
@@ -64,10 +62,9 @@ impl BodyLoader {
                 let mut email = Email::new(path.clone());
                 let parsed = match email.parse_from_file() {
                     Ok(()) => Some(ParsedBody {
-                        body_plain: email.body_plain.take(),
+                        body_text: std::mem::take(&mut email.body_text),
                         body_html: email.body_html.take(),
                         attachments: std::mem::take(&mut email.attachments),
-                        inline_images: std::mem::take(&mut email.inline_images),
                     }),
                     Err(_) => None,
                 };
@@ -148,8 +145,8 @@ mod tests {
         assert_eq!(result.path, file);
         let parsed = result.parsed.expect("parse must succeed for valid fixture");
         assert!(
-            parsed.body_plain.is_some() || parsed.body_html.is_some(),
-            "parsed body must contain either text/plain or text/html",
+            !parsed.body_text.is_empty(),
+            "parsed body must contain text"
         );
     }
 

@@ -492,8 +492,8 @@ fn quoted_body(original: &Email) -> String {
         "On {}, {} wrote:",
         original.headers.date, original.headers.from
     );
-    let body = original.display_body();
-    let quoted = body
+    let quoted = original
+        .body_text
         .lines()
         .map(|l| format!("> {}", l))
         .collect::<Vec<_>>()
@@ -516,9 +516,8 @@ fn forwarded_body(original: &Email) -> String {
     out.push_str(&format!("Subject: {}\n", original.headers.subject));
     out.push_str(&format!("To: {}\n", original.headers.to));
     out.push('\n');
-    let body = original.display_body();
-    out.push_str(&body);
-    if !body.ends_with('\n') {
+    out.push_str(&original.body_text);
+    if !original.body_text.ends_with('\n') {
         out.push('\n');
     }
     out
@@ -887,7 +886,7 @@ mod tests {
             date: "2026-05-16T12:00:00+00:00".to_string(),
             message_id: "orig-1@example.com".to_string(),
         };
-        e.body_plain = Some("Hey,\nWant to grab lunch?\n".to_string());
+        e.body_text = "Hey,\nWant to grab lunch?\n".to_string();
         e
     }
 

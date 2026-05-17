@@ -570,7 +570,7 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
         } else if let Some(html) = &email.body_html {
             html.clone()
         } else {
-            markdown_to_html(&email.display_body())
+            markdown_to_html(&email.body_text)
         };
 
         let attachments: Vec<AttachmentData> = email
@@ -618,7 +618,7 @@ fn generate_email_html(email: &crate::email::Email, token: &str) -> String {
         html.clone()
     } else {
         // Convert plain text to HTML
-        markdown_to_html(&email.display_body())
+        markdown_to_html(&email.body_text)
     };
     let body_srcdoc = escape_html_attr(&body_content);
     let t = token;
@@ -1369,8 +1369,8 @@ mod tests {
             "web observer must not transition load_state",
         );
         assert!(
-            email.body_plain.is_none(),
-            "body_plain must be None until BodyLoader fills it in",
+            email.body_text.is_empty(),
+            "body_text must be empty until BodyLoader fills it in",
         );
         assert!(
             email.body_html.is_none(),

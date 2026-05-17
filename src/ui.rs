@@ -57,7 +57,7 @@ impl UI {
         self.draw_main_layout(
             f, store, layout, folders, messages, content, accounts, draft, config, theme, size,
         );
-        self.draw_status_bar(f, store, layout, status_message, theme, size);
+        self.draw_status_bar(f, layout, status_message, theme, size);
         // Modal overlays drawn last so they sit on top of every pane;
         // each `render_modal` is a no-op when its modal is hidden. The
         // folder picker is centered; the search modal is bottom-of-
@@ -401,7 +401,6 @@ impl UI {
     fn draw_status_bar(
         &mut self,
         f: &mut Frame,
-        store: &EmailStore,
         lay: &Layout,
         status_message: &Option<String>,
         theme: &Theme,
@@ -422,14 +421,6 @@ impl UI {
             help_text,
             Style::default().fg(theme.gray_dark),
         ));
-
-        if let Some(indicator) = body_parts_indicator(store) {
-            status_text.push(Span::raw(" | "));
-            status_text.push(Span::styled(
-                indicator,
-                Style::default().fg(theme.cyan_light),
-            ));
-        }
 
         if let Some(message) = status_message {
             status_text.push(Span::raw(" | "));
@@ -500,27 +491,6 @@ pub(crate) fn help_screen_lines() -> Vec<&'static str> {
         "",
         "Press any key to return...",
     ]
-}
-
-/// Status-bar body-parts indicator. Returns:
-/// - `Some("TXT+HTML")` when the selected email carries both a
-///   `text/plain` and a `text/html` body (i.e. `multipart/alternative`).
-/// - `Some("HTML")` when only an HTML body is present.
-/// - `None` otherwise (plain-only, headers-only, no selection).
-///
-/// Surfaces vu-hy8's correctness work in the UI: the user sees at a
-/// glance that a future Shift+P toggle (vu-X plaintext bead) would
-/// have an alternate rendition to switch to.
-pub(crate) fn body_parts_indicator(store: &EmailStore) -> Option<String> {
-    let email = store.get_selected_email()?;
-    if !matches!(email.load_state, EmailLoadState::FullyLoaded) {
-        return None;
-    }
-    match (&email.body_plain, &email.body_html) {
-        (Some(_), Some(_)) => Some("TXT+HTML".to_string()),
-        (None, Some(_)) => Some("HTML".to_string()),
-        _ => None,
-    }
 }
 
 /// Status-bar hint string. Reflects the keys most worth surfacing

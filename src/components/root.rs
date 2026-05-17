@@ -727,10 +727,9 @@ impl AppRoot {
             if let Some(parsed) = loaded.parsed {
                 store.apply_loaded_body(
                     &loaded.path,
-                    parsed.body_plain,
+                    parsed.body_text,
                     parsed.body_html,
                     parsed.attachments,
-                    parsed.inline_images,
                 );
             }
         }
@@ -2640,7 +2639,7 @@ mod tests {
             email.load_state,
             crate::email::EmailLoadState::HeadersOnly
         ));
-        assert!(email.body_plain.is_none());
+        assert!(email.body_text.is_empty());
     }
 
     #[test]
