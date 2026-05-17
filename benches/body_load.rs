@@ -26,7 +26,7 @@ fn bench_load_short_body(c: &mut Criterion) {
         b.iter(|| {
             let mut email = Email::new(path.clone());
             email.parse_from_file().expect("parse");
-            black_box(email.body_text.len());
+            black_box(email.body_plain.as_deref().map(|s| s.len()).unwrap_or(0));
         });
     });
 }
