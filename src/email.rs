@@ -1226,6 +1226,173 @@ mod tests {
         assert_eq!(att.size, payload.len(), "size must match raw_bytes length",);
     }
 
+    // --- vu-hy8: MIME multipart selection / inline-image preservation. ---
+
+    fn write_eml(dir: &TempDir, name: &str, raw: &str) -> PathBuf {
+        let p = dir.path().join(name);
+        fs::write(&p, raw).unwrap();
+        p
+    }
+
+    /// `multipart/alternative` must populate **both** `body_plain` and
+    /// `body_html` with the raw parts (HTML sanitized at the boundary).
+    /// The legacy behaviour leaned on `body_text(0)` which collapsed the
+    /// distinction when one rendition was missing — this test pins the
+    /// new contract so a regression to either side is caught.
+    #[test]
+    fn parse_body_multipart_alternative_keeps_both_parts() {
+        let temp = TempDir::new().unwrap();
+        let raw = "From: a@b.test\r\n\
+                   To: c@d.test\r\n\
+                   Subject: alt\r\n\
+                   MIME-Version: 1.0\r\n\
+                   Content-Type: multipart/alternative; boundary=ALT\r\n\
+                   \r\n\
+                   --ALT\r\n\
+                   Content-Type: text/plain; charset=UTF-8\r\n\
+                   \r\n\
+                   plain rendition\r\n\
+                   --ALT\r\n\
+                   Content-Type: text/html; charset=UTF-8\r\n\
+                   \r\n\
+                   <p>html rendition</p>\r\n\
+                   --ALT--\r\n";
+        let path = write_eml(&temp, "alt.eml", raw);
+
+        let mut email = Email::new(path);
+        email.parse_from_file().unwrap();
+
+        assert_eq!(
+            email.body_plain.as_deref(),
+            Some("plain rendition\r\n"),
+            "text/plain part must populate body_plain verbatim",
+        );
+        let html = email
+            .body_html
+            .as_deref()
+            .expect("text/html part must populate body_html");
+        assert!(
+            html.contains("html rendition"),
+            "html body must survive sanitization: {}",
+            html,
+        );
+    }
+
+    /// `multipart/related` (HTML body + inline `cid:` images) must
+    /// preserve the inline parts in `inline_images` and keep them out
+    /// of the regular `attachments` list — that's what makes future
+    /// `cid:` resolution possible without re-reading the source `.eml`.
+    #[test]
+    fn parse_body_multipart_related_preserves_inline_images() {
+        let temp = TempDir::new().unwrap();
+        // 1×1 transparent PNG, base64-encoded, used as the inline image.
+        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let raw = format!(
+            "From: a@b.test\r\n\
+             To: c@d.test\r\n\
+             Subject: rel\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=REL; type=\"text/html\"\r\n\
+             \r\n\
+             --REL\r\n\
+             Content-Type: text/html; charset=UTF-8\r\n\
+             \r\n\
+             <p>see <img src=\"cid:pixel@v.test\"></p>\r\n\
+             --REL\r\n\
+             Content-Type: image/png\r\n\
+             Content-Transfer-Encoding: base64\r\n\
+             Content-ID: <pixel@v.test>\r\n\
+             Content-Disposition: inline\r\n\
+             \r\n\
+             {}\r\n\
+             --REL--\r\n",
+            png_b64,
+        );
+        let path = write_eml(&temp, "rel.eml", &raw);
+
+        let mut email = Email::new(path);
+        email.parse_from_file().unwrap();
+
+        assert_eq!(
+            email.inline_images.len(),
+            1,
+            "exactly one inline image must be preserved",
+        );
+        let img = &email.inline_images[0];
+        assert_eq!(
+            img.content_id, "pixel@v.test",
+            "Content-ID brackets must be stripped",
+        );
+        assert_eq!(img.content_type, "image/png");
+        assert!(
+            !img.raw_bytes.is_empty(),
+            "inline image bytes must be decoded",
+        );
+        assert!(
+            email.attachments.is_empty(),
+            "inline images must NOT pollute the attachment strip, got: {:?}",
+            email.attachments,
+        );
+    }
+
+    /// HTML-only emails (no `text/plain` part) must leave `body_plain`
+    /// at `None` so the new field accurately reflects what's in the
+    /// MIME tree. `display_body` is responsible for surfacing readable
+    /// text in the TUI — tested separately.
+    #[test]
+    fn parse_body_html_only_leaves_body_plain_none() {
+        let temp = TempDir::new().unwrap();
+        let raw = "From: a@b.test\r\n\
+                   To: c@d.test\r\n\
+                   Subject: html-only\r\n\
+                   MIME-Version: 1.0\r\n\
+                   Content-Type: text/html; charset=UTF-8\r\n\
+                   \r\n\
+                   <p>html only</p>\r\n";
+        let path = write_eml(&temp, "html.eml", raw);
+
+        let mut email = Email::new(path);
+        email.parse_from_file().unwrap();
+
+        assert!(
+            email.body_plain.is_none(),
+            "no text/plain part → body_plain must be None",
+        );
+        assert!(
+            email.body_html.as_deref().unwrap_or("").contains("html only"),
+            "html part must populate body_html",
+        );
+        // display_body falls back through html_to_text so the TUI
+        // content pane still has something to show.
+        assert!(email.display_body().contains("html only"));
+    }
+
+    /// Plain-only emails (no `text/html` part) leave `body_html` at
+    /// `None`. Inverse of the html-only case; both are common in
+    /// machine-generated mail (mailing lists, cron, msmtp logs).
+    #[test]
+    fn parse_body_plain_only_leaves_body_html_none() {
+        let temp = TempDir::new().unwrap();
+        let raw = "From: a@b.test\r\n\
+                   To: c@d.test\r\n\
+                   Subject: plain-only\r\n\
+                   MIME-Version: 1.0\r\n\
+                   Content-Type: text/plain; charset=UTF-8\r\n\
+                   \r\n\
+                   plain only body\r\n";
+        let path = write_eml(&temp, "plain.eml", raw);
+
+        let mut email = Email::new(path);
+        email.parse_from_file().unwrap();
+
+        assert_eq!(email.body_plain.as_deref(), Some("plain only body\r\n"));
+        assert!(
+            email.body_html.is_none(),
+            "no text/html part → body_html must be None",
+        );
+        assert_eq!(email.display_body(), "plain only body\r\n");
+    }
+
     #[test]
     fn test_email_html_content() {
         let test_maildir = TestMailDir::new();
