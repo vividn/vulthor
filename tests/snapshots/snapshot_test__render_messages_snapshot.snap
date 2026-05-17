@@ -1,0 +1,14 @@
+---
+source: tests/snapshot_test.rs
+expression: rendered
+---
+┌Emails - Mail > INBOX (5)─────────────────────────────────────────────────────┐
+│•     alice                    Welcome aboard                   2024-01-02    │
+│      bob                      Re: project status               2024-01-03    │
+│•     carol                    Lunch tomorrow?                  2024-01-04    │
+│      dave                     Q1 roadmap draft                 2024-01-05    │
+│      eve                      Weekly digest                    2024-01-06    │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

@@ -265,6 +265,26 @@ cargo clippy
 cargo test
 ```
 
+### Snapshot tests
+
+Pane rendering is guarded by ratatui `TestBackend` snapshot tests in
+`tests/snapshot_test.rs`; the expected output lives next to them under
+`tests/snapshots/*.snap`. Snapshots cover the Folders, Messages,
+Content, and Draft panes — a UI tweak that changes layout or text will
+fail these tests until the snapshots are reviewed and re-accepted.
+
+```bash
+cargo install cargo-insta            # one-time
+cargo test --test snapshot_test      # run the suite
+cargo insta review                   # interactively accept changes
+# or, non-interactive equivalents:
+INSTA_UPDATE=always cargo test --test snapshot_test   # accept every diff
+cargo insta accept                                    # accept pending .snap.new files
+```
+
+Always commit the updated `.snap` files alongside the code change that
+produced them.
+
 ### Benchmarks
 
 Performance regressions are guarded by a criterion benchmark suite in
