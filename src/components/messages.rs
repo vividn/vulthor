@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local};
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,

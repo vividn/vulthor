@@ -315,9 +315,24 @@ impl Keymap {
 
     /// Look up the action bound to a key sequence (no normalisation —
     /// sequences are user-typed lowercase letters in practice).
-    #[allow(dead_code)]
     pub fn lookup_sequence(&self, keys: &[KeyEvent]) -> Option<Action> {
         self.sequences.get(keys).copied()
+    }
+
+    /// Iterate actions whose sequence binding has `prefix` as a strict
+    /// prefix (i.e. the bound sequence is longer than `prefix` and
+    /// starts with it). AppRoot uses this to decide whether to hold the
+    /// pending key buffer — if no meaningful sequence remains to type,
+    /// the buffered prefix is dropped and dispatch falls through to the
+    /// single-key table.
+    pub fn sequences_with_prefix<'a>(
+        &'a self,
+        prefix: &'a [KeyEvent],
+    ) -> impl Iterator<Item = Action> + 'a {
+        self.sequences
+            .iter()
+            .filter(move |(seq, _)| seq.len() > prefix.len() && seq.starts_with(prefix))
+            .map(|(_, a)| *a)
     }
 
     /// Iterate every (key, action) pair across both tables. Tests use
