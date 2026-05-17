@@ -14,6 +14,7 @@
 use crate::config::Config;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// Severity tier of a single [`DoctorCheck`]. `Ok` and `Warn` keep the
 /// exit code at 0; `Fail` flips it to 2.
@@ -82,6 +83,7 @@ pub fn run_doctor(config: &Config) -> Vec<DoctorCheck> {
         check_binary_optional("mbsync", "MailDir sync", &path_var),
         check_themes_dir(home.as_deref()),
         check_ai_model(config),
+        check_log_dir(home.as_deref(), config),
     ]
 }
 
@@ -225,6 +227,50 @@ pub(crate) fn check_ai_model(config: &Config) -> DoctorCheck {
             "ai-model",
             "[ai].enabled = true but [ai].model_path is unset",
         ),
+    }
+}
+
+/// Check (h) — routine-log directory health. Reports the on-disk
+/// footprint and the oldest file's age so an operator can sanity-check
+/// the rotation/pruning policy without grepping the filesystem. Never
+/// fails: an absent directory just means we haven't written a log
+/// line yet.
+pub(crate) fn check_log_dir(home: Option<&Path>, config: &Config) -> DoctorCheck {
+    let Some(h) = home else {
+        return DoctorCheck::warn("log-dir", "no HOME resolved; log directory unavailable");
+    };
+    let dir = h.join(".config/vulthor/logs");
+    if !dir.exists() {
+        return DoctorCheck::ok(
+            "log-dir",
+            format!(
+                "not yet created at {} (cap {} MB / {} days)",
+                dir.display(),
+                config.log.max_size_mb,
+                config.log.max_age_days
+            ),
+        );
+    }
+    match crate::log::log_dir_stats(&dir, SystemTime::now()) {
+        Ok(stats) => {
+            let size_kib = stats.total_bytes / 1024;
+            let oldest = match stats.oldest_age {
+                Some(d) => format!("oldest {} days", d.as_secs() / 86_400),
+                None => "no log files".to_string(),
+            };
+            DoctorCheck::ok(
+                "log-dir",
+                format!(
+                    "{} files, {} KiB, {} (cap {} MB / {} days)",
+                    stats.file_count,
+                    size_kib,
+                    oldest,
+                    config.log.max_size_mb,
+                    config.log.max_age_days
+                ),
+            )
+        }
+        Err(e) => DoctorCheck::warn("log-dir", format!("cannot stat {}: {e}", dir.display())),
     }
 }
 

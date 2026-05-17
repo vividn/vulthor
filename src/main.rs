@@ -20,6 +20,7 @@ mod email;
 mod error;
 mod keymap;
 mod layout;
+mod log;
 mod maildir;
 mod sanitizer;
 mod stats;
@@ -80,6 +81,19 @@ async fn main() -> Result<()> {
     if let Some(maildir_path) = args.maildir_path {
         config.maildir_path = maildir_path;
     }
+
+    // vu-bdy: prune aged-out routine logs and keep the rotating writer
+    // alive for the process lifetime. The handle is dropped at the end
+    // of `main` which closes the file; we don't yet have a logging
+    // framework to wire it into, but the disk discipline is in place
+    // when one lands.
+    let _log_writer = match log::init(&config.log) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("Warning: could not initialize log file: {e}");
+            None
+        }
+    };
 
     // Non-interactive subcommands fork here before any TUI / web /
     // scanner state is set up — `doctor` is a pure diagnostic and
