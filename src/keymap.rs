@@ -69,6 +69,48 @@ pub enum Action {
     DraftDiscard,
 }
 
+/// Pane context an [`Action`] is most naturally associated with. Drives
+/// grouping in the `?` help overlay so users see folder-, message-,
+/// content-, and compose-pane bindings called out separately from
+/// global bindings that work in every pane.
+///
+/// Each action has exactly one scope; actions whose key fires in
+/// multiple panes (e.g. `j` moves the cursor in Folders, Messages, and
+/// Content) live under [`PaneScope::Global`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PaneScope {
+    Global,
+    Folders,
+    Messages,
+    Content,
+    Compose,
+}
+
+impl PaneScope {
+    /// Human-readable section header for the help overlay.
+    pub const fn title(self) -> &'static str {
+        match self {
+            PaneScope::Global => "Global",
+            PaneScope::Folders => "Folders",
+            PaneScope::Messages => "Messages",
+            PaneScope::Content => "Content",
+            PaneScope::Compose => "Compose",
+        }
+    }
+
+    /// Display order in the help overlay: Global first, then panes in
+    /// view-progression order (Folders → Messages → Content → Compose).
+    pub const fn all() -> &'static [PaneScope] {
+        &[
+            PaneScope::Global,
+            PaneScope::Folders,
+            PaneScope::Messages,
+            PaneScope::Content,
+            PaneScope::Compose,
+        ]
+    }
+}
+
 impl Action {
     /// Canonical TOML name, used as the key in `[keybindings]`.
     pub const fn name(self) -> &'static str {
