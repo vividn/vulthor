@@ -22,6 +22,7 @@ mod keymap;
 mod layout;
 mod maildir;
 mod sanitizer;
+mod stats;
 mod theme;
 mod ui;
 mod undo;
@@ -87,6 +88,16 @@ async fn main() -> Result<()> {
         let checks = doctor::run_doctor(&config);
         doctor::print_report(&checks);
         std::process::exit(doctor::exit_code(&checks));
+    }
+
+    if let Some(Command::Stats { json }) = args.command {
+        let lines = stats::run_stats(&config);
+        if json {
+            stats::print_json(&lines);
+        } else {
+            stats::print_human(&lines);
+        }
+        std::process::exit(0);
     }
 
     // `-m` overrides the maildir for single-account runs; for

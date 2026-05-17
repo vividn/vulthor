@@ -35,14 +35,24 @@ pub struct CliArgs {
     pub command: Option<Command>,
 }
 
-/// Top-level CLI subcommands. Today only `doctor` exists; future
-/// non-interactive entrypoints (e.g. one-shot search) will land here.
+/// Top-level CLI subcommands. Future non-interactive entrypoints
+/// (e.g. one-shot search) will land here.
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Report runtime preconditions: config, MailDir layout, msmtp /
     /// notmuch / mbsync availability, AI model path. Exits 0 on
     /// OK/WARN, 2 on any FAIL.
     Doctor,
+    /// Summary statistics per account: total messages, unread, on-disk
+    /// size, oldest/newest dates, top 5 senders. Read-only walk of the
+    /// configured maildir(s); exits 0.
+    Stats {
+        /// Emit a machine-readable JSON array instead of the human
+        /// table. Round-trips through `serde_json` so downstream tools
+        /// can re-parse it.
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 /// `[web]` configuration block. Controls the embedded HTML viewer's

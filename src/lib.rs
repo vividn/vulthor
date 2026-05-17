@@ -19,6 +19,7 @@ pub mod keymap;
 pub mod layout;
 pub mod maildir;
 pub mod sanitizer;
+pub mod stats;
 pub mod theme;
 pub mod ui;
 pub mod undo;
