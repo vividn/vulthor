@@ -1,0 +1,28 @@
+Return-Path: <bob@example.com>
+From: Bob <bob@example.com>
+To: You <user@example.com>
+Subject: HTML newsletter
+Date: Wed, 15 Nov 2023 09:00:00 +0000
+Message-ID: <html-002@fixture.local>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="bound-002"
+
+--bound-002
+Content-Type: text/plain; charset=UTF-8
+
+Plain fallback for the HTML newsletter.
+
+--bound-002
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Newsletter</title></head>
+<body>
+  <h1 id="fixture-html-heading">Fixture HTML Newsletter</h1>
+  <p data-testid="newsletter-body">This is a multipart/alternative message with an HTML part.</p>
+  <a href="https://example.com/safe">Read more</a>
+</body>
+</html>
+
+--bound-002--

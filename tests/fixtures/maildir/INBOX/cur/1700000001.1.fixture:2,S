@@ -1,0 +1,18 @@
+Return-Path: <alice@example.com>
+From: Alice <alice@example.com>
+To: You <user@example.com>
+Subject: Plain text greeting
+Date: Tue, 14 Nov 2023 12:00:00 +0000
+Message-ID: <plain-001@fixture.local>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hello,
+
+This is a plain text message used by the fixture harness as the baseline
+case. No HTML, no attachments, no remote resources.
+
+The string FIXTURE_PLAIN_MARKER appears here so DOM assertions can find
+this email reliably.
+
+-- Alice
