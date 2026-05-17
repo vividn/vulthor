@@ -2,9 +2,10 @@
 //
 // `Layout` owns the slice of state that drives ratatui's pane composition:
 // which `View` (h/l) is showing, which `ActivePane` (Tab) has focus,
-// whether the content pane is hidden (Alt+c), and the `SelectionState`
-// indices each pane uses for its cursor. AppRoot owns one `Layout`
-// directly. There is no `Arc<Mutex<Layout>>` — only `EmailStore` ships
+// whether the content pane is hidden (Alt+c), and the attachment-pane
+// cursor in `SelectionState` (no AttachmentsComponent yet). Pane
+// components are canonical for their own cursors. AppRoot owns one
+// `Layout` directly. There is no `Arc<Mutex<Layout>>` — only `EmailStore` ships
 // across the AppRoot/web boundary.
 //
 // Methods on `View` and `Layout` mirror the old `App` methods 1:1 so the
@@ -222,8 +223,8 @@ pub enum PaneSwitchDirection {
 
 /// Pane composition state owned directly by `AppRoot`. Encapsulates
 /// which [`View`] is visible, which [`ActivePane`] has focus, whether
-/// the content pane is hidden (Alt+c), and the mirrored cursor
-/// indices in [`SelectionState`].
+/// the content pane is hidden (Alt+c), and the attachment-pane cursor
+/// in [`SelectionState`].
 #[derive(Debug)]
 pub struct Layout {
     /// Currently visible view (h/l progression).
