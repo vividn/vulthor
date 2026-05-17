@@ -19,3 +19,9 @@ target/
 # Added by cargo
 
 /target
+
+# Gas Town tooling artifacts (per-worktree, not source)
+/.beads
+/.claude
+/.runtime
+/CLAUDE.local.md
