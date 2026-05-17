@@ -264,3 +264,19 @@ cargo fmt --check
 cargo clippy
 cargo test
 ```
+
+### Benchmarks
+
+Performance regressions are guarded by a criterion benchmark suite in
+`benches/`. The three suites cover the user-visible perf surfaces from
+VISION.md (startup time, folder loading, body parsing):
+
+```bash
+cargo bench --bench startup       # cold + warm startup, first-paint work
+cargo bench --bench folder_scan   # scan 100 and 10 000-message folders
+cargo bench --bench body_load     # plain-text and HTML body parse + sanitize
+```
+
+Run all three with `cargo bench`. Criterion writes detailed reports to
+`target/criterion/`; pass `--save-baseline <name>` to record a baseline
+and `--baseline <name>` on a later run to diff against it.
