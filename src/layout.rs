@@ -236,6 +236,9 @@ pub struct Layout {
     pub content_pane_hidden: bool,
     /// Attachment-pane cursor (no dedicated component yet).
     pub selection: SelectionState,
+    /// `?` help overlay visibility (vu-dzm). When true, `ui.rs` paints
+    /// the keyboard cheatsheet on top of the normal pane layout.
+    pub show_help: bool,
 }
 
 impl Layout {
@@ -247,6 +250,7 @@ impl Layout {
             active_pane: ActivePane::Folders,
             content_pane_hidden: false,
             selection: SelectionState::default(),
+            show_help: false,
         }
     }
 

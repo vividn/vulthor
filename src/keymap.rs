@@ -114,6 +114,102 @@ impl Action {
         }
     }
 
+    /// Pane the action is conceptually associated with — drives the `?`
+    /// help overlay's section grouping. Actions that fire in multiple
+    /// panes (navigation, view-toggle, quit) live under
+    /// [`PaneScope::Global`]; pane-specific actions are tagged with
+    /// their owning pane.
+    pub const fn scope(self) -> PaneScope {
+        match self {
+            // Cursor / view / focus — global across every pane.
+            Action::MoveDown
+            | Action::MoveUp
+            | Action::PageDown
+            | Action::PageUp
+            | Action::ViewPrev
+            | Action::ViewNext
+            | Action::FocusNext
+            | Action::FocusPrev
+            | Action::Confirm
+            | Action::Back
+            | Action::JumpTop
+            | Action::JumpBottom
+            | Action::ToggleContentPane
+            | Action::ToggleViewer
+            | Action::ToggleHelp
+            | Action::CycleTheme
+            | Action::Quit
+            | Action::Search
+            | Action::SearchNext
+            | Action::SearchPrev => PaneScope::Global,
+            // Email-row actions only apply when a message is selected.
+            Action::Archive
+            | Action::Star
+            | Action::Delete
+            | Action::AcceptSuggestion
+            | Action::Undo
+            | Action::ReplyAll
+            | Action::Reply
+            | Action::ReplyLater
+            | Action::Forward
+            | Action::MoveToFolder
+            | Action::ToggleFlag
+            | Action::MarkUnread
+            | Action::JumpNextUnread
+            | Action::JumpPrevUnread => PaneScope::Messages,
+            // Open-attachment lives where the attachment list is.
+            Action::OpenAttachment => PaneScope::Content,
+            // Draft-pane lifecycle keys.
+            Action::DraftSend | Action::DraftEdit | Action::DraftDiscard => PaneScope::Compose,
+        }
+    }
+
+    /// Short user-facing description rendered next to the key in the
+    /// `?` help overlay. Phrasing follows imperative voice ("Reply to
+    /// sender") so the binding reads as a command.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Action::MoveDown => "Move down",
+            Action::MoveUp => "Move up",
+            Action::PageDown => "Page down",
+            Action::PageUp => "Page up",
+            Action::ViewPrev => "Previous view (broader)",
+            Action::ViewNext => "Next view (deeper)",
+            Action::FocusNext => "Focus next pane",
+            Action::FocusPrev => "Focus previous pane",
+            Action::Confirm => "Open / confirm",
+            Action::Back => "Back to parent folder",
+            Action::JumpTop => "Jump to top",
+            Action::JumpBottom => "Jump to bottom",
+            Action::JumpNextUnread => "Jump to next unread",
+            Action::JumpPrevUnread => "Jump to previous unread",
+            Action::Archive => "Archive email",
+            Action::Star => "Toggle star",
+            Action::Delete => "Delete (move to Trash)",
+            Action::AcceptSuggestion => "Accept AI suggestion",
+            Action::Undo => "Undo last action",
+            Action::ReplyAll => "Reply to all",
+            Action::Reply => "Reply to sender",
+            Action::ReplyLater => "Reply later (empty draft)",
+            Action::Forward => "Forward email",
+            Action::MoveToFolder => "Move to folder",
+            Action::ToggleFlag => "Toggle flag",
+            Action::MarkUnread => "Mark unread",
+            Action::OpenAttachment => "Open attachment",
+            Action::Search => "Search (notmuch)",
+            Action::SearchNext => "Next search hit",
+            Action::SearchPrev => "Previous search hit",
+            Action::ToggleContentPane => "Toggle content pane",
+            Action::ToggleViewer => "Toggle web viewer",
+            Action::ToggleHelp => "Toggle this help",
+            Action::CycleTheme => "Cycle theme preset",
+            Action::Quit => "Quit Vulthor",
+            Action::DraftSend => "Send draft",
+            Action::DraftEdit => "Edit draft in $EDITOR",
+            Action::DraftDiscard => "Discard draft",
+        }
+    }
+
     /// All actions, in declaration order. Used by tests asserting
     /// default-keymap coverage and by `from_name` to drive lookup
     /// without a hand-maintained reverse table.
@@ -311,6 +407,11 @@ fn char_event(c: char) -> KeyEvent {
 pub struct Keymap {
     single: HashMap<KeyEvent, Action>,
     sequences: HashMap<Vec<KeyEvent>, Action>,
+    /// Resolved `(action, key_string)` pairs preserved verbatim from
+    /// `DEFAULT_KEYMAP` plus user overrides. Drives the `?` help overlay
+    /// so it shows the exact key string a user would type (e.g. `Alt+c`,
+    /// `gr`, `Down`) rather than re-printing a `KeyEvent`.
+    bindings: Vec<(Action, String)>,
 }
 
 impl Keymap {
@@ -348,6 +449,14 @@ impl Keymap {
     #[allow(dead_code)]
     pub fn all_actions(&self) -> impl Iterator<Item = Action> + '_ {
         self.single.values().chain(self.sequences.values()).copied()
+    }
+
+    /// Iterate resolved `(action, key_string)` pairs in the order they
+    /// were declared in `DEFAULT_KEYMAP` (with user overrides appended).
+    /// The `?` help overlay uses this to render bindings without
+    /// reverse-mapping `KeyEvent` back to a human-readable string.
+    pub fn bindings(&self) -> impl Iterator<Item = (Action, &str)> + '_ {
+        self.bindings.iter().map(|(a, s)| (*a, s.as_str()))
     }
 
     /// Crossterm reports uppercase ASCII letters as `Char(c)` with
@@ -457,7 +566,11 @@ pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
         }
     }
 
-    Ok(Keymap { single, sequences })
+    Ok(Keymap {
+        single,
+        sequences,
+        bindings,
+    })
 }
 
 #[cfg(test)]
