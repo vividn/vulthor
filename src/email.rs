@@ -1,5 +1,6 @@
 use crate::error::{Result, VulthorError};
-use mail_parser::{Message, MessageParser, MimeHeaders};
+use mail_parser::{Message, MessageParser, MimeHeaders, PartType};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,23 @@ pub struct Attachment {
     pub raw_bytes: Vec<u8>,
 }
 
+/// Inline-image part referenced from an HTML body by `cid:<content-id>`.
+/// Populated when the message is `multipart/related` (or any structure
+/// whose `Content-Disposition: inline` parts carry a `Content-ID`).
+/// The renderer doesn't display these yet — they're preserved so a
+/// future bead can wire `cid:` resolution in the web pane without a
+/// re-parse from disk.
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    /// Bare `Content-ID` value with surrounding `<…>` stripped. Matches
+    /// the `cid:` URL suffix used by HTML bodies.
+    pub content_id: String,
+    /// MIME type formatted as `"type/subtype"`, e.g. `"image/png"`.
+    pub content_type: String,
+    /// Decoded payload bytes (the image data).
+    pub raw_bytes: Vec<u8>,
+}
+
 /// Lazy-load progress for an [`Email`]. The MailDir scanner only parses
 /// headers up front; full bodies and attachments are fetched off-thread
 /// by `BodyLoader` and applied via [`EmailStore::apply_loaded_body`].
@@ -65,8 +83,8 @@ pub struct Attachment {
 /// the body and showing a "Loading body…" placeholder.
 #[derive(Debug, Clone)]
 pub enum EmailLoadState {
-    /// Only the [`EmailHeaders`] are populated. `body_text`,
-    /// `body_html`, and `attachments` are empty.
+    /// Only the [`EmailHeaders`] are populated. `body_plain`,
+    /// `body_html`, `attachments`, and `inline_images` are empty.
     HeadersOnly,
     /// Full parse succeeded — body and attachments are populated.
     FullyLoaded,
@@ -84,6 +102,17 @@ pub struct MarkReadPlan {
     /// Target path under `<folder>/cur/` — same filename, sibling
     /// directory. The handler `fs::rename`s `from` → `to`.
     pub to: PathBuf,
+}
+
+/// Strip a single leading `<` and trailing `>` from a `Content-ID`
+/// value. RFC 2392 `cid:` URLs reference the bare id (no brackets),
+/// so we normalize at parse time.
+fn strip_angle_brackets(s: &str) -> &str {
+    let trimmed = s.trim();
+    trimmed
+        .strip_prefix('<')
+        .and_then(|rest| rest.strip_suffix('>'))
+        .unwrap_or(trimmed)
 }
 
 /// Translate a Maildir `…/<folder>/new/<name>` path into its
@@ -110,12 +139,22 @@ fn derive_cur_path(p: &std::path::Path) -> Option<PathBuf> {
 pub struct Email {
     /// Parsed RFC-822 headers (always populated post-scan).
     pub headers: EmailHeaders,
-    /// Plain-text body; empty while [`EmailLoadState::HeadersOnly`].
-    pub body_text: String,
-    /// HTML body, when the message carries one. Served to the web pane.
+    /// `text/plain` body, when the message carries one. `None` for
+    /// HTML-only messages and while [`EmailLoadState::HeadersOnly`].
+    /// For multipart/alternative messages both `body_plain` and
+    /// `body_html` are populated; the viewer chooses which to render.
+    pub body_plain: Option<String>,
+    /// `text/html` body (sanitized), when the message carries one.
+    /// Served to the web pane verbatim. `None` for plain-only messages.
     pub body_html: Option<String>,
-    /// Attachment metadata; populated alongside the body.
+    /// Attachment metadata; populated alongside the body. Inline image
+    /// parts (with `Content-ID`) live in [`Self::inline_images`] instead
+    /// so the attachment list shown in the TUI doesn't include them.
     pub attachments: Vec<Attachment>,
+    /// Inline-image parts referenced by `cid:` from `body_html`,
+    /// preserved verbatim. Empty for messages that aren't
+    /// `multipart/related` (or that have no `Content-ID` parts).
+    pub inline_images: Vec<InlineImage>,
     /// Current filesystem path. Updated in lockstep with on-disk
     /// renames so identity survives mark-read, move, and undo.
     pub file_path: PathBuf,
@@ -150,9 +189,10 @@ impl Email {
                 date: String::new(),
                 message_id: String::new(),
             },
-            body_text: String::new(),
+            body_plain: None,
             body_html: None,
             attachments: Vec::new(),
+            inline_images: Vec::new(),
             file_path,
             is_unread: false,
             is_flagged,
@@ -230,60 +270,109 @@ impl Email {
         Ok(())
     }
 
-    /// Parse email body elegantly using mail-parser's built-in text conversion
+    /// Parse the message body into the three canonical buckets:
+    /// `body_plain` (raw `text/plain` part), `body_html` (sanitized
+    /// `text/html` part), and `inline_images` (cid-referenced parts).
+    ///
+    /// Both buckets are populated independently — `multipart/alternative`
+    /// emails end up with both fields `Some`, while plain-only / HTML-only
+    /// emails leave the unused bucket `None`. The previous implementation
+    /// (`body_text(0)` + `body_html(0)`) converted HTML→text whenever the
+    /// `text/plain` part was missing, which masked the distinction.
     fn parse_body(&mut self, message: &Message) -> Result<()> {
-        // mail-parser automatically converts HTML to plain text when needed
-        // Try to get plain text first (index 0 = first text part)
-        if let Some(text_body) = message.body_text(0) {
-            self.body_text = text_body.to_string();
+        // text/plain — pull the raw text part *only*. Don't fall back
+        // to mail-parser's HTML→text conversion here; the renderer's
+        // `display_body` does that explicitly when nothing else is
+        // available.
+        if let Some(part) = message.text_part(0) {
+            if let PartType::Text(text) = &part.body {
+                self.body_plain = Some(text.as_ref().to_string());
+            }
         }
 
-        // Store HTML if available (for web serving). Sanitize at the
-        // boundary so the unsanitized string never reaches the in-memory
-        // struct — the web pane writes `body_html` straight into the
-        // browser via `innerHTML`, so any tag/handler that survives here
-        // is a direct XSS / exfiltration channel. See `sanitizer.rs`.
-        if let Some(html_body) = message.body_html(0) {
-            self.body_html = Some(crate::sanitizer::sanitize_email_html(&html_body));
+        // text/html — sanitize at this boundary so the unsanitized
+        // string never reaches the in-memory struct. The web pane
+        // writes `body_html` straight into the browser via `innerHTML`,
+        // so any tag/handler that survives here is a direct XSS /
+        // exfiltration channel. See `sanitizer.rs`.
+        if let Some(part) = message.html_part(0) {
+            if let PartType::Html(html) = &part.body {
+                self.body_html = Some(crate::sanitizer::sanitize_email_html(html.as_ref()));
+            }
         }
 
-        // Extract attachments
         self.extract_attachments(message)?;
 
         Ok(())
     }
 
-    /// Extract attachments elegantly using mail-parser
+    /// Walk every `attachment` slot and split it into either
+    /// [`Self::attachments`] (regular MIME attachments) or
+    /// [`Self::inline_images`] (inline parts with a `Content-ID`,
+    /// referenced from HTML bodies via `cid:`). mail-parser puts both
+    /// kinds into the same `attachments[]` list — we route on the
+    /// `PartType` discriminant + presence of a `Content-ID`.
     fn extract_attachments(&mut self, message: &Message) -> Result<()> {
-        // Iterate through all attachments using mail-parser's clean API
         let mut index = 0;
-        while let Some(attachment_part) = message.attachment(index) {
-            let filename = attachment_part
+        while let Some(part) = message.attachment(index) {
+            index += 1;
+
+            let content_type = part
+                .content_type()
+                .map(|ct| format!("{}/{}", ct.c_type, ct.subtype().unwrap_or("*")))
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            let raw_bytes = part.contents().to_vec();
+            let size = part.len();
+
+            // Inline parts with a Content-ID go to `inline_images` so
+            // they don't pollute the attachment strip. Anything else —
+            // including inline parts without a cid (rare) — falls
+            // through to the regular attachment bucket.
+            let is_inline_binary = matches!(part.body, PartType::InlineBinary(_));
+            let cid = part.content_id().map(|s| strip_angle_brackets(s).to_string());
+
+            if is_inline_binary {
+                if let Some(content_id) = cid {
+                    self.inline_images.push(InlineImage {
+                        content_id,
+                        content_type,
+                        raw_bytes,
+                    });
+                    continue;
+                }
+            }
+
+            let filename = part
                 .attachment_name()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "unnamed_attachment".to_string());
 
-            let content_type = attachment_part
-                .content_type()
-                .map(|ct| format!("{}/{}", ct.c_type, ct.subtype().unwrap_or("*")))
-                .unwrap_or_else(|| "application/octet-stream".to_string());
-
-            let size = attachment_part.len();
-            let raw_bytes = attachment_part.contents().to_vec();
-
-            let attachment = Attachment {
+            self.attachments.push(Attachment {
                 filename,
                 content_type,
                 size,
                 raw_bytes,
-            };
-
-            self.attachments.push(attachment);
-            index += 1;
+            });
         }
 
         Ok(())
     }
+
+    /// Best plain-text rendition of the body for terminal display:
+    /// prefers `body_plain` (the raw `text/plain` part), then falls
+    /// back to a conversion of `body_html` so HTML-only emails still
+    /// surface readable text in the TUI. Empty string when neither is
+    /// present or the email is `HeadersOnly`.
+    pub fn display_body(&self) -> Cow<'_, str> {
+        if let Some(plain) = &self.body_plain {
+            return Cow::Borrowed(plain.as_str());
+        }
+        if let Some(html) = &self.body_html {
+            return Cow::Owned(mail_parser::decoders::html::html_to_text(html));
+        }
+        Cow::Borrowed("")
+    }
+
 
     /// Get formatted header display
     pub fn get_header_display(&self) -> String {
@@ -666,12 +755,14 @@ impl EmailStore {
         selected.and_then(move |index| current.emails.get_mut(index))
     }
 
-    /// Get markdown content for the currently selected email (non-blocking).
-    /// Returns the in-memory `body_text`; empty while the email is still
-    /// `HeadersOnly`. The UI checks `load_state` to show a "Loading body…"
-    /// placeholder in that window.
+    /// Best plain-text rendition of the selected email's body, ready
+    /// for the TUI content pane. Non-blocking — returns an empty string
+    /// while the email is still `HeadersOnly`. The UI checks
+    /// `load_state` to show a "Loading body…" placeholder in that
+    /// window.
     pub fn get_selected_email_markdown(&self) -> Option<String> {
-        self.get_selected_email().map(|e| e.body_text.clone())
+        self.get_selected_email()
+            .map(|e| e.display_body().into_owned())
     }
 
     /// Apply a body load result (from the off-thread body loader) to the
@@ -681,11 +772,12 @@ impl EmailStore {
     pub fn apply_loaded_body(
         &mut self,
         path: &std::path::Path,
-        body_text: String,
+        body_plain: Option<String>,
         body_html: Option<String>,
         attachments: Vec<Attachment>,
+        inline_images: Vec<InlineImage>,
     ) -> bool {
-        let mut payload = Some((body_text, body_html, attachments));
+        let mut payload = Some((body_plain, body_html, attachments, inline_images));
         Self::apply_loaded_body_to_folder(&mut self.root_folder, path, &mut payload)
     }
 
@@ -870,14 +962,20 @@ impl EmailStore {
     fn apply_loaded_body_to_folder(
         folder: &mut Folder,
         path: &std::path::Path,
-        payload: &mut Option<(String, Option<String>, Vec<Attachment>)>,
+        payload: &mut Option<(
+            Option<String>,
+            Option<String>,
+            Vec<Attachment>,
+            Vec<InlineImage>,
+        )>,
     ) -> bool {
         for email in &mut folder.emails {
             if email.file_path == path {
-                if let Some((body_text, body_html, attachments)) = payload.take() {
-                    email.body_text = body_text;
+                if let Some((body_plain, body_html, attachments, inline_images)) = payload.take() {
+                    email.body_plain = body_plain;
                     email.body_html = body_html;
                     email.attachments = attachments;
+                    email.inline_images = inline_images;
                     email.load_state = EmailLoadState::FullyLoaded;
                 }
                 return true;
@@ -939,9 +1037,10 @@ mod tests {
         assert_eq!(email.headers.subject, "");
         assert_eq!(email.headers.from, "");
         assert_eq!(email.headers.to, "");
-        assert_eq!(email.body_text, "");
+        assert!(email.body_plain.is_none());
         assert!(email.body_html.is_none());
         assert!(email.attachments.is_empty());
+        assert!(email.inline_images.is_empty());
         assert!(!email.is_unread);
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
     }
@@ -980,7 +1079,8 @@ mod tests {
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
 
         // Body should still be empty since we only parsed headers
-        assert_eq!(email.body_text, "");
+        assert!(email.body_plain.is_none());
+        assert!(email.body_html.is_none());
     }
 
     #[test]
@@ -1008,7 +1108,7 @@ mod tests {
         assert!(!email.headers.to.is_empty());
 
         // Verify body was parsed
-        assert!(!email.body_text.is_empty());
+        assert!(email.body_plain.is_some() || email.body_html.is_some());
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
     }
 
@@ -1029,13 +1129,13 @@ mod tests {
         // Start with headers only
         email.parse_headers_only().unwrap();
         assert!(matches!(email.load_state, EmailLoadState::HeadersOnly));
-        assert_eq!(email.body_text, "");
+        assert!(email.body_plain.is_none() && email.body_html.is_none());
 
         // Ensure fully loaded
         let result = email.ensure_fully_loaded();
         assert!(result.is_ok());
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
-        assert!(!email.body_text.is_empty());
+        assert!(email.body_plain.is_some() || email.body_html.is_some());
     }
 
     #[test]
@@ -1382,8 +1482,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
 
         assert!(result.is_ok());
         assert!(email.headers.subject.contains("🚀"));
-        assert!(email.body_text.contains("世界"));
-        assert!(email.body_text.contains("🎉"));
+        let body = email.body_plain.as_deref().unwrap_or("");
+        assert!(body.contains("世界"));
+        assert!(body.contains("🎉"));
     }
 
     /// A single `load_more_messages_if_needed` call must NOT fully
@@ -1509,14 +1610,15 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         }];
         let applied = store.apply_loaded_body(
             &path,
-            "body text".to_string(),
+            Some("body text".to_string()),
             Some("<p>body</p>".to_string()),
             attachments,
+            Vec::new(),
         );
         assert!(applied, "apply_loaded_body must find the email by path");
 
         let email = store.get_selected_email().unwrap();
-        assert_eq!(email.body_text, "body text");
+        assert_eq!(email.body_plain.as_deref(), Some("body text"));
         assert_eq!(email.body_html.as_deref(), Some("<p>body</p>"));
         assert_eq!(email.attachments.len(), 1);
         assert!(matches!(email.load_state, EmailLoadState::FullyLoaded));
@@ -1581,8 +1683,13 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         inbox.add_email(Email::new(PathBuf::from("/tmp/a")));
         store.root_folder.add_subfolder(inbox);
 
-        let applied =
-            store.apply_loaded_body(&PathBuf::from("/tmp/b"), "x".to_string(), None, Vec::new());
+        let applied = store.apply_loaded_body(
+            &PathBuf::from("/tmp/b"),
+            Some("x".to_string()),
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
         assert!(!applied);
     }
 

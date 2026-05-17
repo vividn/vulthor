@@ -179,7 +179,7 @@ fn render_content_snapshot() {
         "2024-01-07T08:00:00+00:00",
         true,
     );
-    email.body_text = "Hello world.\n\nClick here for details.".to_string();
+    email.body_plain = Some("Hello world.\n\nClick here for details.".to_string());
     email.body_html = Some(sanitized);
     email.load_state = EmailLoadState::FullyLoaded;
 
