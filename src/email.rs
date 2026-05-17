@@ -233,9 +233,13 @@ impl Email {
             self.body_text = text_body.to_string();
         }
 
-        // Store HTML if available (for web serving)
+        // Store HTML if available (for web serving). Sanitize at the
+        // boundary so the unsanitized string never reaches the in-memory
+        // struct — the web pane writes `body_html` straight into the
+        // browser via `innerHTML`, so any tag/handler that survives here
+        // is a direct XSS / exfiltration channel. See `sanitizer.rs`.
         if let Some(html_body) = message.body_html(0) {
-            self.body_html = Some(html_body.to_string());
+            self.body_html = Some(crate::sanitizer::sanitize_email_html(&html_body));
         }
 
         // Extract attachments

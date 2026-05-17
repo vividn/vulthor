@@ -19,6 +19,7 @@ mod error;
 mod keymap;
 mod layout;
 mod maildir;
+mod sanitizer;
 mod theme;
 mod ui;
 mod undo;
