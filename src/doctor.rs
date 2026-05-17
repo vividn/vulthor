@@ -14,6 +14,7 @@
 use crate::config::Config;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::SystemTime;
 
 /// Severity tier of a single [`DoctorCheck`]. `Ok` and `Warn` keep the
@@ -75,6 +76,7 @@ impl DoctorCheck {
 pub fn run_doctor(config: &Config) -> Vec<DoctorCheck> {
     let path_var = std::env::var_os("PATH").unwrap_or_default();
     let home = dirs::home_dir();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     vec![
         check_config_file(home.as_deref()),
         check_maildir(&config.active_maildir()),
@@ -84,6 +86,7 @@ pub fn run_doctor(config: &Config) -> Vec<DoctorCheck> {
         check_themes_dir(home.as_deref()),
         check_ai_model(config),
         check_log_dir(home.as_deref(), config),
+        check_deps(&path_var, &cwd),
     ]
 }
 
@@ -272,6 +275,70 @@ pub(crate) fn check_log_dir(home: Option<&Path>, config: &Config) -> DoctorCheck
         }
         Err(e) => DoctorCheck::warn("log-dir", format!("cannot stat {}: {e}", dir.display())),
     }
+}
+
+/// Check (i) — RustSec advisory scan via `cargo audit --json`. Skipped
+/// (not failed) when `cargo-audit` isn't on `PATH` or the current
+/// directory is not a Rust workspace (no `Cargo.lock`), so an
+/// end-user invocation of `vulthor doctor` from their home directory
+/// stays quiet. When the tool runs, any non-zero advisory count is a
+/// `Fail` whose message lists the `RUSTSEC-*` IDs and offending crate
+/// names so the user can act without re-running.
+pub(crate) fn check_deps(path_var: &OsStr, cwd: &Path) -> DoctorCheck {
+    if !cwd.join("Cargo.lock").is_file() {
+        return DoctorCheck::ok("deps", "skipped: not in a Rust workspace (no Cargo.lock)");
+    }
+    if !binary_in_path("cargo-audit", path_var) {
+        return DoctorCheck::warn(
+            "deps",
+            "skipped: install cargo-audit (cargo install --locked cargo-audit)",
+        );
+    }
+    let output = match Command::new("cargo")
+        .args(["audit", "--json"])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return DoctorCheck::warn("deps", format!("cargo audit failed to launch: {e}"));
+        }
+    };
+    parse_audit_report(&output.stdout)
+}
+
+/// Parse `cargo audit --json` output into a [`DoctorCheck`]. Split out
+/// so unit tests can pin behaviour on canned reports without invoking
+/// `cargo audit` (and without depending on the host advisory database).
+fn parse_audit_report(stdout: &[u8]) -> DoctorCheck {
+    let report: serde_json::Value = match serde_json::from_slice(stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            return DoctorCheck::warn("deps", format!("could not parse cargo audit output: {e}"));
+        }
+    };
+    let count = report
+        .pointer("/vulnerabilities/count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if count == 0 {
+        return DoctorCheck::ok("deps", "no RustSec advisories");
+    }
+    let mut ids: Vec<String> = report
+        .pointer("/vulnerabilities/list")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let id = v.pointer("/advisory/id")?.as_str()?;
+                    let pkg = v.pointer("/package/name")?.as_str()?;
+                    Some(format!("{id} ({pkg})"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    DoctorCheck::fail("deps", format!("{count} advisory(ies): {}", ids.join(", ")))
 }
 
 /// Cross-platform `which`: split `path_var` and look for an executable
@@ -494,6 +561,65 @@ mod tests {
         cfg.ai.model_path = Some(model);
         let chk = check_ai_model(&cfg);
         assert_eq!(chk.status, DoctorStatus::Ok);
+    }
+
+    /// No `Cargo.lock` in cwd → `deps` reports OK skipped (an end-user
+    /// running `vulthor doctor` from their home directory must not see
+    /// a noisy warning).
+    #[test]
+    fn check_deps_ok_skipped_when_no_cargo_lock() {
+        let tmp = TempDir::new().unwrap();
+        let chk = check_deps(tmp.path().as_os_str(), tmp.path());
+        assert_eq!(chk.status, DoctorStatus::Ok, "{:?}", chk);
+        assert!(chk.message.to_lowercase().contains("cargo.lock"));
+    }
+
+    /// `Cargo.lock` present but `cargo-audit` not on PATH → WARN with
+    /// install hint, never FAIL (matches the optional-binary pattern).
+    #[test]
+    fn check_deps_warn_when_cargo_audit_missing() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("Cargo.lock"), "").unwrap();
+        let path_dir = TempDir::new().unwrap();
+        let chk = check_deps(path_dir.path().as_os_str(), tmp.path());
+        assert_eq!(chk.status, DoctorStatus::Warn, "{:?}", chk);
+        assert!(chk.message.contains("cargo-audit"));
+    }
+
+    /// Parser: zero advisories → OK.
+    #[test]
+    fn parse_audit_report_ok_when_no_vulnerabilities() {
+        let stdout = br#"{"vulnerabilities":{"found":false,"count":0,"list":[]}}"#;
+        let chk = parse_audit_report(stdout);
+        assert_eq!(chk.status, DoctorStatus::Ok);
+    }
+
+    /// Parser: vulnerability list → FAIL with RUSTSEC ID + crate name
+    /// echoed so the operator doesn't need to re-run for context.
+    #[test]
+    fn parse_audit_report_fails_on_advisory() {
+        let stdout = br#"{
+            "vulnerabilities": {
+                "found": true,
+                "count": 1,
+                "list": [{
+                    "advisory": {"id": "RUSTSEC-2026-0007"},
+                    "package": {"name": "bytes", "version": "1.10.1"}
+                }]
+            }
+        }"#;
+        let chk = parse_audit_report(stdout);
+        assert_eq!(chk.status, DoctorStatus::Fail);
+        assert!(chk.message.contains("RUSTSEC-2026-0007"), "{:?}", chk);
+        assert!(chk.message.contains("bytes"), "{:?}", chk);
+    }
+
+    /// Parser: garbled output → WARN, not FAIL (better to flag tooling
+    /// breakage than to scare the user with a fake advisory count).
+    #[test]
+    fn parse_audit_report_warns_on_malformed_json() {
+        let chk = parse_audit_report(b"not json {");
+        assert_eq!(chk.status, DoctorStatus::Warn);
     }
 
     /// Exit-code logic: OK + WARN → 0; any FAIL → 2.
