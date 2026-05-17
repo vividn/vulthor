@@ -17,6 +17,7 @@ pub mod email;
 pub mod error;
 pub mod keymap;
 pub mod layout;
+pub mod link_check;
 pub mod log;
 pub mod maildir;
 pub mod sanitizer;
