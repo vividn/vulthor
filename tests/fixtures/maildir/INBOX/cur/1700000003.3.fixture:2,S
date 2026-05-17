@@ -1,0 +1,18 @@
+Return-Path: <marketing@example.com>
+From: Marketing <marketing@example.com>
+To: You <user@example.com>
+Subject: HTML with remote image
+Date: Thu, 16 Nov 2023 10:00:00 +0000
+Message-ID: <remote-img-003@fixture.local>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>Remote Image Demo</h1>
+  <p data-testid="remote-img-body">This message references an external image.</p>
+  <img id="fixture-remote-img" src="https://example.com/tracker.png" alt="tracker" width="1" height="1">
+  <p>Tracking pixel above; renderers should detect and offer to block.</p>
+</body>
+</html>

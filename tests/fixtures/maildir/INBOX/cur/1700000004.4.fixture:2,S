@@ -1,0 +1,23 @@
+Return-Path: <reports@example.com>
+From: Reports <reports@example.com>
+To: You <user@example.com>
+Subject: Quarterly report (with PDF attachment)
+Date: Fri, 17 Nov 2023 11:00:00 +0000
+Message-ID: <attach-004@fixture.local>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="bound-004"
+
+--bound-004
+Content-Type: text/plain; charset=UTF-8
+
+The Q3 report is attached as a PDF. FIXTURE_ATTACHMENT_MARKER.
+
+--bound-004
+Content-Type: application/pdf; name="q3-report.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="q3-report.pdf"
+
+JVBERi0xLjQKJcfsj6IKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRv
+YmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0NvdW50IDAvS2lkc1tdPj4KZW5kb2JqCnRyYWlsZXIK
+PDwvUm9vdCAxIDAgUj4+CiUlRU9G
+--bound-004--
