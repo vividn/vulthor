@@ -61,6 +61,10 @@ pub enum Action {
     ToggleContentPane,
     ToggleViewer,
     ToggleHelp,
+    /// Toggle per-session plaintext-only rendering. When on, the
+    /// Content pane shows `body_plain` (or `"(no plain part)"`) even
+    /// when an HTML alternative exists. Default `Shift+P`.
+    ToggleHtmlOff,
     CycleTheme,
     Quit,
     // Draft pane
@@ -106,6 +110,7 @@ impl Action {
             Action::ToggleContentPane => "toggle_content_pane",
             Action::ToggleViewer => "toggle_viewer",
             Action::ToggleHelp => "toggle_help",
+            Action::ToggleHtmlOff => "toggle_html_off",
             Action::CycleTheme => "cycle_theme",
             Action::Quit => "quit",
             Action::DraftSend => "draft_send",
@@ -152,6 +157,7 @@ impl Action {
             Action::ToggleContentPane,
             Action::ToggleViewer,
             Action::ToggleHelp,
+            Action::ToggleHtmlOff,
             Action::CycleTheme,
             Action::Quit,
             Action::DraftSend,
@@ -216,6 +222,7 @@ pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     (Action::ToggleContentPane, "Alt+c"),
     (Action::ToggleViewer, "v"),
     (Action::ToggleHelp, "?"),
+    (Action::ToggleHtmlOff, "Shift+P"),
     (Action::CycleTheme, "Ctrl+t"),
     (Action::Quit, "q"),
     // Draft pane

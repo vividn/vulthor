@@ -41,15 +41,32 @@ pub struct ContentComponent {
     /// attachment the user wants to open. Resets to 0 whenever email
     /// selection changes.
     pub attachment_focus: usize,
+    /// Per-session "plaintext only" toggle (vu-c1s). When true, the
+    /// body renders `body_plain` (or `"(no plain part)"` when missing)
+    /// even if `body_html` is also present. Seeded from
+    /// `[render].prefer_plaintext` and flipped by `Msg::TogglePlaintext`
+    /// (default key `Shift+P`). The UI status bar reads this directly
+    /// to surface a `[plaintext]` indicator.
+    pub prefer_plaintext: bool,
     scrollbar_state: RefCell<ScrollbarState>,
 }
 
 impl ContentComponent {
-    /// Build a fresh content pane with scroll at the top of the body.
+    /// Build a fresh content pane with scroll at the top of the body
+    /// and HTML rendering on (the legacy default).
     pub fn new() -> Self {
+        Self::with_prefer_plaintext(false)
+    }
+
+    /// Build a Content pane seeding the `prefer_plaintext` toggle to the
+    /// supplied value. `AppRoot::with_config` calls this with
+    /// `config.render.prefer_plaintext` so a user-static opt-in takes
+    /// effect on the first frame.
+    pub fn with_prefer_plaintext(prefer_plaintext: bool) -> Self {
         Self {
             scroll_offset: 0,
             attachment_focus: 0,
+            prefer_plaintext,
             scrollbar_state: RefCell::new(ScrollbarState::default()),
         }
     }
