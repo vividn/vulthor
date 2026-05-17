@@ -564,178 +564,7 @@ fn generate_welcome_html() -> String {
     <link rel="stylesheet" href="/styles.css">
     <link rel="manifest" href="/manifest.json">
     <meta name='theme-color' content='#2c4f5d'>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function() {
-                navigator.serviceWorker.register('/sw.js').catch(function(err) {
-                    console.log('SW registration failed:', err);
-                });
-            });
-        }
-
-        let currentEmailId = null;
-        let isLoading = false;
-
-        const eventSource = new EventSource('/events');
-        eventSource.addEventListener('email-changed', function(event) {
-            const newEmailId = event.data;
-            if (newEmailId !== currentEmailId && !isLoading) {
-                loadEmailContent();
-            }
-        });
-        eventSource.onerror = function(event) {
-            console.log('SSE connection error:', event);
-        };
-        
-        async function loadEmailContent() {
-            if (isLoading) return;
-            isLoading = true;
-            
-            try {
-                const response = await fetch('/api/current-email');
-                const emailData = await response.json();
-                
-                if (emailData.has_email) {
-                    updateEmailDisplay(emailData);
-                    currentEmailId = emailData.email_id;
-                } else {
-                    showWelcomeMessage();
-                    currentEmailId = emailData.email_id;
-                }
-            } catch (error) {
-                console.error('Error loading email:', error);
-            } finally {
-                isLoading = false;
-            }
-        }
-        
-        function updateEmailDisplay(emailData) {
-            document.title = 'Vulthor - ' + emailData.subject;
-            
-            // Check if we need to create the email layout (transitioning from welcome screen)
-            if (!document.querySelector('.email-header')) {
-                // Add banner if not present
-                if (!document.querySelector('.app-banner')) {
-                    const banner = document.createElement('div');
-                    banner.className = 'app-banner';
-                    banner.innerHTML = `
-                        <img src="/vulthor_head.png" alt="Vulthor Bird" class="logo-bird">
-                        <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
-                    `;
-                    document.body.insertBefore(banner, document.body.firstChild);
-                }
-                
-                document.querySelector('.container').className = 'container email-view';
-                document.querySelector('.container').innerHTML = `
-                    <header class="email-header">
-                        <h1 class="email-subject"></h1>
-                        <div class="email-meta">
-                            <div class="email-from"></div>
-                            <div class="email-to"></div>
-                            <div class="email-date"></div>
-                        </div>
-                    </header>
-                    
-                    <main class="email-content"></main>
-                    
-                    <footer class="app-footer">
-                        <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-                    </footer>
-                `;
-            }
-            
-            // Update individual elements (preserving JavaScript connections)
-            document.querySelector('.email-subject').textContent = emailData.subject;
-            document.querySelector('.email-from').innerHTML = '<strong>From:</strong> ' + emailData.from;
-            document.querySelector('.email-to').innerHTML = '<strong>To:</strong> ' + emailData.to;
-            document.querySelector('.email-date').innerHTML = '<strong>Date:</strong> ' + emailData.date;
-            document.querySelector('.email-content').innerHTML = emailData.body_html;
-            
-            // Update attachments
-            const attachmentsSection = document.querySelector('.attachments-section');
-            if (emailData.attachments.length > 0) {
-                let attachmentsHtml = '<div class="attachments-section"><h3>Attachments</h3><ul class="attachments-list">';
-                emailData.attachments.forEach(attachment => {
-                    attachmentsHtml += `<li class="attachment-item">
-                        <span class="attachment-icon">📎</span>
-                        <span class="attachment-name">${attachment.filename}</span>
-                        <span class="attachment-type">(${attachment.content_type})</span>
-                        <span class="attachment-size">${attachment.size}</span>
-                    </li>`;
-                });
-                attachmentsHtml += '</ul></div>';
-                
-                if (attachmentsSection) {
-                    attachmentsSection.outerHTML = attachmentsHtml;
-                } else {
-                    document.querySelector('.email-content').insertAdjacentHTML('afterend', attachmentsHtml);
-                }
-            } else if (attachmentsSection) {
-                attachmentsSection.remove();
-            }
-            
-            // Show email layout
-            document.querySelector('.container').className = 'container email-view';
-        }
-        
-        function showWelcomeMessage() {
-            document.title = 'Vulthor - Email Client';
-            
-            // Remove banner when showing welcome screen
-            const banner = document.querySelector('.app-banner');
-            if (banner) {
-                banner.remove();
-            }
-            
-            // Check if we need to create the welcome layout (transitioning from email view)
-            if (!document.querySelector('.welcome-header')) {
-                document.querySelector('.container').className = 'container welcome-view';
-                document.querySelector('.container').innerHTML = `
-                    <header class="welcome-header">
-                        <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
-                        <h1>Vulthor</h1>
-                        <h2>TUI Email Client</h2>
-                    </header>
-                    
-                    <main class="welcome-content">
-                        <div class="welcome-message">
-                            <h3>Welcome to Vulthor</h3>
-                            <p>No email is currently selected in the terminal interface.</p>
-                            <p>To view an email here:</p>
-                            <ol>
-                                <li>Navigate to an email in the terminal</li>
-                                <li>Select it with <kbd>Enter</kbd></li>
-                                <li>The email will appear on this page</li>
-                            </ol>
-                        </div>
-                        
-                        <div class="keybindings">
-                            <h3>Key Bindings</h3>
-                            <div class="keybinding-grid">
-                                <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
-                                <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
-                                <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
-                                <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
-                                <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
-                                <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
-                                <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
-                            </div>
-                        </div>
-                    </main>
-                    
-                    <footer class="app-footer">
-                        <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-                    </footer>
-                `;
-            } else {
-                // Welcome layout already exists, just ensure correct styling
-                document.querySelector('.container').className = 'container welcome-view';
-            }
-        }
-        
-        // Load initial content when page loads
-        window.addEventListener('load', loadEmailContent);
-    </script>
+    <script src="/app.js" defer></script>
 </head>
 <body>
     <div class="container">
@@ -797,7 +626,8 @@ fn generate_welcome_html() -> String {
         </footer>
     </div>
 </body>
-</html>"#.to_string()
+</html>"#
+        .to_string()
 }
 
 fn markdown_to_html(markdown: &str) -> String {
@@ -870,6 +700,16 @@ fn escape_html(text: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+/// Escape a string for use as a value in a double-quoted HTML attribute.
+///
+/// Only `&` and `"` need encoding for the attribute boundary to survive.
+/// We deliberately do NOT escape `<` / `>` here because the value is the
+/// `srcdoc` of a sandboxed iframe — the browser parses the attribute as
+/// HTML for the iframe's document, so those characters must round-trip.
+fn escape_html_attr(text: &str) -> String {
+    text.replace('&', "&amp;").replace('"', "&quot;")
 }
 
 fn format_file_size(bytes: usize) -> String {
@@ -1021,9 +861,16 @@ mod tests {
             head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
             "welcome <head> must link the manifest",
         );
+        // The SW registration now lives in /app.js (CSP forbids inline scripts).
+        // The head must still reference app.js so the SW gets registered.
         assert!(
-            head.contains("navigator.serviceWorker.register('/sw.js')"),
-            "welcome <head> must register the service worker",
+            head.contains(r#"<script src="/app.js""#),
+            "welcome <head> must load the extracted app.js",
+        );
+        let app_js = include_str!("../static/app.js");
+        assert!(
+            app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+            "app.js must register the service worker so install hooks still fire",
         );
     }
 
@@ -1038,8 +885,253 @@ mod tests {
             "email <head> must link the manifest",
         );
         assert!(
-            head.contains("navigator.serviceWorker.register('/sw.js')"),
-            "email <head> must register the service worker",
+            head.contains(r#"<script src="/app.js""#),
+            "email <head> must load the extracted app.js",
+        );
+        let app_js = include_str!("../static/app.js");
+        assert!(
+            app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+            "app.js must register the service worker so install hooks still fire",
+        );
+    }
+
+    // --- vu-pcw: CSP, app.js extraction, sandboxed iframe ---
+    //
+    // The HTML shells used to inline ~150 lines of JS into each page. That
+    // forced any CSP that wanted to mitigate XSS to keep `unsafe-inline` on
+    // `script-src`, which defeats the purpose. These tests pin three pieces:
+    //   1. Inline `<script>` blocks are gone from both shells.
+    //   2. `/app.js` serves the extracted code with the right Content-Type.
+    //   3. The email shell wraps the body in a sandboxed iframe so
+    //      sanitizer escapes are belt-and-suspenders, not single-point.
+    // Plus a routing-layer test that asserts the security headers reach the
+    // wire on both `/` and `/api/current-email`.
+
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[test]
+    fn email_html_does_not_inline_scripts() {
+        let email = Email::new(PathBuf::from("/tmp/fake.eml"));
+        let html = generate_email_html(&email);
+        // The only `<script` permitted is the external app.js reference.
+        // Any inline block re-introduces the `unsafe-inline` requirement
+        // we explicitly avoid in CSP_HEADER.
+        let mut idx = 0;
+        while let Some(found) = html[idx..].find("<script") {
+            let abs = idx + found;
+            let after = &html[abs..];
+            assert!(
+                after.starts_with("<script src=\"/app.js\""),
+                "inline <script> blocks must be moved to /app.js; found:\n{}",
+                &after[..after.len().min(120)],
+            );
+            idx = abs + 1;
+        }
+    }
+
+    #[test]
+    fn welcome_html_does_not_inline_scripts() {
+        let html = generate_welcome_html();
+        let mut idx = 0;
+        while let Some(found) = html[idx..].find("<script") {
+            let abs = idx + found;
+            let after = &html[abs..];
+            assert!(
+                after.starts_with("<script src=\"/app.js\""),
+                "inline <script> blocks must be moved to /app.js; found:\n{}",
+                &after[..after.len().min(120)],
+            );
+            idx = abs + 1;
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn app_js_route_serves_javascript_with_extracted_handlers() {
+        let response = serve_app_js().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.starts_with("application/javascript"),
+            "/app.js content-type was {:?}",
+            content_type,
+        );
+
+        let body_bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let body = std::str::from_utf8(&body_bytes).unwrap();
+        for token in [
+            "navigator.serviceWorker.register('/sw.js')",
+            "new EventSource('/events')",
+            "fetch('/api/current-email')",
+        ] {
+            assert!(body.contains(token), "/app.js missing `{}`", token,);
+        }
+    }
+
+    #[test]
+    fn email_html_wraps_body_in_sandboxed_iframe() {
+        let email = Email::new(PathBuf::from("/tmp/fake.eml"));
+        let html = generate_email_html(&email);
+        let iframe = html
+            .find("<iframe")
+            .map(|i| &html[i..])
+            .expect("email shell must contain an iframe");
+        let iframe_close = iframe.find('>').expect("iframe tag must close");
+        let iframe_tag = &iframe[..=iframe_close];
+        assert!(
+            iframe_tag.contains("class=\"email-content\""),
+            "iframe must be the email-content host, was: {}",
+            iframe_tag,
+        );
+        assert!(
+            iframe_tag.contains(" sandbox"),
+            "iframe must carry the sandbox attribute, was: {}",
+            iframe_tag,
+        );
+        // `sandbox` with no value is fully restrictive — no scripts, no
+        // same-origin, no forms. Adding `allow-same-origin` would defeat
+        // the point.
+        assert!(
+            !iframe_tag.contains("allow-same-origin"),
+            "iframe sandbox must not grant same-origin to the email body",
+        );
+        assert!(
+            iframe_tag.contains("srcdoc="),
+            "iframe must carry srcdoc with the email body",
+        );
+    }
+
+    #[test]
+    fn email_html_srcdoc_escapes_attribute_quotes() {
+        // If the body is interpolated unescaped, an email body containing
+        // `"` would close the srcdoc attribute and break out of the iframe.
+        // Round-trip a body with `&` and `"` to prove escape_html_attr fires.
+        let mut email = Email::new(PathBuf::from("/tmp/fake.eml"));
+        email.body_html = Some(r#"<p>tom & jerry "say" hi</p>"#.to_string());
+        let html = generate_email_html(&email);
+        assert!(
+            html.contains("tom &amp; jerry &quot;say&quot; hi"),
+            "srcdoc attribute must escape & and \" so the body cannot break out;\n\
+             generated HTML did not contain the expected escape:\n{}",
+            html.lines()
+                .find(|l| l.contains("iframe"))
+                .unwrap_or("<no iframe line found>"),
+        );
+    }
+
+    #[test]
+    fn apply_security_headers_sets_all_required_headers() {
+        let response = Response::new(Body::from("hello"));
+        let response = apply_security_headers(response);
+        let h = response.headers();
+        let csp = h
+            .get("content-security-policy")
+            .expect("CSP must be set")
+            .to_str()
+            .unwrap();
+        for directive in [
+            "default-src 'none'",
+            "script-src 'self'",
+            "style-src 'self'",
+            "img-src 'self' data:",
+            "connect-src 'self'",
+            "frame-ancestors 'none'",
+            "base-uri 'none'",
+            "form-action 'none'",
+        ] {
+            assert!(
+                csp.contains(directive),
+                "CSP missing `{}`: {}",
+                directive,
+                csp
+            );
+        }
+        assert!(
+            !csp.contains("'unsafe-inline'"),
+            "CSP must not allow unsafe-inline (defeats the script-src lockdown): {}",
+            csp,
+        );
+        assert_eq!(
+            h.get("x-frame-options").and_then(|v| v.to_str().ok()),
+            Some("DENY"),
+        );
+        assert_eq!(
+            h.get("x-content-type-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff"),
+        );
+        assert_eq!(
+            h.get("referrer-policy").and_then(|v| v.to_str().ok()),
+            Some("no-referrer"),
+        );
+    }
+
+    /// Build a router using the same wiring as `WebServer::start` so this
+    /// test exercises the middleware-stack ordering, not just the header
+    /// function in isolation.
+    fn router_for_test() -> Router {
+        let (state, _rx) = webstate_with_one_headers_only_email();
+        build_router(state)
+    }
+
+    async fn assert_security_headers_present(path: &str) {
+        let app = router_for_test();
+        let response = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        for header in [
+            "content-security-policy",
+            "x-frame-options",
+            "x-content-type-options",
+            "referrer-policy",
+        ] {
+            assert!(
+                response.headers().contains_key(header),
+                "{} must set `{}`",
+                path,
+                header,
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn root_route_emits_security_headers() {
+        assert_security_headers_present("/").await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn api_current_email_route_emits_security_headers() {
+        assert_security_headers_present("/api/current-email").await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn app_js_route_is_reachable_through_router() {
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.starts_with("application/javascript"),
+            "/app.js content-type was {:?}",
+            content_type,
         );
     }
 

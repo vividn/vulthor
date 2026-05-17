@@ -163,6 +163,17 @@ body {
     line-height: 1.7;
 }
 
+/* Email body lives in a sandboxed iframe (vu-pcw) — strip the default
+   browser border and give it a comfortable default height. Sandbox
+   prevents the iframe document from auto-resizing the parent. */
+iframe.email-content {
+    border: none;
+    width: 100%;
+    min-height: 70vh;
+    background: #fff;
+    padding: 0;
+}
+
 .email-content h1, .email-content h2, .email-content h3 {
     margin: 1.5rem 0 1rem 0;
     color: var(--vulthor-primary);

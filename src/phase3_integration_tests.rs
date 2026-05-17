@@ -438,8 +438,16 @@ async fn pwa_manifest_sw_and_root_html_link_install_hooks() {
         head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
         "welcome <head> missing manifest link",
     );
+    // vu-pcw moved the inline scripts (including SW registration) into the
+    // /app.js bundle so the page can ship under a strict CSP. The head must
+    // still reference app.js, and app.js must carry the SW registration.
     assert!(
-        head.contains("navigator.serviceWorker.register('/sw.js')"),
-        "welcome <head> missing service-worker registration",
+        head.contains(r#"<script src="/app.js""#),
+        "welcome <head> missing app.js script tag",
+    );
+    let app_js = include_str!("../static/app.js");
+    assert!(
+        app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+        "app.js missing service-worker registration",
     );
 }
