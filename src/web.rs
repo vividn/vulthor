@@ -4,7 +4,8 @@ use crate::layout::ActivePane;
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode},
+    middleware::{Next, from_fn},
     response::{Html, IntoResponse, Json, Response, Sse},
     routing::get,
 };
@@ -120,18 +121,7 @@ impl WebServer {
     /// runtime; the call blocks the current task for the lifetime of
     /// the server.
     pub async fn start(&self) -> Result<()> {
-        let app = Router::new()
-            .route("/", get(serve_email))
-            .route("/health", get(health_check))
-            .route("/styles.css", get(serve_styles))
-            .route("/vulthor_bird.png", get(serve_bird))
-            .route("/vulthor_head.png", get(serve_head))
-            .route("/vulthor_letters.png", get(serve_letters))
-            .route("/manifest.json", get(serve_manifest))
-            .route("/sw.js", get(serve_service_worker))
-            .route("/events", get(email_events))
-            .route("/api/current-email", get(get_current_email_json))
-            .with_state(self.state.clone());
+        let app = build_router(self.state.clone());
 
         let addr = format!("{}:{}", self.bind, self.port);
         println!("Web server starting on http://{}", addr);
@@ -141,6 +131,70 @@ impl WebServer {
 
         Ok(())
     }
+}
+
+/// Content-Security-Policy applied to every response.
+///
+/// `default-src 'none'` flips the default to deny; each fetch directive is
+/// then re-opened only to same-origin and only as wide as the page needs.
+/// `frame-ancestors 'none'` and `form-action 'none'` close the two
+/// directives `default-src` does not cover. There is no `'unsafe-inline'`
+/// — all JS lives at `/app.js` and all CSS at `/styles.css` so the page
+/// runs under the strictest reasonable policy.
+pub(crate) const CSP_HEADER: &str = "default-src 'none'; \
+style-src 'self'; \
+img-src 'self' data:; \
+font-src 'self'; \
+script-src 'self'; \
+connect-src 'self'; \
+frame-src 'self'; \
+frame-ancestors 'none'; \
+base-uri 'none'; \
+form-action 'none'";
+
+/// Attach the security header set to a response. Pulled out of the
+/// middleware so unit tests can pin the contract without spinning up a
+/// Router.
+pub(crate) fn apply_security_headers(mut response: Response) -> Response {
+    let h = response.headers_mut();
+    h.insert(
+        "content-security-policy",
+        HeaderValue::from_static(CSP_HEADER),
+    );
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    h.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    response
+}
+
+async fn security_headers_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    apply_security_headers(next.run(req).await)
+}
+
+/// Build the full axum router with all routes and middleware applied.
+/// Used by both [`WebServer::start`] and by tests so they exercise the
+/// same wiring (including the security-headers layer).
+pub(crate) fn build_router(state: WebState) -> Router {
+    Router::new()
+        .route("/", get(serve_email))
+        .route("/health", get(health_check))
+        .route("/styles.css", get(serve_styles))
+        .route("/app.js", get(serve_app_js))
+        .route("/vulthor_bird.png", get(serve_bird))
+        .route("/vulthor_head.png", get(serve_head))
+        .route("/vulthor_letters.png", get(serve_letters))
+        .route("/manifest.json", get(serve_manifest))
+        .route("/sw.js", get(serve_service_worker))
+        .route("/events", get(email_events))
+        .route("/api/current-email", get(get_current_email_json))
+        .layer(from_fn(security_headers_middleware))
+        .with_state(state)
 }
 
 pub(crate) async fn serve_email(State(state): State<WebState>) -> Response {
@@ -178,6 +232,18 @@ async fn health_check() -> &'static str {
 async fn serve_styles() -> Response {
     let css = include_str!("../static/styles.css");
     ([("content-type", "text/css")], css).into_response()
+}
+
+/// Serve the front-end JS that was formerly inlined into the HTML shells.
+/// Extracting it is the prerequisite for the strict CSP (`script-src 'self'`,
+/// no `'unsafe-inline'`) applied by [`security_headers_middleware`].
+pub(crate) async fn serve_app_js() -> Response {
+    let js = include_str!("../static/app.js");
+    (
+        [("content-type", "application/javascript; charset=utf-8")],
+        js,
+    )
+        .into_response()
 }
 
 async fn serve_bird() -> Response {
@@ -403,6 +469,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
         // Convert plain text to HTML
         markdown_to_html(&email.body_text)
     };
+    let body_srcdoc = escape_html_attr(&body_content);
 
     let attachments_html = if email.has_attachments() {
         let mut attachments_list = String::new();
@@ -444,131 +511,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
     <link rel="stylesheet" href="/styles.css">
     <link rel="manifest" href="/manifest.json">
     <meta name='theme-color' content='#2c4f5d'>
-    <script>
-        if ('serviceWorker' in navigator) {{
-            window.addEventListener('load', function() {{
-                navigator.serviceWorker.register('/sw.js').catch(function(err) {{
-                    console.log('SW registration failed:', err);
-                }});
-            }});
-        }}
-
-        let currentEmailId = null;
-        let isLoading = false;
-
-        const eventSource = new EventSource('/events');
-        eventSource.addEventListener('email-changed', function(event) {{
-            const newEmailId = event.data;
-            if (newEmailId !== currentEmailId && !isLoading) {{
-                loadEmailContent();
-            }}
-        }});
-        eventSource.onerror = function(event) {{
-            console.log('SSE connection error:', event);
-        }};
-        
-        async function loadEmailContent() {{
-            if (isLoading) return;
-            isLoading = true;
-            
-            try {{
-                const response = await fetch('/api/current-email');
-                const emailData = await response.json();
-                
-                if (emailData.has_email) {{
-                    updateEmailDisplay(emailData);
-                    currentEmailId = emailData.email_id;
-                }} else {{
-                    showWelcomeMessage();
-                    currentEmailId = emailData.email_id;
-                }}
-            }} catch (error) {{
-                console.error('Error loading email:', error);
-            }} finally {{
-                isLoading = false;
-            }}
-        }}
-        
-        function updateEmailDisplay(emailData) {{
-            document.title = 'Vulthor - ' + emailData.subject;
-            document.querySelector('.email-subject').textContent = emailData.subject;
-            document.querySelector('.email-from').innerHTML = '<strong>From:</strong> ' + emailData.from;
-            document.querySelector('.email-to').innerHTML = '<strong>To:</strong> ' + emailData.to;
-            document.querySelector('.email-date').innerHTML = '<strong>Date:</strong> ' + emailData.date;
-            document.querySelector('.email-content').innerHTML = emailData.body_html;
-            
-            // Update attachments
-            const attachmentsSection = document.querySelector('.attachments-section');
-            if (emailData.attachments.length > 0) {{
-                let attachmentsHtml = '<div class="attachments-section"><h3>Attachments</h3><ul class="attachments-list">';
-                emailData.attachments.forEach(attachment => {{
-                    attachmentsHtml += `<li class="attachment-item">
-                        <span class="attachment-icon">📎</span>
-                        <span class="attachment-name">${{attachment.filename}}</span>
-                        <span class="attachment-type">(${{attachment.content_type}})</span>
-                        <span class="attachment-size">${{attachment.size}}</span>
-                    </li>`;
-                }});
-                attachmentsHtml += '</ul></div>';
-                
-                if (attachmentsSection) {{
-                    attachmentsSection.outerHTML = attachmentsHtml;
-                }} else {{
-                    document.querySelector('.email-content').insertAdjacentHTML('afterend', attachmentsHtml);
-                }}
-            }} else if (attachmentsSection) {{
-                attachmentsSection.remove();
-            }}
-            
-            // Show email layout
-            document.querySelector('.container').className = 'container email-view';
-        }}
-        
-        function showWelcomeMessage() {{
-            document.title = 'Vulthor - Email Client';
-            document.querySelector('.container').className = 'container welcome-view';
-            document.querySelector('.container').innerHTML = `
-                <header class="welcome-header">
-                    <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
-                    <h1>Vulthor</h1>
-                    <h2>TUI Email Client</h2>
-                </header>
-                
-                <main class="welcome-content">
-                    <div class="welcome-message">
-                        <h3>Welcome to Vulthor</h3>
-                        <p>No email is currently selected in the terminal interface.</p>
-                        <p>To view an email here:</p>
-                        <ol>
-                            <li>Navigate to an email in the terminal</li>
-                            <li>Select it with <kbd>Enter</kbd></li>
-                            <li>The email will appear on this page</li>
-                        </ol>
-                    </div>
-                    
-                    <div class="keybindings">
-                        <h3>Key Bindings</h3>
-                        <div class="keybinding-grid">
-                            <div class="keybinding"><kbd>j</kbd> / <kbd>k</kbd><span>Navigate up/down</span></div>
-                            <div class="keybinding"><kbd>h</kbd> / <kbd>l</kbd><span>Switch views</span></div>
-                            <div class="keybinding"><kbd>Tab</kbd><span>Switch panes</span></div>
-                            <div class="keybinding"><kbd>Enter</kbd><span>Select item</span></div>
-                            <div class="keybinding"><kbd>Alt+a</kbd><span>View attachments</span></div>
-                            <div class="keybinding"><kbd>?</kbd><span>Show help</span></div>
-                            <div class="keybinding"><kbd>q</kbd><span>Quit</span></div>
-                        </div>
-                    </div>
-                </main>
-                
-                <footer class="app-footer">
-                    <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
-                </footer>
-            `;
-        }}
-        
-        // Load initial content when page loads
-        window.addEventListener('load', loadEmailContent);
-    </script>
+    <script src="/app.js" defer></script>
 </head>
 <body>
     <div class="app-banner">
@@ -590,13 +533,11 @@ fn generate_email_html(email: &crate::email::Email) -> String {
                 </div>
             </div>
         </header>
-        
-        <main class="email-content">
-            {}
-        </main>
-        
+
+        <iframe class="email-content" sandbox srcdoc="{}"></iframe>
+
         {}
-        
+
         <footer class="app-footer">
             <p>Served by <strong>Vulthor</strong> - TUI Email Client</p>
         </footer>
@@ -608,7 +549,7 @@ fn generate_email_html(email: &crate::email::Email) -> String {
         escape_html(&email.headers.from),
         escape_html(&email.headers.to),
         escape_html(&email.headers.date),
-        body_content,
+        body_srcdoc,
         attachments_html
     )
 }

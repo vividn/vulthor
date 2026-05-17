@@ -44,6 +44,7 @@ ammonia = "4"
 
 [dev-dependencies]
 serde_json = "1.0"
+tower = { version = "0.5", features = ["util"] }
 
 [package.metadata.deb]
 maintainer = "vividn <vividn@users.noreply.github.com>"
