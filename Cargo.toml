@@ -46,6 +46,19 @@ rand = "0.8"
 [dev-dependencies]
 serde_json = "1.0"
 tower = { version = "0.5", features = ["util"] }
+criterion = "0.5"
+
+[[bench]]
+name = "startup"
+harness = false
+
+[[bench]]
+name = "folder_scan"
+harness = false
+
+[[bench]]
+name = "body_load"
+harness = false
 
 [package.metadata.deb]
 maintainer = "vividn <vividn@users.noreply.github.com>"
