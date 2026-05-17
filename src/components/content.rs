@@ -41,15 +41,29 @@ pub struct ContentComponent {
     /// attachment the user wants to open. Resets to 0 whenever email
     /// selection changes.
     pub attachment_focus: usize,
+    /// Per-session "force plain text" toggle (vu-c1s). When true the
+    /// content pane skips any HTML→text fallback: `body_plain` is shown
+    /// verbatim, or the literal `"(no plain part)"` marker if missing.
+    /// Default `false`; flipped by `Msg::TogglePlaintext` (Shift+P).
+    pub prefer_plaintext: bool,
     scrollbar_state: RefCell<ScrollbarState>,
 }
 
 impl ContentComponent {
-    /// Build a fresh content pane with scroll at the top of the body.
+    /// Build a fresh content pane with scroll at the top of the body
+    /// and HTML rendering enabled (the legacy default).
     pub fn new() -> Self {
+        Self::with_prefer_plaintext(false)
+    }
+
+    /// Build a content pane seeding `prefer_plaintext` to `initial`.
+    /// `AppRoot::with_config` passes `config.render.prefer_plaintext`
+    /// so a static opt-in takes effect on the first frame.
+    pub fn with_prefer_plaintext(initial: bool) -> Self {
         Self {
             scroll_offset: 0,
             attachment_focus: 0,
+            prefer_plaintext: initial,
             scrollbar_state: RefCell::new(ScrollbarState::default()),
         }
     }
@@ -153,7 +167,9 @@ impl Component for ContentComponent {
             let body_text = match email.load_state {
                 EmailLoadState::HeadersOnly => "Loading body…".to_string(),
                 EmailLoadState::FullyLoaded => {
-                    ctx.store.get_selected_email_markdown().unwrap_or_default()
+                    ctx.store
+                        .get_selected_email_markdown_with_pref(self.prefer_plaintext)
+                        .unwrap_or_default()
                 }
             };
 

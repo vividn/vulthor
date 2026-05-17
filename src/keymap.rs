@@ -61,6 +61,10 @@ pub enum Action {
     ToggleContentPane,
     ToggleViewer,
     ToggleHelp,
+    /// Per-session paranoia toggle — when on the Content pane refuses
+    /// to fall back to an HTML→text conversion and shows
+    /// `"(no plain part)"` when only HTML is present. (vu-c1s)
+    ToggleHtmlOff,
     CycleTheme,
     Quit,
     // Draft pane
@@ -148,6 +152,7 @@ impl Action {
             Action::ToggleContentPane => "toggle_content_pane",
             Action::ToggleViewer => "toggle_viewer",
             Action::ToggleHelp => "toggle_help",
+            Action::ToggleHtmlOff => "toggle_html_off",
             Action::CycleTheme => "cycle_theme",
             Action::Quit => "quit",
             Action::DraftSend => "draft_send",
@@ -201,6 +206,8 @@ impl Action {
             | Action::JumpPrevUnread => PaneScope::Messages,
             // Open-attachment lives where the attachment list is.
             Action::OpenAttachment => PaneScope::Content,
+            // vu-c1s paranoia toggle reads from the Content pane state.
+            Action::ToggleHtmlOff => PaneScope::Content,
             // Draft-pane lifecycle keys.
             Action::DraftSend | Action::DraftEdit | Action::DraftDiscard => PaneScope::Compose,
         }
@@ -244,6 +251,7 @@ impl Action {
             Action::ToggleContentPane => "Toggle content pane",
             Action::ToggleViewer => "Toggle web viewer",
             Action::ToggleHelp => "Toggle this help",
+            Action::ToggleHtmlOff => "Force plain-text body",
             Action::CycleTheme => "Cycle theme preset",
             Action::Quit => "Quit Vulthor",
             Action::DraftSend => "Send draft",
@@ -290,6 +298,7 @@ impl Action {
             Action::ToggleContentPane,
             Action::ToggleViewer,
             Action::ToggleHelp,
+            Action::ToggleHtmlOff,
             Action::CycleTheme,
             Action::Quit,
             Action::DraftSend,
@@ -354,6 +363,7 @@ pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     (Action::ToggleContentPane, "Alt+c"),
     (Action::ToggleViewer, "v"),
     (Action::ToggleHelp, "?"),
+    (Action::ToggleHtmlOff, "P"),
     (Action::CycleTheme, "Ctrl+t"),
     (Action::Quit, "q"),
     // Draft pane

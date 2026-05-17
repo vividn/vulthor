@@ -863,6 +863,7 @@ impl AppRoot {
                 Msg::Quit
             }),
             Action::ToggleHelp => Some(Msg::ToggleHelp),
+            Action::ToggleHtmlOff => Some(Msg::TogglePlaintext),
             Action::CycleTheme => Some(Msg::CycleTheme),
             Action::Undo => Some(Msg::Undo),
             Action::ToggleViewer => Some(Msg::ToggleHtmlViewer),
@@ -1080,6 +1081,9 @@ impl AppRoot {
             }
             Msg::ToggleHelp => {
                 self.help_visible = !self.help_visible;
+            }
+            Msg::TogglePlaintext => {
+                self.content.prefer_plaintext = !self.content.prefer_plaintext;
             }
             Msg::CycleTheme => {
                 // Advance to the next preset and adopt its palette.

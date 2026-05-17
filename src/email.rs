@@ -372,6 +372,21 @@ impl Email {
         Cow::Borrowed("")
     }
 
+    /// Same as [`Self::display_body`] but in `prefer_plaintext` mode
+    /// the renderer refuses to fall back to an HTML→text conversion:
+    /// if `body_plain` is missing, return a literal `"(no plain part)"`
+    /// marker so the user sees that the HTML body was withheld rather
+    /// than silently converted. (vu-c1s, paranoia toggle.)
+    pub fn display_body_with_pref(&self, prefer_plaintext: bool) -> Cow<'_, str> {
+        if prefer_plaintext {
+            return match &self.body_plain {
+                Some(plain) => Cow::Borrowed(plain.as_str()),
+                None => Cow::Borrowed("(no plain part)"),
+            };
+        }
+        self.display_body()
+    }
+
 
     /// Get formatted header display
     pub fn get_header_display(&self) -> String {
@@ -762,6 +777,17 @@ impl EmailStore {
     pub fn get_selected_email_markdown(&self) -> Option<String> {
         self.get_selected_email()
             .map(|e| e.display_body().into_owned())
+    }
+
+    /// `prefer_plaintext`-aware variant: when the toggle is on the
+    /// returned body refuses to fall back to an HTML→text conversion.
+    /// (vu-c1s) See [`Email::display_body_with_pref`].
+    pub fn get_selected_email_markdown_with_pref(
+        &self,
+        prefer_plaintext: bool,
+    ) -> Option<String> {
+        self.get_selected_email()
+            .map(|e| e.display_body_with_pref(prefer_plaintext).into_owned())
     }
 
     /// Apply a body load result (from the off-thread body loader) to the
@@ -1275,6 +1301,32 @@ mod tests {
             "html body must survive sanitization: {}",
             html,
         );
+    }
+
+    /// vu-c1s: `display_body_with_pref(true)` must NOT fall back to
+    /// HTML→text when only a `body_html` part is present — instead it
+    /// returns the literal `"(no plain part)"` marker so the user sees
+    /// that the HTML body was withheld rather than silently converted.
+    #[test]
+    fn display_body_with_pref_blocks_html_fallback_when_plain_missing() {
+        let mut email = Email::new(PathBuf::from("/test/foo.eml"));
+        email.body_html = Some("<p>hello</p>".to_string());
+
+        assert_eq!(email.display_body_with_pref(true), "(no plain part)");
+        // Off-mode still uses the legacy HTML→text fallback.
+        assert!(email.display_body_with_pref(false).contains("hello"));
+    }
+
+    /// vu-c1s: when `body_plain` is present, `prefer_plaintext` returns
+    /// it verbatim regardless of whether `body_html` is also present.
+    #[test]
+    fn display_body_with_pref_prefers_plain_when_present() {
+        let mut email = Email::new(PathBuf::from("/test/foo.eml"));
+        email.body_plain = Some("plain rendition".to_string());
+        email.body_html = Some("<p>html rendition</p>".to_string());
+
+        assert_eq!(email.display_body_with_pref(true), "plain rendition");
+        assert_eq!(email.display_body_with_pref(false), "plain rendition");
     }
 
     /// `multipart/related` (HTML body + inline `cid:` images) must

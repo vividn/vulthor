@@ -178,6 +178,15 @@ pub enum Msg {
     /// only AppRoot reacts.
     ToggleHtmlViewer,
 
+    /// Toggle per-session plaintext-only rendering (vu-c1s). When on,
+    /// the Content pane renders `body_plain` verbatim — or the literal
+    /// `"(no plain part)"` marker if no plain part exists — even when
+    /// an HTML alternative is also present. Bound to `Shift+P`. Both
+    /// AppRoot and ContentComponent observe: AppRoot flips the
+    /// `ContentComponent.prefer_plaintext` field, ContentComponent
+    /// reads it on render.
+    TogglePlaintext,
+
     // Search (Phase 3.a — notmuch). The query input modal opens at the
     // bottom of the screen; on Enter the typed query is shelled out via
     // `notmuch search --output=files`. Resulting paths are rendered as

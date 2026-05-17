@@ -57,7 +57,15 @@ impl UI {
         self.draw_main_layout(
             f, store, layout, folders, messages, content, accounts, draft, config, theme, size,
         );
-        self.draw_status_bar(f, store, layout, status_message, theme, size);
+        self.draw_status_bar(
+            f,
+            store,
+            layout,
+            content.prefer_plaintext,
+            status_message,
+            theme,
+            size,
+        );
         // Modal overlays drawn last so they sit on top of every pane;
         // each `render_modal` is a no-op when its modal is hidden. The
         // folder picker is centered; the search modal is bottom-of-
@@ -403,6 +411,7 @@ impl UI {
         f: &mut Frame,
         store: &EmailStore,
         lay: &Layout,
+        prefer_plaintext: bool,
         status_message: &Option<String>,
         theme: &Theme,
         area: Rect,
@@ -428,6 +437,14 @@ impl UI {
             status_text.push(Span::styled(
                 indicator,
                 Style::default().fg(theme.cyan_light),
+            ));
+        }
+
+        if prefer_plaintext {
+            status_text.push(Span::raw(" | "));
+            status_text.push(Span::styled(
+                "[plaintext]",
+                Style::default().fg(theme.accent),
             ));
         }
 
