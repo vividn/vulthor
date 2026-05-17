@@ -2508,7 +2508,6 @@ mod tests {
             .position(|f| f.get_display_name().eq_ignore_ascii_case("INBOX"))
             .expect("INBOX is in the fixture");
         assert_eq!(approot.folders.folder_index, inbox_idx);
-        assert_eq!(approot.layout.selection.folder_index, inbox_idx);
     }
 
     #[test]
@@ -2612,7 +2611,6 @@ mod tests {
         root.process_event(j).unwrap();
 
         assert_eq!(root.messages.email_index, 1);
-        assert_eq!(root.layout.selection.email_index, 1);
         assert_eq!(shared.lock().unwrap().selected_email, Some(1));
     }
 
@@ -2635,7 +2633,6 @@ mod tests {
         root.layout.current_view = View::FolderMessages;
 
         root.messages.email_index = 2;
-        root.layout.selection.email_index = 2;
         shared.lock().unwrap().select_email(2);
 
         let back = Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
@@ -2671,8 +2668,8 @@ mod tests {
 
         let store = shared.lock().unwrap();
         assert!(store.current_folder.is_empty());
-        assert_eq!(root.layout.selection.folder_index, 0);
-        assert_eq!(root.layout.selection.email_index, 0);
+        assert_eq!(root.folders.folder_index, 0);
+        assert_eq!(root.messages.email_index, 0);
     }
 
     #[test]
@@ -2693,7 +2690,6 @@ mod tests {
         root.process_event(j).unwrap();
 
         assert_eq!(root.content.scroll_offset, 1);
-        assert_eq!(root.layout.selection.scroll_offset, 1);
     }
 
     #[test]
@@ -2713,7 +2709,6 @@ mod tests {
         let pd = Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         root.process_event(pd).unwrap();
         assert_eq!(root.content.scroll_offset, 10);
-        assert_eq!(root.layout.selection.scroll_offset, 10);
     }
 
     #[test]
@@ -2805,7 +2800,6 @@ mod tests {
         let pu = Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         root.process_event(pu).unwrap();
         assert_eq!(root.content.scroll_offset, 0);
-        assert_eq!(root.layout.selection.scroll_offset, 0);
     }
 
     #[test]
@@ -2820,13 +2814,11 @@ mod tests {
         let mut root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
 
         root.content.scroll_offset = 42;
-        root.layout.selection.scroll_offset = 42;
         root.layout.active_pane = ActivePane::Folders;
 
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         root.process_event(enter).unwrap();
         assert_eq!(root.content.scroll_offset, 0);
-        assert_eq!(root.layout.selection.scroll_offset, 0);
     }
 
     #[test]

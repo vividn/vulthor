@@ -95,7 +95,15 @@ impl UI {
                     store,
                 };
                 folders.render(f, chunks[0], is_folders_active, &ctx);
-                Self::draw_messages_pane(f, store, lay, messages, chunks[1], is_messages_active);
+                Self::draw_messages_pane(
+                    f,
+                    store,
+                    lay,
+                    folders,
+                    messages,
+                    chunks[1],
+                    is_messages_active,
+                );
             }
             View::MessagesContent => {
                 let chunks = RLayout::default()
@@ -106,7 +114,15 @@ impl UI {
                 let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
                 let is_content_active = matches!(lay.active_pane, ActivePane::Content);
 
-                Self::draw_messages_pane(f, store, lay, messages, chunks[0], is_messages_active);
+                Self::draw_messages_pane(
+                    f,
+                    store,
+                    lay,
+                    folders,
+                    messages,
+                    chunks[0],
+                    is_messages_active,
+                );
                 Self::render_content_pane(f, store, content, chunks[1], is_content_active);
             }
             View::Content => {
@@ -115,7 +131,15 @@ impl UI {
             }
             View::Messages => {
                 let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
-                Self::draw_messages_pane(f, store, lay, messages, area, is_messages_active);
+                Self::draw_messages_pane(
+                    f,
+                    store,
+                    lay,
+                    folders,
+                    messages,
+                    area,
+                    is_messages_active,
+                );
             }
             View::MessagesAttachments => {
                 let chunks = RLayout::default()
@@ -126,7 +150,15 @@ impl UI {
                 let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
                 let is_attachments_active = matches!(lay.active_pane, ActivePane::Attachments);
 
-                Self::draw_messages_pane(f, store, lay, messages, chunks[0], is_messages_active);
+                Self::draw_messages_pane(
+                    f,
+                    store,
+                    lay,
+                    folders,
+                    messages,
+                    chunks[0],
+                    is_messages_active,
+                );
                 self.draw_attachments_pane(f, store, lay, chunks[1], is_attachments_active);
             }
             View::AccountsFolders => {
@@ -170,10 +202,12 @@ impl UI {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_messages_pane(
         f: &mut Frame,
         store: &EmailStore,
         lay: &Layout,
+        folders: &FoldersComponent,
         messages: &MessagesComponent,
         area: Rect,
         is_active: bool,
@@ -192,7 +226,7 @@ impl UI {
             View::FolderMessages => {
                 let root = &store.root_folder;
                 let folder_path =
-                    layout::get_folder_path_from_display_index(root, lay.selection.folder_index);
+                    layout::get_folder_path_from_display_index(root, folders.folder_index);
                 folder_path.and_then(|p| store.get_folder_at_path(&p))
             }
             _ => None,
@@ -203,7 +237,7 @@ impl UI {
             View::FolderMessages => {
                 let root = &store.root_folder;
                 if let Some(path_indices) =
-                    layout::get_folder_path_from_display_index(root, lay.selection.folder_index)
+                    layout::get_folder_path_from_display_index(root, folders.folder_index)
                 {
                     store.get_folder_path_for_indices(&path_indices)
                 } else {
