@@ -14,6 +14,7 @@ mod classifier;
 mod components;
 mod compose;
 mod config;
+mod doctor;
 mod email;
 mod error;
 mod keymap;
@@ -39,7 +40,7 @@ mod phase4_integration_tests;
 
 use clap::Parser;
 use components::{AppRoot, FolderScannerHandle};
-use config::{CliArgs, Config};
+use config::{CliArgs, Command, Config};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -71,6 +72,15 @@ async fn main() -> Result<()> {
 
     if let Some(maildir_path) = args.maildir_path {
         config.maildir_path = maildir_path;
+    }
+
+    // Non-interactive subcommands fork here before any TUI / web /
+    // scanner state is set up — `doctor` is a pure diagnostic and
+    // must not race with the live runtime.
+    if let Some(Command::Doctor) = args.command {
+        let checks = doctor::run_doctor(&config);
+        doctor::print_report(&checks);
+        std::process::exit(doctor::exit_code(&checks));
     }
 
     // `-m` overrides the maildir for single-account runs; for

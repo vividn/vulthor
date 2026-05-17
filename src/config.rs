@@ -1,5 +1,5 @@
 use crate::error::{Result, VulthorError};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,6 +9,12 @@ use std::path::PathBuf;
 /// `maildir_path` in particular wins over both the config file and
 /// `default_account`'s maildir. `port` is optional: when omitted, the
 /// effective port falls back to `[web].port` (default 8080).
+///
+/// `command` is the optional subcommand slot: `None` → run the TUI
+/// (default), `Some(Command::Doctor)` → run `src/doctor.rs` and exit.
+/// Subcommands inherit the global `-c`/`-m`/`-p` flags so e.g.
+/// `vulthor -c custom.toml doctor` resolves the same config the TUI
+/// would.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct CliArgs {
@@ -23,6 +29,20 @@ pub struct CliArgs {
     /// Override MailDir path (takes precedence over config file)
     #[arg(short = 'm', long = "maildir")]
     pub maildir_path: Option<PathBuf>,
+
+    /// Optional subcommand. `None` runs the TUI; see [`Command`].
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Top-level CLI subcommands. Today only `doctor` exists; future
+/// non-interactive entrypoints (e.g. one-shot search) will land here.
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// Report runtime preconditions: config, MailDir layout, msmtp /
+    /// notmuch / mbsync availability, AI model path. Exits 0 on
+    /// OK/WARN, 2 on any FAIL.
+    Doctor,
 }
 
 /// `[web]` configuration block. Controls the embedded HTML viewer's
