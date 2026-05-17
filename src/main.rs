@@ -125,6 +125,23 @@ async fn main() -> Result<()> {
         app_root.focused_pane(),
         app_root.body_request_sender(),
     );
+    // vu-fi1: the per-launch loopback token is now the gate on every web
+    // route. Capture the printable URL (token included) *before* the server
+    // moves into the spawn closure — we need to surface it on the TUI
+    // splash banner alongside the bind/port. Without this print the user
+    // has no way to recover the token.
+    let web_url = web_server.url();
+    // vu-fi1 companion: if the configured bind is not a loopback address,
+    // the token is the *only* protection against random LAN/Internet hits.
+    // Emit a single WARN at startup so an operator who reads `[web].bind =
+    // "0.0.0.0"` in their config knows what they signed up for.
+    if web::is_public_bind(&web_bind) {
+        eprintln!(
+            "WARN: [web].bind = {} is not a loopback address; per-launch token is the only access \
+             control. Treat the token URL as a secret.",
+            web_bind,
+        );
+    }
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start().await {
             eprintln!("Web server error: {}", e);
@@ -139,10 +156,7 @@ async fn main() -> Result<()> {
 
     let mut ui = UI::new();
 
-    println!(
-        "Vulthor started! Web interface available at http://{}:{}",
-        web_bind, web_port
-    );
+    println!("Vulthor started! Web interface available at {}", web_url);
     println!("Press 'q' to quit, '?' for help");
 
     let result = run_app(&mut terminal, &mut ui, &mut app_root).await;

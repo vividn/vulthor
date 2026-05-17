@@ -283,11 +283,10 @@ pub(crate) async fn auth_middleware(
     if is_auth_exempt(req.uri().path()) {
         return next.run(req).await;
     }
-    let presented = presented_token(&req);
-    if let Some(t) = presented {
-        if ct_eq(t.as_bytes(), state.token.as_bytes()) {
-            return next.run(req).await;
-        }
+    if let Some(t) = presented_token(&req)
+        && ct_eq(t.as_bytes(), state.token.as_bytes())
+    {
+        return next.run(req).await;
     }
     StatusCode::UNAUTHORIZED.into_response()
 }
@@ -419,12 +418,23 @@ pub(crate) async fn serve_manifest() -> Response {
 /// satisfy Chrome/Edge's installability heuristic so the OS-level
 /// "Install Vulthor" entry appears (see VISION.md).
 pub(crate) async fn serve_service_worker() -> Response {
+    // The SW is registered via `/sw.js?t=<token>` so `self.location.search`
+    // carries the same per-launch token the auth middleware demands. Without
+    // re-attaching it here the install-time `cache.addAll(SHELL)` would 401
+    // and Chrome's installability heuristic would fail.
     let body = r#"const CACHE = 'vulthor-shell-v1';
+const TOKEN = new URLSearchParams(self.location.search).get('t') || '';
+function withToken(path) {
+  if (!TOKEN) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return path + sep + 't=' + encodeURIComponent(TOKEN);
+}
 const SHELL = ['/', '/styles.css', '/vulthor_bird.png'];
+const SHELL_TOKENED = SHELL.map(withToken);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(SHELL))
+    caches.open(CACHE).then((cache) => cache.addAll(SHELL_TOKENED))
   );
   self.skipWaiting();
 });
@@ -650,15 +660,15 @@ fn generate_email_html(email: &crate::email::Email, token: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - {}</title>
-    <link rel="stylesheet" href="/styles.css">
-    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/styles.css?t={t}">
+    <link rel="manifest" href="/manifest.json?t={t}">
     <meta name='theme-color' content='#2c4f5d'>
-    <script src="/app.js" defer></script>
+    <script src="/app.js?t={t}" defer></script>
 </head>
 <body>
     <div class="app-banner">
-        <img src="/vulthor_head.png" alt="Vulthor Bird" class="logo-bird">
-        <img src="/vulthor_letters.png" alt="Vulthor" class="logo-text">
+        <img src="/vulthor_head.png?t={t}" alt="Vulthor Bird" class="logo-bird">
+        <img src="/vulthor_letters.png?t={t}" alt="Vulthor" class="logo-text">
     </div>
     <div class="container">
         <header class="email-header">
@@ -692,26 +702,28 @@ fn generate_email_html(email: &crate::email::Email, token: &str) -> String {
         escape_html(&email.headers.to),
         escape_html(&email.headers.date),
         body_srcdoc,
-        attachments_html
+        attachments_html,
+        t = t,
     )
 }
 
-fn generate_welcome_html() -> String {
-    r#"<!DOCTYPE html>
+fn generate_welcome_html(token: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulthor - Email Client</title>
-    <link rel="stylesheet" href="/styles.css">
-    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/styles.css?t={t}">
+    <link rel="manifest" href="/manifest.json?t={t}">
     <meta name='theme-color' content='#2c4f5d'>
-    <script src="/app.js" defer></script>
+    <script src="/app.js?t={t}" defer></script>
 </head>
 <body>
     <div class="container">
         <header class="welcome-header">
-            <img src="/vulthor_bird.png" alt="Vulthor Logo" class="welcome-logo">
+            <img src="/vulthor_bird.png?t={t}" alt="Vulthor Logo" class="welcome-logo">
             <h1>Vulthor</h1>
             <h2>TUI Email Client</h2>
         </header>
@@ -768,8 +780,9 @@ fn generate_welcome_html() -> String {
         </footer>
     </div>
 </body>
-</html>"#
-        .to_string()
+</html>"#,
+        t = token,
+    )
 }
 
 fn markdown_to_html(markdown: &str) -> String {
@@ -996,22 +1009,25 @@ mod tests {
 
     #[test]
     fn welcome_html_head_advertises_pwa_install_hooks() {
-        let html = generate_welcome_html();
+        let html = generate_welcome_html("tok");
         let head_end = html.find("</head>").expect("welcome HTML must have a head");
         let head = &html[..head_end];
+        // vu-fi1: subresource URLs now carry `?t=<token>` so the browser
+        // sends the per-launch token on every fetch the auth middleware
+        // sees. Match the prefix and leave the suffix open.
         assert!(
-            head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
-            "welcome <head> must link the manifest",
+            head.contains(r#"<link rel="manifest" href="/manifest.json?t="#),
+            "welcome <head> must link the manifest with a token-bearing URL",
         );
         // The SW registration now lives in /app.js (CSP forbids inline scripts).
         // The head must still reference app.js so the SW gets registered.
         assert!(
-            head.contains(r#"<script src="/app.js""#),
+            head.contains(r#"<script src="/app.js"#),
             "welcome <head> must load the extracted app.js",
         );
         let app_js = include_str!("../static/app.js");
         assert!(
-            app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+            app_js.contains("navigator.serviceWorker.register(withToken('/sw.js'))"),
             "app.js must register the service worker so install hooks still fire",
         );
     }
@@ -1019,20 +1035,20 @@ mod tests {
     #[test]
     fn email_html_head_advertises_pwa_install_hooks() {
         let email = crate::email::Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email);
+        let html = generate_email_html(&email, "tok");
         let head_end = html.find("</head>").expect("email HTML must have a head");
         let head = &html[..head_end];
         assert!(
-            head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
-            "email <head> must link the manifest",
+            head.contains(r#"<link rel="manifest" href="/manifest.json?t="#),
+            "email <head> must link the manifest with a token-bearing URL",
         );
         assert!(
-            head.contains(r#"<script src="/app.js""#),
+            head.contains(r#"<script src="/app.js"#),
             "email <head> must load the extracted app.js",
         );
         let app_js = include_str!("../static/app.js");
         assert!(
-            app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+            app_js.contains("navigator.serviceWorker.register(withToken('/sw.js'))"),
             "app.js must register the service worker so install hooks still fire",
         );
     }
@@ -1056,7 +1072,7 @@ mod tests {
     #[test]
     fn email_html_does_not_inline_scripts() {
         let email = Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email);
+        let html = generate_email_html(&email, "tok");
         // The only `<script` permitted is the external app.js reference.
         // Any inline block re-introduces the `unsafe-inline` requirement
         // we explicitly avoid in CSP_HEADER.
@@ -1065,7 +1081,7 @@ mod tests {
             let abs = idx + found;
             let after = &html[abs..];
             assert!(
-                after.starts_with("<script src=\"/app.js\""),
+                after.starts_with("<script src=\"/app.js"),
                 "inline <script> blocks must be moved to /app.js; found:\n{}",
                 &after[..after.len().min(120)],
             );
@@ -1075,13 +1091,13 @@ mod tests {
 
     #[test]
     fn welcome_html_does_not_inline_scripts() {
-        let html = generate_welcome_html();
+        let html = generate_welcome_html("tok");
         let mut idx = 0;
         while let Some(found) = html[idx..].find("<script") {
             let abs = idx + found;
             let after = &html[abs..];
             assert!(
-                after.starts_with("<script src=\"/app.js\""),
+                after.starts_with("<script src=\"/app.js"),
                 "inline <script> blocks must be moved to /app.js; found:\n{}",
                 &after[..after.len().min(120)],
             );
@@ -1106,19 +1122,24 @@ mod tests {
 
         let body_bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let body = std::str::from_utf8(&body_bytes).unwrap();
-        for token in [
-            "navigator.serviceWorker.register('/sw.js')",
-            "new EventSource('/events')",
-            "fetch('/api/current-email')",
+        // The URLs are wrapped through `withToken(...)` so SSE / fetch /
+        // service-worker registration ride the per-launch token. Pin both
+        // the wrapper call and the path string for each — a regression that
+        // drops the token in the call site would otherwise re-introduce
+        // 401s without tripping any test.
+        for usage in [
+            "navigator.serviceWorker.register(withToken('/sw.js'))",
+            "new EventSource(withToken('/events'))",
+            "fetch(withToken('/api/current-email'))",
         ] {
-            assert!(body.contains(token), "/app.js missing `{}`", token,);
+            assert!(body.contains(usage), "/app.js missing `{}`", usage,);
         }
     }
 
     #[test]
     fn email_html_wraps_body_in_sandboxed_iframe() {
         let email = Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email);
+        let html = generate_email_html(&email, "tok");
         let iframe = html
             .find("<iframe")
             .map(|i| &html[i..])
@@ -1155,7 +1176,7 @@ mod tests {
         // Round-trip a body with `&` and `"` to prove escape_html_attr fires.
         let mut email = Email::new(PathBuf::from("/tmp/fake.eml"));
         email.body_html = Some(r#"<p>tom & jerry "say" hi</p>"#.to_string());
-        let html = generate_email_html(&email);
+        let html = generate_email_html(&email, "tok");
         assert!(
             html.contains("tom &amp; jerry &quot;say&quot; hi"),
             "srcdoc attribute must escape & and \" so the body cannot break out;\n\
@@ -1223,8 +1244,15 @@ mod tests {
 
     async fn assert_security_headers_present(path: &str) {
         let app = router_for_test();
+        // Auth (vu-fi1) wraps the handler stack; without the token the route
+        // would 401 before reaching the security-headers layer's
+        // downstream. Ride the helper token baked into
+        // `webstate_with_one_headers_only_email` so we keep exercising the
+        // happy-path security-header attachment, not just the 401 path.
+        let sep = if path.contains('?') { '&' } else { '?' };
+        let uri = format!("{}{}t=test-token", path, sep);
         let response = app
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
         for header in [
@@ -1258,7 +1286,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/app.js")
+                    .uri("/app.js?t=test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1320,6 +1348,7 @@ mod tests {
             email_store: Arc::new(Mutex::new(store)),
             focused_pane: Arc::new(AtomicU8::new(ActivePane::Messages.to_u8())),
             body_request_tx: tx,
+            token: Arc::from("test-token"),
         };
         (state, rx)
     }
@@ -1433,5 +1462,180 @@ mod tests {
             "web handler must not deadlock with a concurrent lock holder; took {:?}",
             elapsed,
         );
+    }
+
+    // --- vu-fi1: per-launch loopback token --------------------------------
+    //
+    // The web pane used to accept any 127.0.0.1 client. From the observation
+    // log: any local process or browser tab on the box could hit
+    // /api/current-email and read the focused message. These tests pin the
+    // contract `auth_middleware` enforces:
+    //   - Bare GET / → 401.
+    //   - `?t=<token>` matching state.token → 200.
+    //   - `X-Vulthor-Token: <token>` matching state.token → 200.
+    //   - Mismatched token → 401.
+    //   - /healthz is the only exemption (so a watchdog can poll liveness
+    //     without the secret).
+    //   - JSON endpoint emits `Cache-Control: no-store` and `Vary: Origin`
+    //     so a same-origin cache can't replay a stale message back.
+    //   - `generate_token` is high-entropy and unique per call.
+    //   - `is_public_bind` detects the warn-worthy non-loopback case.
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unauthenticated_request_returns_401() {
+        let app = router_for_test();
+        for path in ["/", "/api/current-email", "/events", "/styles.css"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{} must reject without a token",
+                path,
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_with_valid_token_query_returns_ok() {
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/?t=test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_with_valid_token_header_returns_ok() {
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/current-email")
+                    .header("x-vulthor-token", "test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_with_mismatched_token_returns_401() {
+        let app = router_for_test();
+        for uri in ["/?t=wrong", "/api/current-email?t="] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "uri={} must reject with bad token",
+                uri,
+            );
+        }
+        // Header form with a mismatched value rejects too.
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/current-email")
+                    .header("x-vulthor-token", "not-the-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn healthz_works_without_token() {
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn api_current_email_sets_no_store_and_vary_origin() {
+        let app = router_for_test();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/current-email?t=test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let h = response.headers();
+        assert_eq!(
+            h.get("cache-control").and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "JSON endpoint must mark responses uncacheable",
+        );
+        assert_eq!(
+            h.get("vary").and_then(|v| v.to_str().ok()),
+            Some("Origin"),
+            "JSON endpoint must Vary on Origin",
+        );
+    }
+
+    #[test]
+    fn generate_token_is_random_and_long_enough() {
+        // 128 bits = 32 hex chars. Two independent draws must not collide
+        // (collision probability is 2^-128).
+        let a = generate_token();
+        let b = generate_token();
+        assert_eq!(a.len(), 32, "token must be 32 hex chars, was {:?}", a);
+        assert_eq!(b.len(), 32);
+        assert_ne!(a, b, "two independent tokens must differ");
+        assert!(
+            a.chars().all(|c| c.is_ascii_hexdigit()),
+            "token must be hex, was {:?}",
+            a,
+        );
+    }
+
+    #[test]
+    fn is_public_bind_flags_non_loopback() {
+        assert!(is_public_bind("0.0.0.0"));
+        assert!(is_public_bind("192.168.1.5"));
+        assert!(is_public_bind("::"));
+        assert!(!is_public_bind("127.0.0.1"));
+        assert!(!is_public_bind("::1"));
+        // Garbage input is treated as non-public — Config::validate will
+        // already have rejected it before we get here.
+        assert!(!is_public_bind("not-an-ip"));
+    }
+
+    #[test]
+    fn ct_eq_matches_only_on_exact_equality() {
+        assert!(ct_eq(b"abc", b"abc"));
+        assert!(!ct_eq(b"abc", b"abd"));
+        assert!(!ct_eq(b"abc", b"abcd"));
+        assert!(!ct_eq(b"", b"x"));
+        assert!(ct_eq(b"", b""));
     }
 }

@@ -377,6 +377,7 @@ fn webstate_with_no_selection(maildir: PathBuf) -> WebState {
         email_store: Arc::new(Mutex::new(store)),
         focused_pane: Arc::new(AtomicU8::new(ActivePane::Messages.to_u8())),
         body_request_tx: tx,
+        token: Arc::from("test-token"),
     }
 }
 
@@ -434,20 +435,22 @@ async fn pwa_manifest_sw_and_root_html_link_install_hooks() {
         .find("</head>")
         .expect("welcome HTML must have a head");
     let head = &root_body[..head_end];
+    // vu-fi1 appended `?t=<token>` to every subresource URL so the
+    // browser-issued GETs satisfy the auth middleware.
     assert!(
-        head.contains(r#"<link rel="manifest" href="/manifest.json">"#),
+        head.contains(r#"<link rel="manifest" href="/manifest.json?t="#),
         "welcome <head> missing manifest link",
     );
     // vu-pcw moved the inline scripts (including SW registration) into the
     // /app.js bundle so the page can ship under a strict CSP. The head must
     // still reference app.js, and app.js must carry the SW registration.
     assert!(
-        head.contains(r#"<script src="/app.js""#),
+        head.contains(r#"<script src="/app.js"#),
         "welcome <head> missing app.js script tag",
     );
     let app_js = include_str!("../static/app.js");
     assert!(
-        app_js.contains("navigator.serviceWorker.register('/sw.js')"),
+        app_js.contains("navigator.serviceWorker.register(withToken('/sw.js'))"),
         "app.js missing service-worker registration",
     );
 }

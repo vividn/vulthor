@@ -9,9 +9,21 @@
 // <iframe srcdoc> so untrusted markup cannot reach the parent origin.
 
 (function () {
+    // Per-launch token gating every request except /healthz. The HTML shell
+    // is reached via /?t=<token>, so location.search reliably carries it.
+    // EventSource can't set custom headers, so we ride the query param for
+    // both SSE and fetch — same wire form the server-side middleware
+    // accepts (?t=<token> | X-Vulthor-Token).
+    const TOKEN = new URLSearchParams(window.location.search).get('t') || '';
+    function withToken(path) {
+        if (!TOKEN) return path;
+        const sep = path.includes('?') ? '&' : '?';
+        return path + sep + 't=' + encodeURIComponent(TOKEN);
+    }
+
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-            navigator.serviceWorker.register('/sw.js').catch(function (err) {
+            navigator.serviceWorker.register(withToken('/sw.js')).catch(function (err) {
                 console.log('SW registration failed:', err);
             });
         });
@@ -20,7 +32,7 @@
     let currentEmailId = null;
     let isLoading = false;
 
-    const eventSource = new EventSource('/events');
+    const eventSource = new EventSource(withToken('/events'));
     eventSource.addEventListener('email-changed', function (event) {
         if (event.data !== currentEmailId && !isLoading) {
             loadEmailContent();
@@ -34,7 +46,7 @@
         if (isLoading) return;
         isLoading = true;
         try {
-            const response = await fetch('/api/current-email');
+            const response = await fetch(withToken('/api/current-email'));
             const emailData = await response.json();
             if (emailData.has_email) {
                 updateEmailDisplay(emailData);
