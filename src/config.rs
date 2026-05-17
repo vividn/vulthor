@@ -132,6 +132,20 @@ impl Default for AiConfig {
     }
 }
 
+/// `[render]` block — content-pane rendering preferences. Today only
+/// `prefer_plaintext` lives here; it seeds the startup value of the
+/// in-app Shift+P toggle (vu-c1s) that forces body_plain even when an
+/// HTML alternative exists.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RenderConfig {
+    /// When true, the content pane renders `body_plain` (or
+    /// `"(no plain part)"` when missing) even if `body_html` is also
+    /// present. Defaults to false; users opt in either statically here
+    /// or per-session via Shift+P.
+    #[serde(default)]
+    pub prefer_plaintext: bool,
+}
+
 /// `[theme]` block. Selects a user-loadable theme by name (resolved
 /// against `~/.config/vulthor/themes/<name>.toml`) and/or specifies a
 /// per-role color override map. Resolution order:
@@ -200,6 +214,10 @@ pub struct Config {
     /// `[theme]` block. Empty by default → built-in palette.
     #[serde(default)]
     pub theme: ThemeConfig,
+    /// `[render]` block. Today gates the Shift+P plaintext toggle's
+    /// initial state. See [`RenderConfig`].
+    #[serde(default)]
+    pub render: RenderConfig,
     /// `[keybindings]` overrides. Each entry rebinds one of the
     /// canonical action names (see `crate::keymap::Action::name`) to
     /// a user-chosen key string. Empty by default — every action
@@ -234,6 +252,7 @@ impl Default for Config {
             web: WebConfig::default(),
             ai: AiConfig::default(),
             theme: ThemeConfig::default(),
+            render: RenderConfig::default(),
             keybindings: KeybindingsConfig::default(),
             log: LogConfig::default(),
         }
