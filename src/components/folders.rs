@@ -155,19 +155,15 @@ impl Component for FoldersComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Option<Msg> {
-        // Action keys (`j`/`k`/Enter/Backspace) now resolve through the
+        // Action keys (including arrow `Up`/`Down`) resolve through the
         // central `AppRoot::action_to_msg` keymap dispatch. This handler
-        // owns:
-        //   - arrow-key navigation (not in the keymap),
-        //   - context-dependent `l` (select-into vs. view-advance) — the
-        //     keymap maps `Action::ViewNext` to `None` in the Folders
-        //     pane so this arm gets to make the call.
-        if !key.modifiers.is_empty() && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+        // owns only context-dependent `l` (select-into vs. view-advance)
+        // — the keymap maps `Action::ViewNext` to `None` in the Folders
+        // pane so this arm gets to make the call.
+        if !key.modifiers.is_empty() {
             return None;
         }
         match key.code {
-            KeyCode::Down => Some(Msg::FolderMove(Dir::Down)),
-            KeyCode::Up => Some(Msg::FolderMove(Dir::Up)),
             KeyCode::Char('l') => {
                 let path = crate::layout::get_folder_path_from_display_index(
                     &ctx.store.root_folder,
@@ -256,23 +252,10 @@ mod tests {
         assert_eq!(comp.folder_index, 0);
     }
 
-    #[test]
-    fn on_key_arrows_map_to_folder_move() {
-        // `j`/`k`/Enter now resolve via `AppRoot::action_to_msg`
-        // (centralised keymap dispatch) so `[keybindings]` overrides
-        // reach the runtime. This component still owns arrow-key
-        // navigation because those keys are not in the keymap.
-        let store = store_with_folders(&["A"]);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut comp = FoldersComponent::with_index(0);
-
-        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        assert_eq!(comp.on_key(down, &ctx), Some(Msg::FolderMove(Dir::Down)));
-
-        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(comp.on_key(up, &ctx), Some(Msg::FolderMove(Dir::Up)));
-    }
+    // Arrow `Up`/`Down` in the Folders pane resolve through the
+    // central keymap dispatch (Action::MoveDown/MoveUp →
+    // Msg::FolderMove); coverage lives in
+    // `phase4_integration_tests::arrow_down_in_folders_emits_folder_move_via_keymap`.
 
     #[test]
     fn on_key_l_enters_folder_when_not_already_inside() {

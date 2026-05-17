@@ -42,6 +42,7 @@ use super::{
     ReplyKind, SearchComponent, notmuch_available, parse_notmuch_files_output,
 };
 
+use super::content::PAGE_SCROLL_STEP;
 use crate::compose::{Compose, build_reply_template, default_template};
 use crate::config::AccountConfig;
 
@@ -833,16 +834,18 @@ impl AppRoot {
             } else {
                 Msg::ViewPrev
             }),
-            // Folders / Accounts use `l` for select-into semantics; the
-            // component on_key handler claims it. Other panes fire the
-            // view-right shortcut.
-            Action::ViewNext => {
-                if matches!(active_pane, ActivePane::Folders | ActivePane::Accounts) {
-                    None
-                } else {
-                    Some(Msg::ViewNext)
-                }
-            }
+            // Folders use `l` for select-into semantics with a
+            // context-aware branch (already-inside-folder → ViewNext)
+            // that lives in FoldersComponent::on_key — AppRoot returns
+            // None so that handler runs. Accounts is unconditional:
+            // `l` = "select this account" (empty-id sentinel resolves
+            // to the cursor in apply_root, same convention as
+            // MessageOpen).
+            Action::ViewNext => match active_pane {
+                ActivePane::Folders => None,
+                ActivePane::Accounts => Some(Msg::AccountSelect(String::new())),
+                _ => Some(Msg::ViewNext),
+            },
             // `/` opens the notmuch search modal everywhere except the
             // Draft pane, where `/` types into the in-flight reply via
             // `$EDITOR`.
@@ -855,30 +858,47 @@ impl AppRoot {
             }
 
             // ---- Per-pane navigation -------------------------------------
-            // `j`/`k` dispatch into the focused pane's move-Msg. Accounts
-            // and Attachments still own their own j/k handlers (they
-            // weren't in the strip list for this refactor); returning
-            // `None` here lets their existing component logic fire.
+            // `j`/`k` (and `Down`/`Up` arrows via the defaults table)
+            // dispatch into the focused pane's move-Msg. Attachments
+            // still owns its own j/k via `handle_residual_key`
+            // (returning `None` here lets that fallback fire).
             Action::MoveDown => match active_pane {
                 ActivePane::Folders => Some(Msg::FolderMove(Dir::Down)),
                 ActivePane::Messages => Some(Msg::MessageMove(Dir::Down)),
                 ActivePane::Content => Some(Msg::ContentScroll(Dir::Down, 1)),
+                ActivePane::Accounts => Some(Msg::AccountMove(Dir::Down)),
                 _ => None,
             },
             Action::MoveUp => match active_pane {
                 ActivePane::Folders => Some(Msg::FolderMove(Dir::Up)),
                 ActivePane::Messages => Some(Msg::MessageMove(Dir::Up)),
                 ActivePane::Content => Some(Msg::ContentScroll(Dir::Up, 1)),
+                ActivePane::Accounts => Some(Msg::AccountMove(Dir::Up)),
+                _ => None,
+            },
+            // PageDown / PageUp page-scroll the Content pane. The
+            // remaining list panes intentionally don't page — VISION.md
+            // §Action Keybindings doesn't promise paged navigation
+            // there, and users still get fine-grained motion via j/k
+            // and the gj/gk unread-jump sequences.
+            Action::PageDown => match active_pane {
+                ActivePane::Content => Some(Msg::ContentScroll(Dir::Down, PAGE_SCROLL_STEP)),
+                _ => None,
+            },
+            Action::PageUp => match active_pane {
+                ActivePane::Content => Some(Msg::ContentScroll(Dir::Up, PAGE_SCROLL_STEP)),
                 _ => None,
             },
             // Enter is context-sensitive. Folders → enter the cursor
-            // folder; Messages → open the cursor email. Accounts owns
-            // its own Enter (it needs the selected account id), and
-            // Attachments has bespoke open-the-attachment logic in
-            // `handle_residual_key`.
+            // folder; Messages → open the cursor email; Accounts →
+            // select the cursor account (empty-id sentinel; apply_root
+            // resolves it via `AccountsComponent::current_account_id`,
+            // same convention as Msg::MessageOpen). Attachments still
+            // routes Enter through `handle_residual_key`.
             Action::Confirm => match active_pane {
                 ActivePane::Folders => Some(Msg::FolderEnter),
                 ActivePane::Messages => Some(Msg::MessageOpen(String::new())),
+                ActivePane::Accounts => Some(Msg::AccountSelect(String::new())),
                 _ => None,
             },
             // Backspace pops the folder stack from the list-oriented
@@ -1153,7 +1173,19 @@ impl AppRoot {
                 self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
             }
             Msg::AccountSelect(id) => {
-                if let Some(account) = self.accounts.account_by_id(id) {
+                // Empty id is the cursor sentinel — keymap dispatch
+                // produces it for `Confirm`/`ViewNext` in the Accounts
+                // pane since `action_to_msg` can't see the cursor.
+                // Resolve to the highlighted account here (mirrors the
+                // `MessageOpen(String::new())` convention).
+                let resolved = if id.is_empty() {
+                    self.accounts.current_account_id()
+                } else {
+                    Some(id.clone())
+                };
+                if let Some(resolved_id) = resolved
+                    && let Some(account) = self.accounts.account_by_id(&resolved_id)
+                {
                     let new_path = account.maildir_path.clone();
                     self.switch_active_maildir(new_path);
                 }
@@ -2245,17 +2277,24 @@ mod tests {
         );
     }
 
-    /// `l` is `Action::ViewNext`. Folders/Accounts panes use it for
-    /// select-into (component on_key claims the key), so AppRoot must
-    /// hand it back via `None`. Other panes get the view-right Msg.
+    /// `l` is `Action::ViewNext`. The Folders pane uses it for
+    /// select-into with context-aware logic that lives in
+    /// `FoldersComponent::on_key`, so AppRoot returns `None` for that
+    /// pane. The Accounts pane treats `l` like Enter — select the
+    /// cursor account via the empty-id sentinel. Other panes get the
+    /// view-right Msg.
     #[test]
-    fn keymap_l_defers_in_folders_and_accounts() {
+    fn keymap_l_defers_in_folders_and_selects_in_accounts() {
         let map = resolve_keymap(&std::collections::BTreeMap::new()).unwrap();
         let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         let action = map.lookup_single(key).expect("l is bound");
         assert_eq!(action, Action::ViewNext);
         assert!(AppRoot::action_to_msg(action, &ActivePane::Folders, false).is_none());
-        assert!(AppRoot::action_to_msg(action, &ActivePane::Accounts, false).is_none());
+        assert_eq!(
+            AppRoot::action_to_msg(action, &ActivePane::Accounts, false),
+            Some(Msg::AccountSelect(String::new())),
+            "Accounts must select cursor account (sentinel-resolved in apply_root)",
+        );
         assert_eq!(
             AppRoot::action_to_msg(action, &ActivePane::Messages, false),
             Some(Msg::ViewNext)
@@ -2706,6 +2745,78 @@ mod tests {
         root.process_event(pd).unwrap();
         assert_eq!(root.content.scroll_offset, 10);
         assert_eq!(root.layout.selection.scroll_offset, 10);
+    }
+
+    #[test]
+    fn arrow_down_in_messages_emits_message_move_via_keymap() {
+        // Bead vu-251 regression anchor: arrow `Down` in the Messages
+        // pane must walk
+        //   process_event → keymap.lookup_single(Down) → Action::MoveDown
+        //   → action_to_msg → Msg::MessageMove(Dir::Down)
+        // rather than the old component-local shadow arm. The cursor
+        // advancing by one row proves the dispatch reached
+        // `MessagesComponent::handle_msg` (the only writer of
+        // `email_index`).
+        let mut store = EmailStore::new(PathBuf::from("/tmp"));
+        let mut inbox = Folder::new("INBOX".to_string(), PathBuf::from("/tmp/INBOX"));
+        for i in 0..3 {
+            inbox.add_email(Email::new(PathBuf::from(format!("/tmp/INBOX/m{}", i))));
+        }
+        inbox.is_loaded = true;
+        store.root_folder.add_subfolder(inbox);
+        store.current_folder = vec![0];
+        store.select_email(0);
+
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut root = AppRoot::new(Arc::new(Mutex::new(store)), scanner);
+        root.layout.active_pane = ActivePane::Messages;
+
+        let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        root.process_event(down).unwrap();
+
+        assert_eq!(
+            root.messages.email_index, 1,
+            "arrow Down in Messages must drive Msg::MessageMove via the central keymap, not a parallel shadow arm",
+        );
+    }
+
+    #[test]
+    fn arrow_down_in_accounts_emits_account_move_via_keymap() {
+        // The most visible bead vu-251 bug: arrow `Down` in Accounts
+        // used to bypass the keymap entirely because Accounts had its
+        // own `KeyCode::Down => AccountMove(Down)` arm. After the
+        // refactor, the keymap dispatch must drive the cursor, so a
+        // user `[keybindings] move_down = "x"` override would actually
+        // disable arrow Down in Accounts (same as everywhere else).
+        let cfg = {
+            let mut cfg = Config::default();
+            for key in ["alpha", "bravo"] {
+                cfg.accounts.insert(
+                    key.to_string(),
+                    crate::config::AccountConfig {
+                        name: key.to_string(),
+                        email: format!("{}@x.test", key),
+                        maildir_path: PathBuf::from(format!("/tmp/{}-mail", key)),
+                        smtp_command: None,
+                        signature: None,
+                    },
+                );
+            }
+            cfg
+        };
+        let store = EmailStore::new(PathBuf::from("/tmp"));
+        let scanner = crate::maildir::MaildirScanner::new(PathBuf::from("/tmp"));
+        let mut root = AppRoot::with_config(Arc::new(Mutex::new(store)), scanner, cfg);
+        root.layout.active_pane = ActivePane::Accounts;
+
+        let down = Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        root.process_event(down).unwrap();
+
+        assert_eq!(
+            root.accounts.selected_index(),
+            1,
+            "arrow Down in Accounts must dispatch Msg::AccountMove via the central keymap (vu-251 bypass fix)",
+        );
     }
 
     #[test]

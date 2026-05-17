@@ -27,6 +27,8 @@ pub enum Action {
     // Navigation
     MoveDown,
     MoveUp,
+    PageDown,
+    PageUp,
     ViewPrev,
     ViewNext,
     FocusNext,
@@ -71,6 +73,8 @@ impl Action {
         match self {
             Action::MoveDown => "move_down",
             Action::MoveUp => "move_up",
+            Action::PageDown => "page_down",
+            Action::PageUp => "page_up",
             Action::ViewPrev => "view_prev",
             Action::ViewNext => "view_next",
             Action::FocusNext => "focus_next",
@@ -113,6 +117,8 @@ impl Action {
         &[
             Action::MoveDown,
             Action::MoveUp,
+            Action::PageDown,
+            Action::PageUp,
             Action::ViewPrev,
             Action::ViewNext,
             Action::FocusNext,
@@ -158,10 +164,20 @@ impl Action {
 /// Default key bindings, mirroring VISION.md §Action Keybindings.
 /// Sequence bindings (`gg`, `G`, `gj`, `gk`, `gr`) are encoded
 /// verbatim; the parser splits them into multi-event chords.
+///
+/// An action may appear multiple times — e.g. `MoveDown` is bound to
+/// both `j` and `Down` by default so arrow-key users don't have to
+/// rebind. A user override in `[keybindings]` replaces every default
+/// binding for that action with a single chosen key (one key per
+/// override entry — multi-key overrides aren't a Vulthor concept).
 pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     // Navigation
     (Action::MoveDown, "j"),
+    (Action::MoveDown, "Down"),
     (Action::MoveUp, "k"),
+    (Action::MoveUp, "Up"),
+    (Action::PageDown, "PageDown"),
+    (Action::PageUp, "PageUp"),
     (Action::ViewPrev, "h"),
     (Action::ViewNext, "l"),
     (Action::FocusNext, "Tab"),
@@ -263,6 +279,10 @@ fn parse_named(s: &str) -> Option<KeyEvent> {
         "Down" => KeyCode::Down,
         "Left" => KeyCode::Left,
         "Right" => KeyCode::Right,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
         "Space" => KeyCode::Char(' '),
         _ => return None,
     };
@@ -322,26 +342,31 @@ impl Keymap {
 }
 
 /// Build a [`Keymap`] from the static defaults plus user overrides.
-/// Each override entry replaces the default binding for its action
-/// before conflict detection runs, so renaming `archive` from `a` to
-/// `e` does not collide with the default `e`-bound `draft_edit`
-/// unless the user also leaves the default in place.
+///
+/// A user override replaces *every* default key for that action with a
+/// single chosen key, so e.g. binding `move_down = "x"` retires both
+/// `j` and the arrow `Down` for MoveDown. Conflict detection runs after
+/// override application: rebinding `archive` to `e` without freeing the
+/// default `e`-bound `draft_edit` is still a structured error.
 pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
-    // Start with the static defaults as `action -> key_string`.
-    let mut bindings: BTreeMap<Action, String> = BTreeMap::new();
-    for (action, key) in DEFAULT_KEYMAP.iter().copied() {
-        bindings.insert(action, key.to_string());
-    }
+    // Defaults as `(action, key)` pairs — `Vec` (not `BTreeMap`) so a
+    // single action can carry multiple keys (e.g. MoveDown ↔ j, Down).
+    let mut bindings: Vec<(Action, String)> = DEFAULT_KEYMAP
+        .iter()
+        .map(|(a, s)| (*a, (*s).to_string()))
+        .collect();
 
-    // Apply overrides. Unknown action names are rejected up-front so
-    // typos don't silently no-op.
+    // Apply overrides. Each entry retires every default binding for
+    // that action, then claims the user-chosen key. Unknown action
+    // names are rejected up-front so typos don't silently no-op.
     for (action_name, key_string) in overrides.iter() {
         let Some(action) = Action::from_name(action_name) else {
             return Err(VulthorError::KeybindingUnknownAction {
                 action: action_name.clone(),
             });
         };
-        bindings.insert(action, key_string.clone());
+        bindings.retain(|(a, _)| *a != action);
+        bindings.push((action, key_string.clone()));
     }
 
     // Materialise to the two lookup tables, raising on either a parse
@@ -351,7 +376,9 @@ pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
 
     // Track raw key-strings already claimed for stable conflict
     // diagnostics (so the error names the user's input, not a
-    // pretty-printed KeyEvent).
+    // pretty-printed KeyEvent). Re-binding the same action to the same
+    // key string twice is not a conflict — `DEFAULT_KEYMAP` carries one
+    // entry per `(action, key)` pair already.
     let mut by_key: HashMap<String, Action> = HashMap::new();
 
     for (action, key_string) in bindings.iter() {
@@ -369,7 +396,9 @@ pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
             });
         }
 
-        if let Some(prior) = by_key.get(key_string) {
+        if let Some(prior) = by_key.get(key_string)
+            && prior != action
+        {
             let mut names = [prior.name().to_string(), action.name().to_string()];
             names.sort();
             return Err(VulthorError::KeybindingConflict {
@@ -381,7 +410,9 @@ pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
         by_key.insert(key_string.clone(), *action);
 
         if events.len() == 1 {
-            if let Some(prior) = single.insert(events[0], *action) {
+            if let Some(prior) = single.insert(events[0], *action)
+                && prior != *action
+            {
                 let mut names = [prior.name().to_string(), action.name().to_string()];
                 names.sort();
                 return Err(VulthorError::KeybindingConflict {
@@ -390,7 +421,9 @@ pub fn resolve_keymap(overrides: &BTreeMap<String, String>) -> Result<Keymap> {
                     action_b: names[1].clone(),
                 });
             }
-        } else if let Some(prior) = sequences.insert(events, *action) {
+        } else if let Some(prior) = sequences.insert(events, *action)
+            && prior != *action
+        {
             let mut names = [prior.name().to_string(), action.name().to_string()];
             names.sort();
             return Err(VulthorError::KeybindingConflict {
@@ -550,5 +583,89 @@ mod tests {
         // `gg` jumps to top.
         let gg = vec![char_event('g'), char_event('g')];
         assert_eq!(map.lookup_sequence(&gg), Some(Action::JumpTop));
+    }
+
+    #[test]
+    fn default_keymap_binds_arrows_and_page_keys_alongside_hjkl() {
+        // The bead's central acceptance: arrow `Down`/`Up` and
+        // `PageDown`/`PageUp` must resolve through `DEFAULT_KEYMAP` so
+        // `[keybindings]` overrides reach them. Both the j/k vim
+        // bindings AND the corresponding arrow keys must hit MoveDown /
+        // MoveUp respectively.
+        let map = resolve_keymap(&BTreeMap::new()).unwrap();
+        let j = char_event('j');
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(map.lookup_single(j), Some(Action::MoveDown));
+        assert_eq!(
+            map.lookup_single(down),
+            Some(Action::MoveDown),
+            "arrow Down must resolve to MoveDown (the bead's bypass fix)",
+        );
+
+        let k = char_event('k');
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(map.lookup_single(k), Some(Action::MoveUp));
+        assert_eq!(map.lookup_single(up), Some(Action::MoveUp));
+
+        let pd = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        let pu = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(map.lookup_single(pd), Some(Action::PageDown));
+        assert_eq!(map.lookup_single(pu), Some(Action::PageUp));
+    }
+
+    #[test]
+    fn override_retires_every_default_key_for_action() {
+        // Rebinding `move_down` to `x` must retire BOTH default keys
+        // for MoveDown — the vim `j` and the arrow `Down`. Otherwise
+        // the user's mental model breaks: they explicitly renamed the
+        // action, but ghosts of the old bindings keep firing.
+        let mut overrides = BTreeMap::new();
+        overrides.insert("move_down".to_string(), "x".to_string());
+
+        let map = resolve_keymap(&overrides).expect("override resolves");
+
+        assert_eq!(
+            map.lookup_single(char_event('x')),
+            Some(Action::MoveDown),
+            "user-chosen 'x' must drive MoveDown",
+        );
+        assert_eq!(
+            map.lookup_single(char_event('j')),
+            None,
+            "default 'j' must be unbound after move_down is rebound",
+        );
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(
+            map.lookup_single(down),
+            None,
+            "default arrow Down must be unbound after move_down is rebound",
+        );
+    }
+
+    #[test]
+    fn override_can_steal_pagedown_key_for_another_action() {
+        // VISION.md §Configuration Schema promises every action is
+        // rebindable from `[keybindings]`. The bead's TDD anchor
+        // exercises this for the new PageDown key: a user can rehome
+        // `jump_next_unread` to `PageDown` by first freeing the key
+        // (`page_down = "Ctrl+d"`) and then claiming it.
+        let mut overrides = BTreeMap::new();
+        overrides.insert("page_down".to_string(), "Ctrl+d".to_string());
+        overrides.insert("jump_next_unread".to_string(), "PageDown".to_string());
+
+        let map = resolve_keymap(&overrides).expect("override resolves");
+
+        let pd = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(
+            map.lookup_single(pd),
+            Some(Action::JumpNextUnread),
+            "PageDown must fire JumpNextUnread after the rebind",
+        );
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(
+            map.lookup_single(ctrl_d),
+            Some(Action::PageDown),
+            "page_down moved to Ctrl+d",
+        );
     }
 }

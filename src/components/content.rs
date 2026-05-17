@@ -26,7 +26,7 @@ use super::{Component, Ctx, Dir, Msg};
 
 /// How many lines PageUp/PageDown moves through the body. Matches the
 /// legacy `input::handle_main_view_input` constant of 10.
-const PAGE_SCROLL_STEP: usize = 10;
+pub(crate) const PAGE_SCROLL_STEP: usize = 10;
 
 /// Content pane state. Holds the scroll offset for the body and the
 /// scrollbar's ratatui state.
@@ -175,26 +175,13 @@ impl Component for ContentComponent {
         }
     }
 
-    fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // Action keys (`j`/`k`) now resolve through the central
-        // `AppRoot::action_to_msg` keymap dispatch. This handler owns
-        // structural keys that aren't in the keymap: arrow keys and
-        // PageUp/PageDown paging.
-        if !key.modifiers.is_empty()
-            && !matches!(
-                key.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
-            )
-        {
-            return None;
-        }
-        match key.code {
-            KeyCode::Down => Some(Msg::ContentScroll(Dir::Down, 1)),
-            KeyCode::Up => Some(Msg::ContentScroll(Dir::Up, 1)),
-            KeyCode::PageDown => Some(Msg::ContentScroll(Dir::Down, PAGE_SCROLL_STEP)),
-            KeyCode::PageUp => Some(Msg::ContentScroll(Dir::Up, PAGE_SCROLL_STEP)),
-            _ => None,
-        }
+    fn on_key(&mut self, _key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
+        // Every Content-pane key (`j`/`k`/arrows/PageUp/PageDown)
+        // resolves through the central `AppRoot::action_to_msg` keymap
+        // dispatch. Keeping this trait method as a no-op satisfies the
+        // Component contract and leaves a seam for future
+        // Content-local sequence keys.
+        None
     }
 }
 
@@ -297,45 +284,9 @@ mod tests {
         assert_eq!(c.scroll_offset, 5);
     }
 
-    // `j`/`k` now resolve via `AppRoot::action_to_msg` (centralised
-    // keymap dispatch) so `[keybindings]` overrides reach the runtime.
-    // This component still owns arrow + PageUp/PageDown navigation
-    // because those keys are not in the keymap.
-
-    #[test]
-    fn on_key_arrows_map_to_single_line_scroll() {
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
-        let mut c = ContentComponent::new();
-        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        assert_eq!(c.on_key(down, &ctx), Some(Msg::ContentScroll(Dir::Down, 1)));
-        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(c.on_key(up, &ctx), Some(Msg::ContentScroll(Dir::Up, 1)));
-    }
-
-    #[test]
-    fn on_key_pageup_pagedown_step_by_ten() {
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
-        let mut c = ContentComponent::new();
-        let pd = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
-        assert_eq!(
-            c.on_key(pd, &ctx),
-            Some(Msg::ContentScroll(Dir::Down, PAGE_SCROLL_STEP)),
-        );
-        let pu = KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE);
-        assert_eq!(
-            c.on_key(pu, &ctx),
-            Some(Msg::ContentScroll(Dir::Up, PAGE_SCROLL_STEP)),
-        );
-    }
-
-    #[test]
-    fn on_key_ignores_modified_letter_keys() {
-        let (theme, config, store) = fixtures();
-        let ctx = ctx(&theme, &config, &store);
-        let mut c = ContentComponent::new();
-        let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
-        assert_eq!(c.on_key(alt_j, &ctx), None);
-    }
+    // `j`/`k`, arrow `Up`/`Down`, and `PageUp`/`PageDown` all resolve
+    // via `AppRoot::action_to_msg` (centralised keymap dispatch). This
+    // component's `on_key` is a no-op; the dispatch test
+    // `components::root::tests::key_pagedown_in_content_pane_scrolls_by_ten`
+    // exercises the full process_event → keymap → ContentScroll path.
 }

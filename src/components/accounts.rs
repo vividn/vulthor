@@ -206,18 +206,15 @@ impl Component for AccountsComponent {
         f.render_stateful_widget(list, area, &mut *state);
     }
 
-    fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        if !key.modifiers.is_empty() && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
-            return None;
-        }
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => Some(Msg::AccountMove(Dir::Down)),
-            KeyCode::Char('k') | KeyCode::Up => Some(Msg::AccountMove(Dir::Up)),
-            KeyCode::Enter | KeyCode::Char('l') => {
-                self.current_account_id().map(Msg::AccountSelect)
-            }
-            _ => None,
-        }
+    fn on_key(&mut self, _key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
+        // Every Accounts-pane key (`j`/`k`/`l`/Enter/arrows) resolves
+        // through the central `AppRoot::action_to_msg` keymap dispatch.
+        // For `l` and Enter, that path produces `Msg::AccountSelect`
+        // with an empty-id sentinel; `AppRoot::apply_root` resolves the
+        // sentinel to the cursor account via
+        // `AccountsComponent::current_account_id`. Keeping this trait
+        // method as a no-op satisfies the Component contract.
+        None
     }
 }
 
@@ -341,52 +338,12 @@ mod tests {
         assert_eq!(c.current_account_id().as_deref(), Some("c"));
     }
 
-    #[test]
-    fn enter_emits_account_select_for_current_row() {
-        let cfg = config_with(&[("a", account("Alpha", "/a")), ("b", account("Bravo", "/b"))]);
-        let mut c = AccountsComponent::with_config(&cfg);
-        let (theme, store) = fixtures();
-        let ctx = ctx(&theme, &cfg, &store);
-        // Move to "b" first so we know we're picking the cursor, not 0.
-        c.handle_msg(&Msg::AccountMove(Dir::Down), &ctx);
-        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(c.on_key(enter, &ctx), Some(Msg::AccountSelect("b".into())));
-    }
-
-    #[test]
-    fn lowercase_l_emits_account_select_for_current_row() {
-        // Per the issue's acceptance: 'l' switches the active account
-        // exactly like Enter (it advances right into the Folders view
-        // anchored to the picked account).
-        let cfg = config_with(&[("only", account("Only", "/only"))]);
-        let mut c = AccountsComponent::with_config(&cfg);
-        let (theme, store) = fixtures();
-        let ctx = ctx(&theme, &cfg, &store);
-        let l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
-        assert_eq!(c.on_key(l, &ctx), Some(Msg::AccountSelect("only".into())));
-    }
-
-    #[test]
-    fn jk_emit_account_move() {
-        let cfg = config_with(&[("a", account("A", "/a"))]);
-        let mut c = AccountsComponent::with_config(&cfg);
-        let (theme, store) = fixtures();
-        let ctx = ctx(&theme, &cfg, &store);
-        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(c.on_key(j, &ctx), Some(Msg::AccountMove(Dir::Down)));
-        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(c.on_key(k, &ctx), Some(Msg::AccountMove(Dir::Up)));
-    }
-
-    #[test]
-    fn modifiers_other_than_arrows_pass_through() {
-        let cfg = config_with(&[("a", account("A", "/a"))]);
-        let mut c = AccountsComponent::with_config(&cfg);
-        let (theme, store) = fixtures();
-        let ctx = ctx(&theme, &cfg, &store);
-        let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
-        assert_eq!(c.on_key(alt_j, &ctx), None);
-    }
+    // `j`/`k`, arrow `Up`/`Down`, Enter, and `l` all resolve via
+    // `AppRoot::action_to_msg` (centralised keymap dispatch). The
+    // sentinel-resolution and end-to-end account-switch behaviour are
+    // covered by
+    // `components::root::tests::l_on_accounts_pane_switches_account_end_to_end`
+    // and the new keymap-dispatch tests in `phase4_integration_tests`.
 
     #[test]
     fn render_lists_each_account_name() {

@@ -498,19 +498,16 @@ impl Component for MessagesComponent {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // Action keys (`j`/`k`/`a`/`s`/`d`/`m`/`F`/`U`/`r`/`R`/`f`/Enter
-        // /Backspace) now resolve through the central
-        // `AppRoot::action_to_msg` keymap dispatch so `[keybindings]`
-        // overrides actually reach the runtime. This handler only owns:
-        //   - arrow-key navigation (not in the keymap),
-        //   - the `g`-prefix sequence (`gr` → reply-sender; the rest
-        //     are reserved for future sequence actions).
-        // AppRoot pre-empts this handler while `pending_g` is set so
-        // the second key of the sequence is consumed here before the
+        // Action keys (including arrow `Up`/`Down`) resolve through the
+        // central `AppRoot::action_to_msg` keymap dispatch so
+        // `[keybindings]` overrides reach the runtime. This handler
+        // only owns the `g`-prefix sequence (`gr` → reply-sender; the
+        // remaining `gg`/`gj`/`gk` slots are reserved). AppRoot
+        // pre-empts this handler while `pending_g` is set so the
+        // second key of the sequence is consumed here before the
         // single-key table can interpret it (e.g. `r` → ReplyAll).
         use crossterm::event::KeyModifiers;
-        let mods_ok = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
-        if !mods_ok && !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+        if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
             return None;
         }
 
@@ -524,8 +521,6 @@ impl Component for MessagesComponent {
         }
 
         match key.code {
-            KeyCode::Down => Some(Msg::MessageMove(Dir::Down)),
-            KeyCode::Up => Some(Msg::MessageMove(Dir::Up)),
             KeyCode::Char('g') => {
                 // Arm the g-prefix sequence; absorb the keystroke
                 // without emitting a message. AppRoot will route the
@@ -737,24 +732,10 @@ mod tests {
         assert_eq!(m.email_index, 0);
     }
 
-    #[test]
-    fn on_key_arrows_map_to_message_move() {
-        // `j`/`k` go through `AppRoot::action_to_msg` (centralised
-        // keymap dispatch) so `[keybindings]` overrides reach the
-        // runtime — see the integration tests in
-        // `phase4_integration_tests.rs`. This component still owns
-        // arrow-key navigation because those keys are not in the
-        // keymap.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        assert_eq!(m.on_key(down, &ctx), Some(Msg::MessageMove(Dir::Down)));
-        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
-        assert_eq!(m.on_key(up, &ctx), Some(Msg::MessageMove(Dir::Up)));
-    }
+    // Arrow `Up`/`Down` in the Messages pane resolve through the
+    // central keymap dispatch (Action::MoveDown/MoveUp →
+    // Msg::MessageMove); see
+    // `phase4_integration_tests::arrow_down_in_messages_emits_message_move_via_keymap`.
 
     /// The open path pairs with an auto mark-read. MessagesComponent
     /// emits `MessageMarkRead` as a follow-up to `MessageOpen` so a
