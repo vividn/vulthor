@@ -420,6 +420,7 @@ fn theme_primary_override_reaches_rendered_folder_selection_bg() {
     overrides.insert("primary".into(), "#FF0000".into());
     let cfg = Config {
         theme: crate::config::ThemeConfig {
+            preset: None,
             name: None,
             overrides,
         },

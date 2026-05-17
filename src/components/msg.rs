@@ -40,6 +40,10 @@ pub enum Msg {
     // Global lifecycle
     Quit,
     ToggleHelp,
+    /// Cycle to the next built-in theme preset (vu-62n). Transient —
+    /// applies only to the live session; the config file is not
+    /// rewritten. Bound to `Ctrl+T` globally.
+    CycleTheme,
     StatusSet(String),
     StatusClear,
 

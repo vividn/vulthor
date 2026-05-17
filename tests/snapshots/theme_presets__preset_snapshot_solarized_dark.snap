@@ -1,0 +1,13 @@
+---
+source: tests/theme_presets.rs
+expression: "theme_lines(&ThemePreset::SolarizedDark.theme())"
+---
+dark          #002B36
+primary       #073642
+light         #586E75
+accent        #CB4B16
+accent_light  #B58900
+cyan          #2AA198
+cyan_light    #268BD2
+gray_dark     #657B83
+gray_light    #EEE8D5

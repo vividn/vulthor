@@ -1,0 +1,13 @@
+---
+source: tests/theme_presets.rs
+expression: "theme_lines(&ThemePreset::DefaultDark.theme())"
+---
+dark          #1A2F3A
+primary       #2C4F5D
+light         #3D6270
+accent        #FF8C42
+accent_light  #FFAA5A
+cyan          #7DD3C0
+cyan_light    #A5E6D7
+gray_dark     #4A5568
+gray_light    #E2E8F0

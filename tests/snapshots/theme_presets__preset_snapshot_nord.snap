@@ -1,0 +1,13 @@
+---
+source: tests/theme_presets.rs
+expression: "theme_lines(&ThemePreset::Nord.theme())"
+---
+dark          #2E3440
+primary       #3B4252
+light         #434C5E
+accent        #D08770
+accent_light  #EBCB8B
+cyan          #88C0D0
+cyan_light    #8FBCBB
+gray_dark     #4C566A
+gray_light    #ECEFF4

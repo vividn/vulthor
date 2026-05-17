@@ -61,6 +61,7 @@ pub enum Action {
     ToggleContentPane,
     ToggleViewer,
     ToggleHelp,
+    CycleTheme,
     Quit,
     // Draft pane
     DraftSend,
@@ -105,6 +106,7 @@ impl Action {
             Action::ToggleContentPane => "toggle_content_pane",
             Action::ToggleViewer => "toggle_viewer",
             Action::ToggleHelp => "toggle_help",
+            Action::CycleTheme => "cycle_theme",
             Action::Quit => "quit",
             Action::DraftSend => "draft_send",
             Action::DraftEdit => "draft_edit",
@@ -150,6 +152,7 @@ impl Action {
             Action::ToggleContentPane,
             Action::ToggleViewer,
             Action::ToggleHelp,
+            Action::CycleTheme,
             Action::Quit,
             Action::DraftSend,
             Action::DraftEdit,
@@ -213,6 +216,7 @@ pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     (Action::ToggleContentPane, "Alt+c"),
     (Action::ToggleViewer, "v"),
     (Action::ToggleHelp, "?"),
+    (Action::CycleTheme, "Ctrl+t"),
     (Action::Quit, "q"),
     // Draft pane
     (Action::DraftSend, "S"),
