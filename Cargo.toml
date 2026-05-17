@@ -23,6 +23,13 @@ exclude = [
     "run-test-maildir.sh",
 ]
 
+[features]
+default = []
+# Phase 6.a — opt-in real embedding-backed classifier. Pulls fastembed
+# (and via it, ort / onnxruntime); kept off the default profile so a
+# plain `cargo build` stays light. Enable with `cargo build --features ai`.
+ai = ["dep:fastembed"]
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
@@ -30,6 +37,7 @@ tokio = { version = "1.0", features = ["full"] }
 axum = "0.7"
 futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
 mail-parser = "0.11"
 walkdir = "2.0"
@@ -40,6 +48,7 @@ unicode-width = "0.2"
 thiserror = "2.0"
 tempfile = "3.0"
 notify = "8.2"
+fastembed = { version = "5", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"
