@@ -145,6 +145,19 @@ async fn main() -> Result<()> {
             theme::Theme::default()
         }
     };
+    // The Ctrl+T cycle starts from `[theme].preset` (default
+    // `default-dark`) only when no user theme file and no `[theme]`
+    // overrides have replaced the preset base. Otherwise the resolved
+    // palette doesn't match any preset, so we forget the anchor and
+    // let `Ctrl+T` fall back to the first preset on press.
+    let preset_anchor = match (
+        &config.theme.name,
+        config.theme.overrides.is_empty(),
+        theme::preset_from_config(&config.theme.preset),
+    ) {
+        (None, true, Ok(preset)) => Some(preset),
+        _ => None,
+    };
 
     // Build the AI classifier from `[ai]` config. Phase 5.a always
     // returns NoopClassifier (chip slot blank, `;` no-op); Phase 6 will
@@ -155,7 +168,7 @@ async fn main() -> Result<()> {
     let mut app_root = AppRoot::with_config(email_store.clone(), scanner, config);
     app_root.attach_folder_scanner(folder_scanner_handle);
     app_root.set_web_port(web_port);
-    app_root.set_theme(resolved_theme);
+    app_root.set_theme_with_preset(resolved_theme, preset_anchor);
     app_root.set_classifier(classifier, ai_threshold);
     app_root.init_maildir_watcher();
 

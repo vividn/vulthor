@@ -564,6 +564,7 @@ accent  = "#CB4B16"
         let mut overrides = BTreeMap::new();
         overrides.insert("primary".into(), "#000000".into());
         let cfg = cfg_with_theme(ThemeConfig {
+            preset: None,
             name: Some("solarized".into()),
             overrides,
         });
@@ -588,6 +589,7 @@ accent  = "#CB4B16"
         // surfaces the error rather than silently dropping back to the
         // built-in default — failing loud beats a confusing palette.
         let cfg = cfg_with_theme(ThemeConfig {
+            preset: None,
             name: Some("does-not-exist".into()),
             overrides: BTreeMap::new(),
         });

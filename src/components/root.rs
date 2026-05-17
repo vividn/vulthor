@@ -124,6 +124,13 @@ pub struct AppRoot {
     /// every per-frame `Ctx` so render sites pick up
     /// `[theme].overrides` at draw time.
     theme: Theme,
+    /// Preset whose palette is currently active in [`Self::theme`]. Set
+    /// by `main.rs` from `[theme].preset` (default `default-dark`) and
+    /// advanced by `Ctrl+T` (`Msg::CycleTheme`). `None` when a user
+    /// theme file or overrides have replaced the preset base, in which
+    /// case `Ctrl+T` jumps to the first preset rather than trying to
+    /// continue an undefined cycle.
+    current_preset: Option<crate::theme::ThemePreset>,
     /// Phase 4.d MailDir watcher. `Some` once a watcher has been
     /// successfully spawned against the active account's maildir root;
     /// `None` when the path does not exist or `notify` init failed
@@ -213,6 +220,7 @@ impl AppRoot {
             web_port: 8080,
             html_viewer_child: None,
             theme: Theme::default(),
+            current_preset: Some(crate::theme::ThemePreset::DefaultDark),
             maildir_watcher: None,
             keymap,
             pending_keys: Vec::new(),
@@ -261,6 +269,20 @@ impl AppRoot {
     #[allow(dead_code)]
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// Install the resolved theme **and** record which preset (if any)
+    /// produced it, so `Ctrl+T` (`Msg::CycleTheme`) can continue the
+    /// rotation from the right starting point. `main.rs` calls this
+    /// when no user theme file and no `[theme].overrides` have replaced
+    /// the preset base. Pass `None` to clear the anchor.
+    pub fn set_theme_with_preset(
+        &mut self,
+        theme: Theme,
+        preset: Option<crate::theme::ThemePreset>,
+    ) {
+        self.theme = theme;
+        self.current_preset = preset;
     }
 
     /// Install the runtime AI classifier and confidence cutoff built
@@ -841,6 +863,7 @@ impl AppRoot {
                 Msg::Quit
             }),
             Action::ToggleHelp => Some(Msg::ToggleHelp),
+            Action::CycleTheme => Some(Msg::CycleTheme),
             Action::Undo => Some(Msg::Undo),
             Action::ToggleViewer => Some(Msg::ToggleHtmlViewer),
             Action::ToggleContentPane => Some(Msg::ToggleContentPane),
@@ -1057,6 +1080,19 @@ impl AppRoot {
             }
             Msg::ToggleHelp => {
                 self.help_visible = !self.help_visible;
+            }
+            Msg::CycleTheme => {
+                // Advance to the next preset and adopt its palette.
+                // When no preset is anchored (user theme file or
+                // overrides replaced the base), jump to the first
+                // preset rather than guess where the user "was".
+                let next = match self.current_preset {
+                    Some(p) => p.next(),
+                    None => crate::theme::ThemePreset::all()[0],
+                };
+                self.theme = next.theme();
+                self.current_preset = Some(next);
+                self.status_message = Some(format!("Theme: {}", next.name()));
             }
             Msg::ToggleContentPane => {
                 self.layout.toggle_content_pane();
