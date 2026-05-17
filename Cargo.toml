@@ -48,6 +48,7 @@ rand = "0.8"
 tower = { version = "0.5", features = ["util"] }
 criterion = "0.5"
 insta = "1.41"
+proptest = "1.5"
 
 [[bench]]
 name = "startup"
