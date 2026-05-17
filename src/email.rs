@@ -37,9 +37,10 @@ pub struct EmailHeaders {
     pub message_id: String,
 }
 
-/// Lightweight attachment descriptor. Carries display metadata only —
-/// the attachment bytes stay on disk and are re-read on demand by the
-/// web pane / save action.
+/// Attachment descriptor with decoded payload. The bytes are captured
+/// up front (during the off-thread body parse) so the open-attachment
+/// action can write them to a cache file without re-reading the source
+/// `.eml` from disk.
 #[derive(Debug, Clone)]
 pub struct Attachment {
     /// Filename advertised by the part's `Content-Disposition`, or a
@@ -51,6 +52,10 @@ pub struct Attachment {
     pub content_type: String,
     /// Decoded payload size in bytes (as reported by `mail-parser`).
     pub size: usize,
+    /// Decoded payload bytes, captured from `MessagePart::contents()`.
+    /// Populated by `Email::extract_attachments` during the full parse;
+    /// empty for `Attachment` values constructed in tests without a body.
+    pub raw_bytes: Vec<u8>,
 }
 
 /// Lazy-load progress for an [`Email`]. The MailDir scanner only parses
@@ -264,11 +269,13 @@ impl Email {
                 .unwrap_or_else(|| "application/octet-stream".to_string());
 
             let size = attachment_part.len();
+            let raw_bytes = attachment_part.contents().to_vec();
 
             let attachment = Attachment {
                 filename,
                 content_type,
                 size,
+                raw_bytes,
             };
 
             self.attachments.push(attachment);
@@ -1071,6 +1078,54 @@ mod tests {
         assert!(attachment.size > 0);
     }
 
+    /// vu-flu: the body parser must capture the attachment's decoded
+    /// payload into `Attachment::raw_bytes` so `Msg::AttachmentOpen`
+    /// can write it to disk without re-reading the source `.eml`.
+    /// Uses a 7bit text attachment so we don't pull in a base64 crate
+    /// just for the test.
+    #[test]
+    fn extract_attachments_populates_raw_bytes_matching_size() {
+        let temp_dir = TempDir::new().unwrap();
+        let email_path = temp_dir.path().join("with_attachment.eml");
+        let payload = "hello vulthor attachment world";
+        let raw = format!(
+            "From: a@b.test\r\n\
+             To: c@d.test\r\n\
+             Subject: t\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=BOUND\r\n\
+             \r\n\
+             --BOUND\r\n\
+             Content-Type: text/plain\r\n\
+             \r\n\
+             body\r\n\
+             --BOUND\r\n\
+             Content-Type: text/plain; name=\"data.txt\"\r\n\
+             Content-Disposition: attachment; filename=\"data.txt\"\r\n\
+             Content-Transfer-Encoding: 7bit\r\n\
+             \r\n\
+             {}\r\n\
+             --BOUND--\r\n",
+            payload
+        );
+        fs::write(&email_path, raw).unwrap();
+
+        let mut email = Email::new(email_path);
+        email.parse_from_file().unwrap();
+
+        let att = email
+            .attachments
+            .iter()
+            .find(|a| a.filename == "data.txt")
+            .expect("attachment with filename data.txt must parse");
+        assert_eq!(
+            att.raw_bytes,
+            payload.as_bytes(),
+            "raw_bytes must hold decoded payload",
+        );
+        assert_eq!(att.size, payload.len(), "size must match raw_bytes length",);
+    }
+
     #[test]
     fn test_email_html_content() {
         let test_maildir = TestMailDir::new();
@@ -1450,6 +1505,7 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
             filename: "doc.pdf".to_string(),
             content_type: "application/pdf".to_string(),
             size: 1024,
+            raw_bytes: Vec::new(),
         }];
         let applied = store.apply_loaded_body(
             &path,

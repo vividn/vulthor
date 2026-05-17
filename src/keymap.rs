@@ -52,6 +52,7 @@ pub enum Action {
     MoveToFolder,
     ToggleFlag,
     MarkUnread,
+    OpenAttachment,
     // Search
     Search,
     SearchNext,
@@ -97,6 +98,7 @@ impl Action {
             Action::MoveToFolder => "move_to_folder",
             Action::ToggleFlag => "toggle_flag",
             Action::MarkUnread => "mark_unread",
+            Action::OpenAttachment => "open_attachment",
             Action::Search => "search",
             Action::SearchNext => "search_next",
             Action::SearchPrev => "search_prev",
@@ -141,6 +143,7 @@ impl Action {
             Action::MoveToFolder,
             Action::ToggleFlag,
             Action::MarkUnread,
+            Action::OpenAttachment,
             Action::Search,
             Action::SearchNext,
             Action::SearchPrev,
@@ -201,6 +204,7 @@ pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     (Action::MoveToFolder, "m"),
     (Action::ToggleFlag, "F"),
     (Action::MarkUnread, "U"),
+    (Action::OpenAttachment, "o"),
     // Search
     (Action::Search, "/"),
     (Action::SearchNext, "n"),
@@ -654,6 +658,19 @@ mod tests {
             map.lookup_single(down),
             None,
             "default arrow Down must be unbound after move_down is rebound",
+        );
+    }
+
+    /// vu-flu: the `o` key defaults to `Action::OpenAttachment` so the
+    /// Content / Attachments panes can resolve "open the focused
+    /// attachment" through the standard keymap dispatch.
+    #[test]
+    fn default_keymap_binds_o_to_open_attachment() {
+        let map = resolve_keymap(&BTreeMap::new()).unwrap();
+        assert_eq!(
+            map.lookup_single(char_event('o')),
+            Some(Action::OpenAttachment),
+            "'o' must default to OpenAttachment",
         );
     }
 

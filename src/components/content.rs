@@ -15,11 +15,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::Style,
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 
-use crate::email::EmailLoadState;
+use crate::email::{Attachment, EmailLoadState};
 use crate::theme::Theme;
 
 use super::{Component, Ctx, Dir, Msg};
@@ -34,6 +35,12 @@ pub struct ContentComponent {
     /// Lines scrolled past the top of the body. `j`/`k` and arrows
     /// step by 1; PageUp/PageDown step by `PAGE_SCROLL_STEP`.
     pub scroll_offset: usize,
+    /// Index of the focused row in the per-email attachment list shown
+    /// below the body. AppRoot reads this when resolving the
+    /// keymap-sentinel `Msg::AttachmentOpen(0)` to the actual
+    /// attachment the user wants to open. Resets to 0 whenever email
+    /// selection changes.
+    pub attachment_focus: usize,
     scrollbar_state: RefCell<ScrollbarState>,
 }
 
@@ -42,6 +49,7 @@ impl ContentComponent {
     pub fn new() -> Self {
         Self {
             scroll_offset: 0,
+            attachment_focus: 0,
             scrollbar_state: RefCell::new(ScrollbarState::default()),
         }
     }
@@ -76,6 +84,12 @@ impl Component for ContentComponent {
             // `handle_folder_selection_and_switch_view` paths.
             Msg::FolderEnter | Msg::FolderExitParent | Msg::FolderMove(_) => {
                 self.scroll_offset = 0;
+                self.attachment_focus = 0;
+            }
+            // Selecting a different email invalidates the focused
+            // attachment row from the prior email.
+            Msg::MessageMove(_) | Msg::MessageOpen(_) => {
+                self.attachment_focus = 0;
             }
             _ => {}
         }
@@ -92,9 +106,23 @@ impl Component for ContentComponent {
         let email_info = ctx.store.get_selected_email_headers();
 
         if let Some(email) = email_info {
+            // Attachment strip sits below the body when the email has
+            // any. Its height = list rows + 2 for the bordered block;
+            // we cap at 8 rows to keep the body usable for messages
+            // with long attachment lists.
+            let attachment_rows = email.attachments.len();
+            let attachment_strip = if attachment_rows == 0 {
+                0
+            } else {
+                (attachment_rows.min(6) as u16) + 2
+            };
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(6), Constraint::Min(0)])
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Min(0),
+                    Constraint::Length(attachment_strip),
+                ])
                 .split(area);
 
             let header_block = Block::default()
@@ -155,6 +183,17 @@ impl Component for ContentComponent {
                     &mut *state,
                 );
             }
+
+            if attachment_strip > 0 {
+                render_attachment_strip(
+                    f,
+                    chunks[2],
+                    &email.attachments,
+                    self.attachment_focus,
+                    border_style,
+                    ctx.theme,
+                );
+            }
         } else {
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -183,6 +222,59 @@ impl Component for ContentComponent {
         // Content-local sequence keys.
         None
     }
+}
+
+/// Format a byte count as `"123 B"`, `"4.5 KB"`, or `"12.3 MB"`.
+/// Standalone so tests can exercise it directly.
+pub(crate) fn format_attachment_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Render the attachment strip block at `area` with `focus_index`
+/// highlighted. Caller is responsible for sizing `area` to fit the
+/// list (rows + 2 for the bordered block).
+fn render_attachment_strip(
+    f: &mut Frame,
+    area: Rect,
+    attachments: &[Attachment],
+    focus_index: usize,
+    border_style: Style,
+    theme: &Theme,
+) {
+    let title = format!("Attachments ({})", attachments.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(border_style)
+        .title(title);
+
+    let lines: Vec<Line> = attachments
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let label = format!(" {} ({})", a.filename, format_attachment_size(a.size));
+            if i == focus_index {
+                Line::from(Span::styled(
+                    format!("▸{}", label),
+                    Style::default()
+                        .fg(theme.cyan_light)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::raw(format!(" {}", label)))
+            }
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
 }
 
 #[cfg(test)]

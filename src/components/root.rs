@@ -953,6 +953,18 @@ impl AppRoot {
             Action::MarkUnread if matches!(active_pane, ActivePane::Messages) => {
                 Some(Msg::MarkUnread(String::new()))
             }
+            // `OpenAttachment` (default `o`) carries the cursor sentinel
+            // 0 here; `apply_root` resolves the actual focused row from
+            // `ContentComponent::attachment_focus` /
+            // `layout.selection.attachment_index` depending on pane.
+            Action::OpenAttachment
+                if matches!(
+                    active_pane,
+                    ActivePane::Content | ActivePane::Attachments | ActivePane::Messages
+                ) =>
+            {
+                Some(Msg::AttachmentOpen(0))
+            }
             Action::ReplyAll if matches!(active_pane, ActivePane::Messages) => {
                 Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new()))
             }
@@ -1255,7 +1267,60 @@ impl AppRoot {
             Msg::MailDirChanged(path) => {
                 self.apply_maildir_changed(path.clone());
             }
+            Msg::AttachmentOpen(idx) => {
+                self.apply_attachment_open(*idx);
+            }
             _ => {}
+        }
+    }
+
+    /// Resolve `Msg::AttachmentOpen(idx)` against the currently
+    /// selected email. The keymap dispatch carries `0` as a cursor
+    /// sentinel; we override with the pane-local focused row before
+    /// touching the filesystem. Writes the bytes into
+    /// `~/.cache/vulthor/attachments/<filename>` and shells
+    /// `xdg-open` against the result. Status-bar messages cover every
+    /// branch so silent failures don't leave the user guessing.
+    fn apply_attachment_open(&mut self, requested_idx: usize) {
+        let resolved_idx = match self.layout.active_pane {
+            ActivePane::Content => self.content.attachment_focus,
+            ActivePane::Attachments => self.layout.selection.attachment_index,
+            _ => requested_idx,
+        };
+        let snapshot = {
+            let store = self.email_store.lock().unwrap();
+            store
+                .get_selected_email()
+                .and_then(|email| email.attachments.get(resolved_idx).cloned())
+        };
+        let Some(attachment) = snapshot else {
+            self.status_message = Some("No attachment to open".into());
+            return;
+        };
+
+        let dir = attachment_cache_dir();
+        let path =
+            match write_attachment_to_cache(&dir, &attachment.filename, &attachment.raw_bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.status_message =
+                        Some(format!("Save failed for {}: {}", attachment.filename, e));
+                    return;
+                }
+            };
+
+        match std::process::Command::new("xdg-open").arg(&path).spawn() {
+            Ok(_) => {
+                self.status_message = Some(format!("Opened {}", attachment.filename));
+            }
+            Err(e) => {
+                self.status_message = Some(format!(
+                    "xdg-open failed for {}: {} ({})",
+                    attachment.filename,
+                    e,
+                    path.display()
+                ));
+            }
         }
     }
 
@@ -2197,6 +2262,41 @@ fn reply_later_filename() -> String {
     format!("{}.M{}P{}Q{}.vulthor:2,D", secs, micros, pid, counter)
 }
 
+/// Resolve the per-user cache directory for attachments written by
+/// `Msg::AttachmentOpen`. Falls back to `/tmp/vulthor/attachments` when
+/// `dirs::cache_dir()` returns `None` (containerised environments where
+/// `XDG_CACHE_HOME` and `$HOME` are both unset).
+fn attachment_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("vulthor")
+        .join("attachments")
+}
+
+/// Write `bytes` to `<dir>/<filename>`, creating `dir` if needed and
+/// stripping any path separators in `filename` so a hostile attachment
+/// cannot escape the cache directory. Returns the absolute path of the
+/// written file. Separated out from `apply_attachment_open` so tests
+/// can verify the write without needing a real `xdg-open` on `PATH`.
+fn write_attachment_to_cache(
+    dir: &std::path::Path,
+    filename: &str,
+    bytes: &[u8],
+) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    // Strip path separators to keep the write inside `dir`. An empty
+    // filename or one composed entirely of separators falls back to a
+    // generic stem so `fs::write` still has something to land on.
+    let safe: String = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "attachment.bin".to_string());
+    let path = dir.join(safe);
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
 /// Strip surrounding angle brackets from a Message-ID-style string so
 /// it matches the bare-id keys used in `EmailStore::drafts`.
 fn strip_angle_brackets(s: &str) -> &str {
@@ -2247,6 +2347,29 @@ mod tests {
     use crate::email::{Email, EmailStore, Folder};
     use crate::maildir::MaildirScanner;
     use std::path::PathBuf;
+
+    /// vu-flu: the attachment-open path must land the decoded bytes
+    /// inside the per-user cache directory. We exercise the standalone
+    /// `write_attachment_to_cache` helper so we don't depend on a real
+    /// `xdg-open` on `PATH`.
+    #[test]
+    fn write_attachment_to_cache_writes_exact_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bytes = b"the body of the attachment";
+        let path = write_attachment_to_cache(tmp.path(), "report.txt", bytes).unwrap();
+        assert_eq!(path, tmp.path().join("report.txt"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// vu-flu: filenames carrying path separators must not escape the
+    /// cache directory — `..\/etc/passwd` flattens to `passwd`.
+    #[test]
+    fn write_attachment_to_cache_strips_path_separators() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_attachment_to_cache(tmp.path(), "../etc/passwd", b"x").unwrap();
+        assert_eq!(path, tmp.path().join("passwd"));
+        assert!(path.exists());
+    }
 
     fn make_root() -> AppRoot {
         let store = EmailStore::new(PathBuf::from("/tmp"));

@@ -137,6 +137,13 @@ pub enum Msg {
     // Content
     ContentScroll(Dir, usize),
 
+    /// Open the indexed attachment of the currently selected email.
+    /// AppRoot resolves the attachment, writes its bytes to
+    /// `~/.cache/vulthor/attachments/<filename>`, and spawns
+    /// `xdg-open` against the resulting path. No-op when the index is
+    /// out of range. Bound to `o` by default.
+    AttachmentOpen(usize),
+
     // Draft
     DraftStart(ReplyKind, MessageId),
     DraftEditorExited,
