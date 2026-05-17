@@ -751,6 +751,113 @@ fn default_gr_sequence_still_emits_reply_after_dispatch_centralisation() {
     );
 }
 
+#[test]
+fn keybindings_override_reply_to_gz_dispatches_reply_via_sequence_lookup() {
+    // vu-q9b acceptance: rebinding `reply = "gz"` actually fires Reply
+    // on `g` then `z`. Before the fix the runtime only consulted a
+    // hardcoded `g`+`r` in MessagesComponent::on_key, so the override
+    // resolved into Keymap.sequences correctly but the runtime never
+    // looked at that table. The sequence dispatch in `process_event`
+    // now drives both default and overridden sequence bindings through
+    // `Keymap::lookup_sequence`.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-gz", &[("reply", "gz")]);
+
+    // `g` alone must be absorbed (sequence prefix) — no draft, no quit.
+    root.process_event(key('g')).unwrap();
+    assert!(
+        root.draft().state().is_none(),
+        "lone 'g' must hold as a sequence prefix, not start a draft",
+    );
+    assert!(
+        !root.has_pending_editor(),
+        "lone 'g' must not launch the editor",
+    );
+
+    // Second key of the overridden sequence resolves to Reply.
+    root.process_event(key('z')).unwrap();
+    let state = root
+        .draft()
+        .state()
+        .expect("'gz' override must start a Reply draft");
+    assert_eq!(
+        state.reply_kind,
+        ReplyKind::Reply,
+        "overridden `reply = \"gz\"` must dispatch reply-sender, not reply-all",
+    );
+}
+
+#[test]
+fn keybindings_override_reply_to_single_key_dispatches_via_single_lookup() {
+    // The override mechanism must also work when the user collapses
+    // `reply` onto a single key (e.g. `reply = "z"`). The single-key
+    // path runs through `Keymap::lookup_single` → `action_to_msg` and
+    // must produce a Reply draft (not ReplyAll, which keeps the default
+    // `r` binding).
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-zsingle", &[("reply", "z")]);
+
+    root.process_event(key('z')).unwrap();
+    let state = root
+        .draft()
+        .state()
+        .expect("`reply = \"z\"` override must start a Reply draft");
+    assert_eq!(state.reply_kind, ReplyKind::Reply);
+
+    // The default `r` (ReplyAll) is untouched and must still produce a
+    // ReplyAll draft on a fresh AppRoot — proves the override doesn't
+    // silently displace the sibling binding.
+    let tmp2 = TempDir::new().unwrap();
+    let (mut root2, _src2) = override_root(tmp2.path(), "msg-zsingle2", &[("reply", "z")]);
+    root2.process_event(key('r')).unwrap();
+    let state2 = root2.draft().state().expect("'r' still drives ReplyAll");
+    assert_eq!(state2.reply_kind, ReplyKind::ReplyAll);
+}
+
+#[test]
+fn g_prefix_in_folders_pane_does_not_hold_pending_buffer() {
+    // Sequence prefixes are pane-aware: every default `g`-prefix
+    // sequence (`gr → Reply`, `gg`/`G`/`gj`/`gk` → unimplemented jumps)
+    // either targets the Messages pane or has no Msg variant yet, so
+    // none of them are meaningful in the Folders pane. Pressing `g` in
+    // Folders must therefore NOT hold a sequence prefix — otherwise the
+    // next key would be silently consumed against a sequence that can
+    // never resolve to a meaningful action there.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "fld-g", &[]);
+    root.set_active_pane_for_test(ActivePane::Folders);
+
+    root.process_event(key('g')).unwrap();
+    assert_eq!(
+        root.pending_keys_len_for_test(),
+        0,
+        "`g` in Folders must not hold — no `g`-prefix sequence is meaningful here",
+    );
+}
+
+#[test]
+fn pending_sequence_clears_on_pane_switch() {
+    // A half-typed sequence prefix (`g` waiting for the second key) must
+    // not survive a pane switch. Otherwise the next ordinary key in the
+    // new pane could complete a sequence the user never intended.
+    let tmp = TempDir::new().unwrap();
+    let (mut root, _src) = override_root(tmp.path(), "msg-blur", &[]);
+
+    root.process_event(key('g')).unwrap();
+    root.set_active_pane_for_test(ActivePane::Folders);
+    // Back to Messages and press `r`: must dispatch ReplyAll (single-key
+    // `r`), not Reply (the `gr` sequence) — proving the prefix was
+    // cleared by the pane switch.
+    root.set_active_pane_for_test(ActivePane::Messages);
+    root.process_event(key('r')).unwrap();
+    let state = root.draft().state().expect("`r` after blur must dispatch");
+    assert_eq!(
+        state.reply_kind,
+        ReplyKind::ReplyAll,
+        "pending `g` prefix must clear on pane switch so `r` resolves to ReplyAll",
+    );
+}
+
 // ---- 5. [keybindings] conflict rejected at load -----------------------
 
 #[tokio::test(flavor = "current_thread")]

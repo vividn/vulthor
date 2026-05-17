@@ -32,7 +32,7 @@ use crate::config::AiConfig;
 use crate::email::{DraftInfo, Email, Folder};
 use crate::theme::{Theme, VulthorTheme};
 
-use super::{Component, Ctx, Dir, Msg, ReplyKind};
+use super::{Component, Ctx, Dir, Msg};
 
 /// How many rows past the visible tail we look ahead before asking the
 /// store for more headers. Matches the legacy `index + 5 >= len` test
@@ -58,11 +58,6 @@ pub struct MessagesComponent {
     /// rendered still gives a sensible answer — important for tests
     /// that drive `handle_msg` directly.
     pub visible_rows: Cell<usize>,
-    /// Set when the user pressed `g` and we're waiting for the second
-    /// key of a two-key sequence (`gr`, future `gg`/`gj`/`gk`). Cleared
-    /// after the next key — successful match or not — so a stray `g`
-    /// can't poison subsequent keystrokes. See `on_key` for the table.
-    pending_g: bool,
     list_state: RefCell<ListState>,
     /// Phase 5.a AI classifier. Defaults to [`NoopClassifier`] so
     /// `[ai].enabled = false` runs render the chip slot as blank and
@@ -85,7 +80,6 @@ impl MessagesComponent {
             email_index: 0,
             remembered_email_index: None,
             visible_rows: Cell::new(20),
-            pending_g: false,
             list_state: RefCell::new(ListState::default()),
             classifier: Arc::new(NoopClassifier),
             confidence_threshold: AiConfig::default().threshold,
@@ -481,10 +475,6 @@ impl Component for MessagesComponent {
                 // meaningful, `FoldersBlur` clamps to 0 on restore anyway.
                 let _ = ctx;
                 self.remembered_email_index = Some(self.email_index);
-                // Don't carry a half-typed `g` across pane changes —
-                // otherwise a later `r` in this pane would trigger
-                // reply-sender on a stale prefix.
-                self.pending_g = false;
             }
             _ => {}
         }
@@ -498,53 +488,11 @@ impl Component for MessagesComponent {
         // it would render nothing rather than the wrong folder.
     }
 
-    fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> Option<Msg> {
-        // Action keys (including arrow `Up`/`Down`) resolve through the
-        // central `AppRoot::action_to_msg` keymap dispatch so
-        // `[keybindings]` overrides reach the runtime. This handler
-        // only owns the `g`-prefix sequence (`gr` → reply-sender; the
-        // remaining `gg`/`gj`/`gk` slots are reserved). AppRoot
-        // pre-empts this handler while `pending_g` is set so the
-        // second key of the sequence is consumed here before the
-        // single-key table can interpret it (e.g. `r` → ReplyAll).
-        use crossterm::event::KeyModifiers;
-        if !key.modifiers.is_empty() && key.modifiers != KeyModifiers::SHIFT {
-            return None;
-        }
-
-        if self.pending_g {
-            self.pending_g = false;
-            if let KeyCode::Char('r') = key.code {
-                return Some(Msg::DraftStart(ReplyKind::Reply, String::new()));
-            }
-            // Sequence aborted — fall through; the caller will retry
-            // single-key dispatch with `pending_g` cleared.
-        }
-
-        match key.code {
-            KeyCode::Char('g') => {
-                // Arm the g-prefix sequence; absorb the keystroke
-                // without emitting a message. AppRoot will route the
-                // next key here before keymap dispatch (see
-                // `has_pending_sequence`).
-                self.pending_g = true;
-                None
-            }
-            _ => None,
-        }
-    }
-}
-
-impl MessagesComponent {
-    /// True while a multi-key sequence (`g`-prefix) is mid-flight.
-    /// `AppRoot::process_event` reads this to route the next key into
-    /// this component BEFORE the central keymap dispatch — otherwise
-    /// the second key (`r` for `gr → Reply`) would be intercepted as a
-    /// single-key action (`r → ReplyAll`) and the sequence would never
-    /// resolve.
-    pub fn has_pending_sequence(&self) -> bool {
-        self.pending_g
-    }
+    // No `on_key` override: every action key — including the `g`-prefix
+    // sequences (`gr` reply, `gg`/`G`/`gj`/`gk` jumps) — resolves through
+    // `AppRoot::process_event`'s keymap dispatch. The default trait impl
+    // returning `None` is what we want, so `[keybindings]` overrides on
+    // sequence-bound actions actually fire at runtime (vu-q9b).
 }
 
 #[cfg(test)]
@@ -552,7 +500,6 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::email::{Email, EmailStore, Folder};
-    use crossterm::event::KeyModifiers;
     use std::path::PathBuf;
 
     fn store_with_one_folder(emails: usize) -> EmailStore {
@@ -766,94 +713,11 @@ mod tests {
     // tests in `root.rs::tests`, which drive the full
     // `process_event → keymap → action_to_msg → apply_root` path.
 
-    // --- Phase 2.d: reply sequence (component-local) ---
-
-    #[test]
-    fn on_key_gr_two_key_sequence_emits_reply_sender_draft_start() {
-        // 'gr' = reply to sender only. The first 'g' must absorb its
-        // keystroke (no message emitted) and arm the prefix; the next
-        // 'r' must yield the sender-only reply variant.
-        let store = store_with_one_folder(1);
-        let (theme, config) = (Theme::default(), Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(m.on_key(g, &ctx), None, "first 'g' must not emit a message");
-        assert!(m.pending_g, "'g' must arm the prefix state");
-
-        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
-        assert_eq!(
-            m.on_key(r, &ctx),
-            Some(Msg::DraftStart(ReplyKind::Reply, String::new())),
-            "'gr' must produce reply-sender-only, not reply-all",
-        );
-        assert!(!m.pending_g, "prefix must clear after the second key");
-    }
-
-    #[test]
-    fn on_key_g_then_other_key_clears_prefix_without_emitting() {
-        // After a stray `g`, a non-sequence key (here `j`) must clear
-        // pending_g and return None from this component — AppRoot then
-        // re-runs the key through the central keymap dispatch (which
-        // resolves `j` → MessageMove). This test only asserts the
-        // component-local side: prefix cleared, nothing emitted.
-        let store = store_with_one_folder(3);
-        let (theme, config) = (Theme::default(), Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-        m.on_key(g, &ctx);
-        assert!(m.pending_g);
-
-        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(
-            m.on_key(j, &ctx),
-            None,
-            "non-sequence key after `g` must defer back to centralised dispatch",
-        );
-        assert!(!m.pending_g);
-    }
-
-    #[test]
-    fn has_pending_sequence_reflects_g_prefix_state() {
-        // `AppRoot::process_event` reads this getter to decide whether
-        // to route the next key into the component BEFORE the central
-        // keymap dispatch.
-        let mut m = MessagesComponent::new();
-        assert!(!m.has_pending_sequence());
-        m.pending_g = true;
-        assert!(m.has_pending_sequence());
-        m.pending_g = false;
-        assert!(!m.has_pending_sequence());
-    }
-
-    #[test]
-    fn messages_blur_clears_pending_g_prefix() {
-        // Pane switches must not carry the prefix across; otherwise a
-        // later `r` in this pane would unintentionally trigger
-        // reply-sender on a stale prefix typed before the blur.
-        let store = store_with_one_folder(1);
-        let (theme, config) = (Theme::default(), Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        m.pending_g = true;
-        m.handle_msg(&Msg::MessagesBlur, &ctx);
-        assert!(!m.pending_g);
-    }
-
-    #[test]
-    fn on_key_ignores_modified_keys() {
-        let store = store_with_one_folder(3);
-        let (theme, config) = (Theme::default(), Config::default());
-        let ctx = ctx(&theme, &config, &store);
-        let mut m = MessagesComponent::new();
-
-        let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);
-        assert_eq!(m.on_key(alt_j, &ctx), None);
-    }
+    // The `gr`/`gg`/`gj`/`gk` sequence dispatch is centralised in
+    // `AppRoot::process_event` (vu-q9b) so `[keybindings]` overrides
+    // reach sequence-bound actions. Coverage lives in
+    // `phase4_integration_tests.rs` (`default_gr_sequence_*`,
+    // `keybindings_override_reply_to_gz_*`).
 
     // --- Rendering helper tests. ---
     // The helpers are private to `MessagesComponent`; these tests

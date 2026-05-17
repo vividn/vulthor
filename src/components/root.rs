@@ -134,10 +134,19 @@ pub struct AppRoot {
     /// Resolved `KeyEvent → Action` table for global / pane-action key
     /// dispatch (VISION.md §Action Keybindings + `[keybindings]`
     /// overrides). Built once at construction from
-    /// `config.keybindings.inner`. In-pane navigation (j/k/h/l, sequences
-    /// like `gg`/`G`) is still handled by each component; AppRoot only
-    /// consults this map for global and Draft-pane action keys.
+    /// `config.keybindings.inner`. Atomic-key actions and multi-key
+    /// sequences (`gr`, `gg`/`G`/`gj`/`gk` — and any user override of
+    /// those) both flow through this table; the runtime no longer
+    /// hard-codes prefix keys in any component (vu-q9b).
     keymap: Keymap,
+    /// Buffer of keys typed so far that form (or could still extend
+    /// into) the prefix of a `[keybindings]` sequence. `process_event`
+    /// holds the buffer between presses, dispatches when a complete
+    /// sequence resolves, and drops the buffer when the next key
+    /// doesn't extend any meaningful sequence in the active pane.
+    /// Cleared on focus change so a half-typed prefix can't survive a
+    /// pane switch and trigger an unrelated action.
+    pending_keys: Vec<KeyEvent>,
 }
 
 /// Reply-template editor invocation parked between AppRoot dispatch
@@ -206,6 +215,7 @@ impl AppRoot {
             theme: Theme::default(),
             maildir_watcher: None,
             keymap,
+            pending_keys: Vec::new(),
         };
         // Stash the real config after building the component so the
         // AccountsComponent can be seeded with a borrowed reference
@@ -481,30 +491,42 @@ impl AppRoot {
                 self.drain();
                 return Ok(self.should_quit);
             }
-            // 0d. While a component has a multi-key sequence in flight
-            //     (currently only MessagesComponent's `g`-prefix), route
-            //     the next key into that component BEFORE the central
-            //     keymap dispatch. Otherwise centralised single-key
-            //     dispatch would intercept the sequence's second key
-            //     (e.g. `r` → `ReplyAll`) and the sequence (`gr` →
-            //     `Reply`) would never resolve.
-            if matches!(self.layout.active_pane, ActivePane::Messages)
-                && self.messages.has_pending_sequence()
+            // 0d. Multi-key sequence dispatch (vu-q9b). The pending
+            //     buffer holds keys typed so far that form (or could
+            //     still extend) the prefix of a [keybindings] sequence
+            //     (`gr` reply, `gg`/`G`/`gj`/`gk` jumps — and any user
+            //     override of those). Three outcomes:
+            //       - Buffer + key matches a complete sequence whose
+            //         action has a meaningful Msg in the active pane:
+            //         dispatch, clear buffer.
+            //       - Buffer + key is a strict prefix of some sequence
+            //         meaningful in the active pane: hold and absorb
+            //         the keystroke.
+            //       - Otherwise: drop the buffered prefix and let the
+            //         new key resolve via the single-key dispatch
+            //         below. A sequence resolved to a no-op action
+            //         (bound but unimplemented Msg, e.g. JumpTop in any
+            //         pane) also falls through so the typed key isn't
+            //         silently eaten — matching pre-vu-q9b behaviour.
+            let mut candidate = self.pending_keys.clone();
+            candidate.push(key);
+            if let Some(action) = self.keymap.lookup_sequence(&candidate)
+                && let Some(msg) = Self::action_to_msg(
+                    action,
+                    &self.layout.active_pane,
+                    self.search_results_active(),
+                )
             {
-                let ctx_msg = {
-                    let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
-                    self.messages.on_key(key, &ctx)
-                };
-                if let Some(msg) = ctx_msg {
-                    self.queue.push_back(msg);
-                    self.drain();
-                    return Ok(self.should_quit);
-                }
-                // Sequence aborted (`on_key` cleared `pending_g` and
-                // returned None) — fall through to normal dispatch so
-                // the key is interpreted as a single-key action.
+                self.pending_keys.clear();
+                self.queue.push_back(msg);
+                self.drain();
+                return Ok(self.should_quit);
             }
+            if self.sequence_prefix_is_meaningful(&candidate) {
+                self.pending_keys = candidate;
+                return Ok(self.should_quit);
+            }
+            self.pending_keys.clear();
             // 1. Global / pane-action keys flow through the resolved
             //    [keybindings] table. Atomic-key lookups only;
             //    sequence keys (`gg`/`G`/`gj`/`gk`/`gr`) stay with the
@@ -934,6 +956,14 @@ impl AppRoot {
             Action::ReplyAll if matches!(active_pane, ActivePane::Messages) => {
                 Some(Msg::DraftStart(ReplyKind::ReplyAll, String::new()))
             }
+            // `Reply` ships as the `gr` two-key sequence by default, but
+            // `[keybindings]` rebinds may collapse it onto a single key
+            // (`reply = "z"`) or move it to a different sequence
+            // (`reply = "gz"`); either way `process_event`'s sequence
+            // dispatch routes through here (vu-q9b).
+            Action::Reply if matches!(active_pane, ActivePane::Messages) => {
+                Some(Msg::DraftStart(ReplyKind::Reply, String::new()))
+            }
             Action::ReplyLater if matches!(active_pane, ActivePane::Messages) => {
                 Some(Msg::DraftStart(ReplyKind::ReplyLater, String::new()))
             }
@@ -950,15 +980,16 @@ impl AppRoot {
                 Some(Msg::DraftDiscard)
             }
 
-            // ---- Component-local sequences & not-yet-implemented ---------
-            // `Reply` is the `gr` two-key sequence; `JumpTop`/`JumpBottom`/
-            // `JumpNextUnread`/`JumpPrevUnread` are `gg`/`G`/`gj`/`gk`.
-            // These stay component-local (or aren't wired at all yet).
-            // `AcceptSuggestion`/`SearchNext`/`SearchPrev` are bound in
-            // the keymap but don't have dispatch yet — fall through so
-            // they're a no-op rather than a panic.
-            Action::Reply
-            | Action::JumpTop
+            // ---- Bound-but-unimplemented actions -------------------------
+            // `JumpTop`/`JumpBottom`/`JumpNextUnread`/`JumpPrevUnread`
+            // are bound (`gg`/`G`/`gj`/`gk` by default) so users can
+            // already rebind them, but the Msg variants for the actual
+            // jump don't exist yet — fall through as a no-op rather
+            // than a panic. `AcceptSuggestion` is routed through a
+            // dedicated branch in `process_event`. `SearchNext`/
+            // `SearchPrev` are bound but unimplemented; same no-op
+            // contract.
+            Action::JumpTop
             | Action::JumpBottom
             | Action::JumpNextUnread
             | Action::JumpPrevUnread
@@ -1300,6 +1331,20 @@ impl AppRoot {
     /// before the global view-prev shortcut fires.
     fn search_results_active(&self) -> bool {
         self.email_store.lock().unwrap().search_results.is_some()
+    }
+
+    /// True when `prefix` is a strict prefix of at least one keymap
+    /// sequence whose action has a meaningful Msg in the active pane.
+    /// Drives the "hold vs. fall through" decision in `process_event`'s
+    /// sequence dispatch (vu-q9b): without pane-awareness, typing `g`
+    /// in Folders would silently swallow the next key even though no
+    /// `g`-prefixed action targets that pane.
+    fn sequence_prefix_is_meaningful(&self, prefix: &[KeyEvent]) -> bool {
+        let pane = &self.layout.active_pane;
+        let search_active = self.search_results_active();
+        self.keymap
+            .sequences_with_prefix(prefix)
+            .any(|action| Self::action_to_msg(action, pane, search_active).is_some())
     }
 
     /// Phase 5.a — resolve the cursor-selected email's classifier
@@ -1980,12 +2025,26 @@ impl AppRoot {
         self.maildir_watcher.as_ref().map(|w| w.root())
     }
 
+    /// Test seam: observe the held sequence prefix. Lets the vu-q9b
+    /// integration tests assert that a stray prefix key was not held
+    /// in panes where no `[keybindings]` sequence is meaningful.
+    #[cfg(test)]
+    pub(crate) fn pending_keys_len_for_test(&self) -> usize {
+        self.pending_keys.len()
+    }
+
     /// Test seam: force the active pane. Production code transitions
     /// the pane via `Msg::FocusNext` / `Msg::FocusPrev` and view-
     /// progression; tests outside `root.rs` skip that machinery to
     /// land directly on the pane they want to drive keys against.
+    /// Mirrors the production `on_focus_change` invariant of dropping
+    /// any half-typed sequence prefix so the buffer can't survive a
+    /// pane switch (vu-q9b).
     #[cfg(test)]
     pub(crate) fn set_active_pane_for_test(&mut self, pane: ActivePane) {
+        if self.layout.active_pane != pane {
+            self.pending_keys.clear();
+        }
         self.layout.active_pane = pane;
         self.publish_focus();
     }
@@ -2059,6 +2118,11 @@ impl AppRoot {
     fn on_focus_change(&mut self, old: ActivePane, new: ActivePane) {
         if old != new {
             self.publish_focus();
+            // A half-typed sequence prefix (e.g. `g` waiting for `r`)
+            // must not survive a pane switch, or the next ordinary key
+            // press in the new pane could complete a sequence the user
+            // never intended (vu-q9b).
+            self.pending_keys.clear();
         }
         match (old, new) {
             (ActivePane::Folders, ActivePane::Messages) => {
