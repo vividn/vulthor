@@ -60,6 +60,10 @@ pub enum Action {
     // View control
     ToggleContentPane,
     ToggleViewer,
+    /// vu-c1s: force the content pane to render `body_plain` even when
+    /// the email also carries an HTML alternative. Toggled per-session;
+    /// startup default comes from `[render].prefer_plaintext`.
+    ToggleHtmlOff,
     ToggleHelp,
     Quit,
     // Draft pane
