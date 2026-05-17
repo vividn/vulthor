@@ -200,26 +200,15 @@ impl ActivePane {
     }
 }
 
-/// Cursor indices mirrored from the per-pane components into
-/// [`Layout`] so AppRoot can publish a single coherent snapshot. The
-/// component (`FoldersComponent`, `MessagesComponent`,
-/// `ContentComponent`) remains the source of truth; these fields are
-/// kept in sync after each dispatch.
+/// Cursor state owned by [`Layout`]. Per-pane components
+/// (`FoldersComponent`, `MessagesComponent`, `ContentComponent`) are
+/// canonical for their own cursors; `attachment_index` has no
+/// component yet because `AppRoot::handle_residual_key` mutates it
+/// directly on the layout.
 #[derive(Debug, Default, Clone)]
 pub struct SelectionState {
-    /// Cursor in the folder pane (flat display index, not the path
-    /// breadcrumb).
-    pub folder_index: usize,
-    /// Cursor in the message list.
-    pub email_index: usize,
-    /// Body-pane scroll offset, in lines.
-    pub scroll_offset: usize,
     /// Cursor in the attachment list.
     pub attachment_index: usize,
-    /// Last `email_index` snapshotted before focus left the Messages
-    /// pane. Restored on next focus-in so Tab round-trips don't reset
-    /// the cursor.
-    pub remembered_email_index: Option<usize>,
 }
 
 /// Direction passed to [`Layout::switch_pane`] for Tab / Shift-Tab.
@@ -244,7 +233,7 @@ pub struct Layout {
     /// Alt+c toggle: when true, the content pane is hidden and views
     /// shift to their content-less alternatives.
     pub content_pane_hidden: bool,
-    /// Cursor positions mirrored from the per-pane components.
+    /// Attachment-pane cursor (no dedicated component yet).
     pub selection: SelectionState,
 }
 

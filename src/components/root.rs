@@ -7,10 +7,13 @@
 // serving the selected email and the welcome screen without locking
 // the store.
 //
-// Components remain canonical for the slice of state they own:
-//  - `FoldersComponent.folder_index` (mirrored into `layout.selection.folder_index`)
-//  - `MessagesComponent.email_index` (mirrored into `layout.selection.email_index`)
-//  - `ContentComponent.scroll_offset` (mirrored into `layout.selection.scroll_offset`)
+// Components are canonical for the slice of state they own:
+// `FoldersComponent.folder_index`, `MessagesComponent.email_index` /
+// `remembered_email_index`, `ContentComponent.scroll_offset`. Render
+// code (ui.rs) reads them via the `folders()`/`messages()`/`content()`
+// accessors on AppRoot. The only cursor still owned by `Layout` is
+// `selection.attachment_index`, which `handle_residual_key` mutates
+// directly because there is no AttachmentsComponent yet.
 //
 // Backspace from Content/Attachments and attachment-pane navigation
 // are handled inline by AppRoot rather than via a per-pane component.
@@ -163,8 +166,7 @@ impl AppRoot {
             let store = email_store.lock().unwrap();
             FoldersComponent::auto_select_inbox(&store.root_folder)
         };
-        let mut layout = Layout::new();
-        layout.selection.folder_index = initial_index;
+        let layout = Layout::new();
 
         // Keymap resolution is infallible here: `Config::validate`
         // (called from every `Config::load*` path) already runs
@@ -673,7 +675,6 @@ impl AppRoot {
                 store.scanning_folders = false;
                 let new_index = FoldersComponent::auto_select_inbox(&store.root_folder);
                 self.folders.folder_index = new_index;
-                self.layout.selection.folder_index = new_index;
                 let indices =
                     layout::get_folder_path_from_display_index(&store.root_folder, new_index);
                 drop(store);
@@ -760,10 +761,6 @@ impl AppRoot {
         }
 
         self.request_folder_load_if_needed(&path);
-
-        self.layout.selection.email_index = 0;
-        self.layout.selection.scroll_offset = 0;
-        self.layout.selection.remembered_email_index = None;
 
         {
             let mut store = self.email_store.lock().unwrap();
@@ -1083,11 +1080,6 @@ impl AppRoot {
                 self.on_focus_change(old, new);
             }
             Msg::FolderMove(_) => {
-                self.layout.selection.folder_index = self.folders.folder_index;
-                self.layout.selection.email_index = self.messages.email_index;
-                self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
-                self.layout.selection.scroll_offset = self.content.scroll_offset;
-
                 let indices = {
                     let store = self.email_store.lock().unwrap();
                     layout::get_folder_path_from_display_index(
@@ -1108,16 +1100,9 @@ impl AppRoot {
             }
             Msg::FolderEnter => {
                 self.enter_selected_folder_async();
-                self.layout.selection.email_index = self.messages.email_index;
-                self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
-                self.layout.selection.scroll_offset = self.content.scroll_offset;
             }
             Msg::FolderExitParent => {
                 self.email_store.lock().unwrap().exit_folder();
-                self.layout.selection.folder_index = self.folders.folder_index;
-                self.layout.selection.email_index = self.messages.email_index;
-                self.layout.selection.scroll_offset = self.content.scroll_offset;
-                self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
                 self.layout.active_pane = ActivePane::Folders;
                 self.layout.current_view = if self.layout.content_pane_hidden {
                     View::Messages
@@ -1128,7 +1113,6 @@ impl AppRoot {
             }
             Msg::MessageMove(_) => {
                 let idx = self.messages.email_index;
-                self.layout.selection.email_index = idx;
                 self.email_store.lock().unwrap().select_email(idx);
             }
             Msg::MessageOpen(_) => {
@@ -1144,15 +1128,11 @@ impl AppRoot {
                         View::MessagesContent
                     };
                     self.layout.active_pane = ActivePane::Messages;
-                    self.layout.selection.email_index = idx;
                     self.publish_focus();
                 }
             }
             Msg::MessageMarkRead(_) => {
                 self.apply_mark_read();
-            }
-            Msg::ContentScroll(_, _) => {
-                self.layout.selection.scroll_offset = self.content.scroll_offset;
             }
             Msg::StoreLoadMore(idx) => {
                 let mut store = self.email_store.lock().unwrap();
@@ -1168,9 +1148,6 @@ impl AppRoot {
                 if idx < folder.emails.len() {
                     store.select_email(idx);
                 }
-                drop(store);
-                self.layout.selection.email_index = idx;
-                self.layout.selection.remembered_email_index = self.messages.remembered_email_index;
             }
             Msg::AccountSelect(id) => {
                 // Empty id is the cursor sentinel — keymap dispatch
@@ -1450,12 +1427,9 @@ impl AppRoot {
             store.set_search_results(folder);
         }
         // Reset the Messages-pane cursor so the user lands on the
-        // first hit. Mirror into layout state to keep render-time
-        // consumers (Selection mirrors) in sync.
+        // first hit.
         self.messages.email_index = 0;
         self.messages.remembered_email_index = None;
-        self.layout.selection.email_index = 0;
-        self.layout.selection.remembered_email_index = None;
         // Surface results in the Messages-only view so the breadcrumb
         // shows "Search: …" with no folder pane competing for space.
         self.layout.current_view = layout::View::Messages;
@@ -2013,14 +1987,12 @@ impl AppRoot {
         self.publish_focus();
     }
 
-    /// Test seam: position the Messages-pane cursor. Mirrors the
-    /// in-tree convention of writing `root.messages.email_index = i`
-    /// directly. Keeps the layout mirror in sync so subsequent
-    /// dispatches don't snap back.
+    /// Test seam: position the Messages-pane cursor. The component is
+    /// canonical; this just keeps the in-tree convention of writing
+    /// `root.messages.email_index = i` callable through a helper.
     #[cfg(test)]
     pub(crate) fn set_messages_email_index_for_test(&mut self, idx: usize) {
         self.messages.email_index = idx;
-        self.layout.selection.email_index = idx;
     }
 
     /// Re-point the runtime at a new maildir root. Used by
@@ -2414,14 +2386,12 @@ mod tests {
         root.process_event(j.clone()).unwrap();
         root.process_event(j).unwrap();
         assert_eq!(root.folders.folder_index, 2);
-        assert_eq!(root.layout.selection.folder_index, 2);
     }
 
     #[test]
     fn key_k_at_top_clamps() {
         let mut root = make_root_with_folders(&["A", "B"]);
         root.folders.folder_index = 0;
-        root.layout.selection.folder_index = 0;
         let k = Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         root.process_event(k).unwrap();
         assert_eq!(root.folders.folder_index, 0);
@@ -2431,7 +2401,6 @@ mod tests {
     fn key_j_at_bottom_clamps() {
         let mut root = make_root_with_folders(&["A", "B"]);
         root.folders.folder_index = 1;
-        root.layout.selection.folder_index = 1;
         let j = Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         root.process_event(j).unwrap();
         assert_eq!(root.folders.folder_index, 1);
