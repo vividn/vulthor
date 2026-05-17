@@ -662,13 +662,11 @@ impl AppRoot {
             ActivePane::Content => {
                 // Switch back to email list view.
                 self.layout.current_view = View::MessagesContent;
-                self.layout.active_pane = ActivePane::Messages;
-                self.publish_focus();
+                self.set_active_pane(ActivePane::Messages);
             }
             ActivePane::Attachments => {
                 self.layout.current_view = View::MessagesContent;
-                self.layout.active_pane = ActivePane::Messages;
-                self.publish_focus();
+                self.set_active_pane(ActivePane::Messages);
             }
             ActivePane::Accounts | ActivePane::Draft => {}
         }
@@ -799,8 +797,7 @@ impl AppRoot {
         } else {
             View::MessagesContent
         };
-        self.layout.active_pane = ActivePane::Messages;
-        self.publish_focus();
+        self.set_active_pane(ActivePane::Messages);
     }
 
     fn request_body_if_needed(&mut self) {
@@ -1149,13 +1146,12 @@ impl AppRoot {
             }
             Msg::FolderExitParent => {
                 self.email_store.lock().unwrap().exit_folder();
-                self.layout.active_pane = ActivePane::Folders;
                 self.layout.current_view = if self.layout.content_pane_hidden {
                     View::Messages
                 } else {
                     View::FolderMessages
                 };
-                self.publish_focus();
+                self.set_active_pane(ActivePane::Folders);
             }
             Msg::MessageMove(_) => {
                 let idx = self.messages.email_index;
@@ -1173,8 +1169,7 @@ impl AppRoot {
                     } else {
                         View::MessagesContent
                     };
-                    self.layout.active_pane = ActivePane::Messages;
-                    self.publish_focus();
+                    self.set_active_pane(ActivePane::Messages);
                 }
             }
             Msg::MessageMarkRead(_) => {
@@ -1546,8 +1541,7 @@ impl AppRoot {
         // Surface results in the Messages-only view so the breadcrumb
         // shows "Search: …" with no folder pane competing for space.
         self.layout.current_view = layout::View::Messages;
-        self.layout.active_pane = ActivePane::Messages;
-        self.publish_focus();
+        self.set_active_pane(ActivePane::Messages);
         self.status_message = Some(format!("{}: {} result(s)", label, count));
     }
 
@@ -1562,8 +1556,7 @@ impl AppRoot {
         };
         if was_active {
             self.layout.current_view = layout::View::FolderMessages;
-            self.layout.active_pane = ActivePane::Messages;
-            self.publish_focus();
+            self.set_active_pane(ActivePane::Messages);
         }
     }
 
@@ -1582,8 +1575,7 @@ impl AppRoot {
             Ok(sent_path) => {
                 self.draft.clear();
                 self.layout.current_view = View::MessagesContent;
-                self.layout.active_pane = ActivePane::Messages;
-                self.publish_focus();
+                self.set_active_pane(ActivePane::Messages);
                 let label = sent_path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -1603,8 +1595,7 @@ impl AppRoot {
     /// navigates back to the pre-compose view.
     fn apply_draft_discard(&mut self) {
         self.layout.current_view = View::MessagesContent;
-        self.layout.active_pane = ActivePane::Messages;
-        self.publish_focus();
+        self.set_active_pane(ActivePane::Messages);
         self.status_message = Some("Draft discarded".into());
     }
 
@@ -2180,15 +2171,24 @@ impl AppRoot {
         self.publish_focus();
     }
 
-    fn on_focus_change(&mut self, old: ActivePane, new: ActivePane) {
-        if old != new {
-            self.publish_focus();
-            // A half-typed sequence prefix (e.g. `g` waiting for `r`)
-            // must not survive a pane switch, or the next ordinary key
-            // press in the new pane could complete a sequence the user
-            // never intended (vu-q9b).
-            self.pending_keys.clear();
+    /// Single funnel for pane transitions. Owns the invariants that
+    /// every pane change must preserve: publish the new focus to the
+    /// web pane / in-process subscribers, drop any half-typed sequence
+    /// prefix (vu-q9b), and dispatch the appropriate blur Msg for the
+    /// Folders↔Messages pair. All bare `self.layout.active_pane = …`
+    /// assignments should go through here (vu-wmp).
+    fn set_active_pane(&mut self, new: ActivePane) {
+        let old = self.layout.active_pane;
+        self.layout.active_pane = new;
+        if old == new {
+            return;
         }
+        self.publish_focus();
+        // A half-typed sequence prefix (e.g. `g` waiting for `r`) must
+        // not survive a pane switch, or the next ordinary key press in
+        // the new pane could complete a sequence the user never
+        // intended (vu-q9b).
+        self.pending_keys.clear();
         match (old, new) {
             (ActivePane::Folders, ActivePane::Messages) => {
                 self.queue.push_back(Msg::FoldersBlur);
@@ -2198,6 +2198,15 @@ impl AppRoot {
             }
             _ => {}
         }
+    }
+
+    /// Side-effect hook for the pane-cycle / view-progression call
+    /// sites where `layout` has already mutated `active_pane` before
+    /// AppRoot got a chance to react. We revert and re-apply through
+    /// `set_active_pane` so the invariants live in exactly one place.
+    fn on_focus_change(&mut self, old: ActivePane, new: ActivePane) {
+        self.layout.active_pane = old;
+        self.set_active_pane(new);
     }
 
     /// Read-only handles for ui.rs.
