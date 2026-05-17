@@ -15,7 +15,7 @@ use serde::Serialize;
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -87,6 +87,12 @@ pub struct WebState {
     /// server decide between rendering the selected email and showing
     /// the welcome screen without taking the store lock.
     pub focused_pane: Arc<AtomicU8>,
+    /// vu-aoy: per-message image-reveal flag. False by default (HTML
+    /// `<img>` tags are stripped from the body delivered to the
+    /// browser); flipped per-message by `AppRoot::handle_msg` reacting
+    /// to `Msg::ToggleImages` (Shift+I), and reset to false on every
+    /// email selection change.
+    pub images_visible: Arc<AtomicBool>,
     /// Outbound request channel to the shared `BodyLoader` worker.
     /// Handlers forward `HeadersOnly` emails here so the body parse
     /// happens off the axum executor.
@@ -153,6 +159,7 @@ impl WebServer {
         port: u16,
         email_store: Arc<Mutex<EmailStore>>,
         focused_pane: Arc<AtomicU8>,
+        images_visible: Arc<AtomicBool>,
         body_request_tx: Sender<PathBuf>,
     ) -> Self {
         let token: Arc<str> = Arc::from(generate_token());
@@ -162,6 +169,7 @@ impl WebServer {
             state: WebState {
                 email_store,
                 focused_pane,
+                images_visible,
                 body_request_tx,
                 token,
             },
@@ -339,7 +347,12 @@ pub(crate) async fn serve_email(State(state): State<WebState>) -> Response {
         if matches!(email.load_state, EmailLoadState::HeadersOnly) {
             state.request_body_load(email.file_path.clone());
         }
-        Html(generate_email_html(&email, token)).into_response()
+        Html(generate_email_html(
+            &email,
+            token,
+            state.images_visible.load(Ordering::Relaxed),
+        ))
+        .into_response()
     } else {
         Html(generate_welcome_html(token)).into_response()
     }
@@ -568,7 +581,14 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
         let body_content = if matches!(email.load_state, EmailLoadState::HeadersOnly) {
             "<p><em>Loading body…</em></p>".to_string()
         } else if let Some(html) = &email.body_html {
-            html.clone()
+            // vu-aoy: when the user hasn't pressed Shift+I for this
+            // selection, strip all <img> tags from the sanitized body
+            // before handing it to the browser.
+            if state.images_visible.load(Ordering::Relaxed) {
+                html.clone()
+            } else {
+                crate::sanitizer::strip_images(html)
+            }
         } else {
             markdown_to_html(&email.display_body())
         };
@@ -613,9 +633,13 @@ async fn get_current_email_json(State(state): State<WebState>) -> Response {
     }
 }
 
-fn generate_email_html(email: &crate::email::Email, token: &str) -> String {
+fn generate_email_html(email: &crate::email::Email, token: &str, images_visible: bool) -> String {
     let body_content = if let Some(html) = &email.body_html {
-        html.clone()
+        if images_visible {
+            html.clone()
+        } else {
+            crate::sanitizer::strip_images(html)
+        }
     } else {
         // Convert plain text to HTML
         markdown_to_html(&email.display_body())
@@ -1035,7 +1059,7 @@ mod tests {
     #[test]
     fn email_html_head_advertises_pwa_install_hooks() {
         let email = crate::email::Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email, "tok");
+        let html = generate_email_html(&email, "tok", false);
         let head_end = html.find("</head>").expect("email HTML must have a head");
         let head = &html[..head_end];
         assert!(
@@ -1072,7 +1096,7 @@ mod tests {
     #[test]
     fn email_html_does_not_inline_scripts() {
         let email = Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email, "tok");
+        let html = generate_email_html(&email, "tok", false);
         // The only `<script` permitted is the external app.js reference.
         // Any inline block re-introduces the `unsafe-inline` requirement
         // we explicitly avoid in CSP_HEADER.
@@ -1139,7 +1163,7 @@ mod tests {
     #[test]
     fn email_html_wraps_body_in_sandboxed_iframe() {
         let email = Email::new(PathBuf::from("/tmp/fake.eml"));
-        let html = generate_email_html(&email, "tok");
+        let html = generate_email_html(&email, "tok", false);
         let iframe = html
             .find("<iframe")
             .map(|i| &html[i..])
@@ -1176,9 +1200,15 @@ mod tests {
         // Round-trip a body with `&` and `"` to prove escape_html_attr fires.
         let mut email = Email::new(PathBuf::from("/tmp/fake.eml"));
         email.body_html = Some(r#"<p>tom & jerry "say" hi</p>"#.to_string());
-        let html = generate_email_html(&email, "tok");
+        let html = generate_email_html(&email, "tok", false);
+        // vu-aoy: with images_visible=false, generate_email_html now
+        // re-sanitizes the body via `strip_images` (which encodes `&`
+        // to `&amp;`). The srcdoc-attribute escape then encodes the `&`
+        // of `&amp;` again, so the literal `&` round-trips through
+        // `&amp;amp;`. The escape invariant is preserved: nothing
+        // breaks out of the iframe.
         assert!(
-            html.contains("tom &amp; jerry &quot;say&quot; hi"),
+            html.contains("tom &amp;amp; jerry &quot;say&quot; hi"),
             "srcdoc attribute must escape & and \" so the body cannot break out;\n\
              generated HTML did not contain the expected escape:\n{}",
             html.lines()
@@ -1347,6 +1377,7 @@ mod tests {
         let state = WebState {
             email_store: Arc::new(Mutex::new(store)),
             focused_pane: Arc::new(AtomicU8::new(ActivePane::Messages.to_u8())),
+            images_visible: Arc::new(AtomicBool::new(false)),
             body_request_tx: tx,
             token: Arc::from("test-token"),
         };

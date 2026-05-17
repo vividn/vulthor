@@ -57,6 +57,11 @@ pub struct AppRoot {
     /// welcome" without locking the store. Updated on every focus
     /// change via `Msg::FocusChanged`.
     focused_pane: Arc<AtomicU8>,
+    /// vu-aoy: per-message HTML-image reveal flag. False by default
+    /// (web pane strips `<img>` from the body). Flipped by
+    /// `Msg::ToggleImages` (Shift+I); reset to false on every email
+    /// selection change so reveals don't bleed across messages.
+    images_visible: Arc<std::sync::atomic::AtomicBool>,
 
     /// User config (incl. `[accounts.*]`). `Msg::AccountSelect` reads
     /// it to find the maildir_path to rebuild the store against.
@@ -195,6 +200,7 @@ impl AppRoot {
         let mut root = Self {
             email_store: email_store.clone(),
             focused_pane: Arc::new(AtomicU8::new(ActivePane::Folders.to_u8())),
+            images_visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             config: Config::default(),
             scanner: scanner.clone(),
             layout,
@@ -326,6 +332,12 @@ impl AppRoot {
         self.focused_pane.clone()
     }
 
+    /// vu-aoy: clone of the image-reveal flag the web server reads to
+    /// decide whether to strip `<img>` from the body it serves.
+    pub fn images_visible(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.images_visible.clone()
+    }
+
     /// Clone of the body-loader request channel. The web server uses
     /// this to dispatch body parses to the same off-thread worker the
     /// TUI feeds, so no `fs::read` ever runs on an axum executor thread
@@ -398,6 +410,9 @@ impl AppRoot {
         let layout = &self.layout;
         let status = &self.status_message;
         let help = self.help_visible;
+        let images_visible = self
+            .images_visible
+            .load(std::sync::atomic::Ordering::Relaxed);
         let config = &self.config;
         let theme = &self.theme;
         terminal.draw(|f| {
@@ -406,6 +421,7 @@ impl AppRoot {
                 &mut store,
                 layout,
                 status,
+                images_visible,
                 help,
                 folders,
                 messages,
@@ -864,6 +880,7 @@ impl AppRoot {
             }),
             Action::ToggleHelp => Some(Msg::ToggleHelp),
             Action::ToggleHtmlOff => Some(Msg::TogglePlaintext),
+            Action::ToggleImages => Some(Msg::ToggleImages),
             Action::CycleTheme => Some(Msg::CycleTheme),
             Action::Undo => Some(Msg::Undo),
             Action::ToggleViewer => Some(Msg::ToggleHtmlViewer),
@@ -1085,6 +1102,11 @@ impl AppRoot {
             Msg::TogglePlaintext => {
                 self.content.prefer_plaintext = !self.content.prefer_plaintext;
             }
+            Msg::ToggleImages => {
+                use std::sync::atomic::Ordering;
+                let cur = self.images_visible.load(Ordering::Relaxed);
+                self.images_visible.store(!cur, Ordering::Relaxed);
+            }
             Msg::CycleTheme => {
                 // Advance to the next preset and adopt its palette.
                 // When no preset is anchored (user theme file or
@@ -1197,6 +1219,11 @@ impl AppRoot {
             Msg::MessageMove(_) => {
                 let idx = self.messages.email_index;
                 self.email_store.lock().unwrap().select_email(idx);
+                // vu-aoy: image reveal is per-message — every selection
+                // change resets it so the next email starts with images
+                // hidden again.
+                self.images_visible
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
             }
             Msg::MessageOpen(_) => {
                 let idx = self.messages.email_index;

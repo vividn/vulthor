@@ -164,8 +164,16 @@ bind = "127.0.0.1"
     // listener accepted a real TCP connection on the configured port.
     let store = Arc::new(Mutex::new(EmailStore::new(tmp.path().to_path_buf())));
     let focused = Arc::new(AtomicU8::new(ActivePane::Messages.to_u8()));
+    let images_visible = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, _rx) = std::sync::mpsc::channel::<PathBuf>();
-    let server = WebServer::new(cfg.web.bind.clone(), cfg.web.port, store, focused, tx);
+    let server = WebServer::new(
+        cfg.web.bind.clone(),
+        cfg.web.port,
+        store,
+        focused,
+        images_visible,
+        tx,
+    );
     let server_task = tokio::spawn(async move {
         let _ = server.start().await;
     });

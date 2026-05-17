@@ -38,6 +38,7 @@ impl UI {
         store: &mut EmailStore,
         layout: &Layout,
         status_message: &Option<String>,
+        images_visible: bool,
         help_visible: bool,
         folders: &FoldersComponent,
         messages: &MessagesComponent,
@@ -62,6 +63,7 @@ impl UI {
             store,
             layout,
             content.prefer_plaintext,
+            images_visible,
             status_message,
             theme,
             size,
@@ -412,6 +414,7 @@ impl UI {
         store: &EmailStore,
         lay: &Layout,
         prefer_plaintext: bool,
+        images_visible: bool,
         status_message: &Option<String>,
         theme: &Theme,
         area: Rect,
@@ -444,6 +447,14 @@ impl UI {
             status_text.push(Span::raw(" | "));
             status_text.push(Span::styled(
                 "[plaintext]",
+                Style::default().fg(theme.accent),
+            ));
+        }
+
+        if images_visible {
+            status_text.push(Span::raw(" | "));
+            status_text.push(Span::styled(
+                "[img]",
                 Style::default().fg(theme.accent),
             ));
         }

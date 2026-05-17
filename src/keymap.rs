@@ -65,6 +65,11 @@ pub enum Action {
     /// to fall back to an HTML→text conversion and shows
     /// `"(no plain part)"` when only HTML is present. (vu-c1s)
     ToggleHtmlOff,
+    /// vu-aoy: reveal HTML images in the web pane for the current
+    /// message. False by default (`<img>` is stripped before serving);
+    /// resets to false on every email selection change. Bound to `I`
+    /// (Shift+I).
+    ToggleImages,
     CycleTheme,
     Quit,
     // Draft pane
@@ -153,6 +158,7 @@ impl Action {
             Action::ToggleViewer => "toggle_viewer",
             Action::ToggleHelp => "toggle_help",
             Action::ToggleHtmlOff => "toggle_html_off",
+            Action::ToggleImages => "toggle_images",
             Action::CycleTheme => "cycle_theme",
             Action::Quit => "quit",
             Action::DraftSend => "draft_send",
@@ -208,6 +214,8 @@ impl Action {
             Action::OpenAttachment => PaneScope::Content,
             // vu-c1s paranoia toggle reads from the Content pane state.
             Action::ToggleHtmlOff => PaneScope::Content,
+            // vu-aoy image-reveal affects the Content pane (web body).
+            Action::ToggleImages => PaneScope::Content,
             // Draft-pane lifecycle keys.
             Action::DraftSend | Action::DraftEdit | Action::DraftDiscard => PaneScope::Compose,
         }
@@ -252,6 +260,7 @@ impl Action {
             Action::ToggleViewer => "Toggle web viewer",
             Action::ToggleHelp => "Toggle this help",
             Action::ToggleHtmlOff => "Force plain-text body",
+            Action::ToggleImages => "Reveal images for this message",
             Action::CycleTheme => "Cycle theme preset",
             Action::Quit => "Quit Vulthor",
             Action::DraftSend => "Send draft",
@@ -299,6 +308,7 @@ impl Action {
             Action::ToggleViewer,
             Action::ToggleHelp,
             Action::ToggleHtmlOff,
+            Action::ToggleImages,
             Action::CycleTheme,
             Action::Quit,
             Action::DraftSend,
@@ -364,6 +374,7 @@ pub const DEFAULT_KEYMAP: &[(Action, &str)] = &[
     (Action::ToggleViewer, "v"),
     (Action::ToggleHelp, "?"),
     (Action::ToggleHtmlOff, "P"),
+    (Action::ToggleImages, "I"),
     (Action::CycleTheme, "Ctrl+t"),
     (Action::Quit, "q"),
     // Draft pane

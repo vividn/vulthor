@@ -177,6 +177,7 @@ async fn main() -> Result<()> {
         web_port,
         email_store.clone(),
         app_root.focused_pane(),
+        app_root.images_visible(),
         app_root.body_request_sender(),
     );
     // vu-fi1: the per-launch loopback token is now the gate on every web

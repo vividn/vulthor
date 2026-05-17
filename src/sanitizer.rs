@@ -118,9 +118,50 @@ pub fn sanitize_email_html(raw: &str) -> String {
         .to_string()
 }
 
+/// vu-aoy: strip every `<img>` tag from already-sanitized HTML so the
+/// web pane shows no images by default. Re-runs ammonia with `<img>`
+/// removed from the allowlist — this is the SECOND pass on output
+/// that already went through `sanitize_email_html`, so the input is
+/// trusted; we're just narrowing what survives.
+pub fn strip_images(sanitized_html: &str) -> String {
+    let allowed_tags: HashSet<&str> = [
+        "p", "br", "hr", "b", "i", "em", "strong", "u", "s", "small", "sub", "sup", "a", "ul",
+        "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "td",
+        "th", "caption", "colgroup", "col", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div",
+    ]
+    .into_iter()
+    .collect();
+    let url_schemes: HashSet<&str> = [
+        "http", "https", "mailto", "tel", "ftp", "ftps", "data", "cid",
+    ]
+    .into_iter()
+    .collect();
+    Builder::default()
+        .tags(allowed_tags)
+        .url_schemes(url_schemes)
+        .clean(sanitized_html)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// vu-aoy: `strip_images` removes every `<img>` from
+    /// already-sanitized HTML (the web-pane default when the user
+    /// hasn't pressed Shift+I).
+    #[test]
+    fn strip_images_drops_img_tags() {
+        let pre_sanitized = "<p>before</p><img src=\"data:image/png;base64,abc\" alt=\"pixel\"><p>after</p>";
+        let out = strip_images(pre_sanitized);
+        assert!(
+            !out.contains("<img"),
+            "strip_images must remove <img>, got: {}",
+            out,
+        );
+        assert!(out.contains("<p>before</p>"));
+        assert!(out.contains("<p>after</p>"));
+    }
 
     /// `<script>` is the canonical XSS vector — the sanitizer must strip
     /// the tag and its contents so injected JS never reaches the DOM.

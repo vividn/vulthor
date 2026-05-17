@@ -376,6 +376,7 @@ fn webstate_with_no_selection(maildir: PathBuf) -> WebState {
     WebState {
         email_store: Arc::new(Mutex::new(store)),
         focused_pane: Arc::new(AtomicU8::new(ActivePane::Messages.to_u8())),
+        images_visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         body_request_tx: tx,
         token: Arc::from("test-token"),
     }

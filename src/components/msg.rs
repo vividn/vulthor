@@ -187,6 +187,12 @@ pub enum Msg {
     /// reads it on render.
     TogglePlaintext,
 
+    /// vu-aoy: reveal HTML images in the web pane for the current
+    /// message. AppRoot flips the shared `images_visible` atomic the
+    /// web server reads; a subsequent email selection resets it back
+    /// to false. Bound to `Shift+I`.
+    ToggleImages,
+
     // Search (Phase 3.a — notmuch). The query input modal opens at the
     // bottom of the screen; on Enter the typed query is shelled out via
     // `notmuch search --output=files`. Resulting paths are rendered as
