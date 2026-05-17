@@ -14,6 +14,7 @@ mod classifier;
 mod components;
 mod compose;
 mod config;
+mod crash;
 mod doctor;
 mod email;
 mod error;
@@ -59,6 +60,11 @@ use web::WebServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // vu-61a: route panics through a crash-log writer that also restores
+    // the terminal — otherwise an alt-screen panic leaves the user's
+    // shell in raw mode with no visible cursor.
+    crash::install_panic_hook();
+
     let args = CliArgs::parse();
 
     let mut config = match Config::load(args.config_path).await {
