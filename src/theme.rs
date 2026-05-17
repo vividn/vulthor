@@ -17,6 +17,103 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// Built-in preset themes (vu-62n). Each variant maps to a concrete
+/// [`Theme`] palette via [`ThemePreset::theme`]. Presets are the base
+/// layer in [`build_theme`]'s resolution chain: built-in default →
+/// preset → user theme file → `[theme].overrides`. `Ctrl+T` cycles
+/// through presets at runtime (transient — not persisted).
+///
+/// `default-dark` is the implicit base when `[theme].preset` is unset,
+/// so existing configs keep rendering the same palette they always have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThemePreset {
+    DefaultDark,
+    DefaultLight,
+    SolarizedDark,
+    Nord,
+}
+
+impl ThemePreset {
+    /// Canonical TOML name (kebab-case), used as the value of
+    /// `[theme].preset` in `vulthor.toml`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ThemePreset::DefaultDark => "default-dark",
+            ThemePreset::DefaultLight => "default-light",
+            ThemePreset::SolarizedDark => "solarized-dark",
+            ThemePreset::Nord => "nord",
+        }
+    }
+
+    /// All presets in cycle order (matches declaration order).
+    pub const fn all() -> &'static [ThemePreset] {
+        &[
+            ThemePreset::DefaultDark,
+            ThemePreset::DefaultLight,
+            ThemePreset::SolarizedDark,
+            ThemePreset::Nord,
+        ]
+    }
+
+    /// Parse a TOML preset name back into a variant. `None` for typos so
+    /// the config validator can raise a structured error.
+    pub fn from_name(name: &str) -> Option<ThemePreset> {
+        ThemePreset::all().iter().copied().find(|p| p.name() == name)
+    }
+
+    /// Next preset in cycle order, wrapping past the last variant.
+    /// Drives `Ctrl+T` at runtime.
+    pub fn next(self) -> ThemePreset {
+        let all = ThemePreset::all();
+        let idx = all.iter().position(|p| *p == self).unwrap_or(0);
+        all[(idx + 1) % all.len()]
+    }
+
+    /// Resolve to a concrete [`Theme`] palette. Each preset returns a
+    /// freshly built `Theme` — no shared state, no caching.
+    pub fn theme(self) -> Theme {
+        match self {
+            ThemePreset::DefaultDark => Theme::default(),
+            ThemePreset::DefaultLight => Theme {
+                // Inverted: paper-light backgrounds, dark text via `dark`.
+                dark: Color::Rgb(0xF7, 0xF4, 0xEC),
+                primary: Color::Rgb(0xE3, 0xDA, 0xC4),
+                light: Color::Rgb(0xC9, 0xBE, 0xA1),
+                accent: Color::Rgb(0xC0, 0x4A, 0x16),
+                accent_light: Color::Rgb(0xE0, 0x7A, 0x3F),
+                cyan: Color::Rgb(0x18, 0x8B, 0xC2),
+                cyan_light: Color::Rgb(0x4A, 0xB0, 0xDC),
+                gray_dark: Color::Rgb(0x55, 0x5B, 0x6C),
+                gray_light: Color::Rgb(0x2C, 0x30, 0x3A),
+            },
+            ThemePreset::SolarizedDark => Theme {
+                // Solarized dark base palette (Ethan Schoonover).
+                dark: Color::Rgb(0x00, 0x2B, 0x36),       // base03
+                primary: Color::Rgb(0x07, 0x36, 0x42),    // base02
+                light: Color::Rgb(0x58, 0x6E, 0x75),      // base01
+                accent: Color::Rgb(0xCB, 0x4B, 0x16),     // orange
+                accent_light: Color::Rgb(0xB5, 0x89, 0x00), // yellow
+                cyan: Color::Rgb(0x2A, 0xA1, 0x98),       // cyan
+                cyan_light: Color::Rgb(0x26, 0x8B, 0xD2), // blue
+                gray_dark: Color::Rgb(0x65, 0x7B, 0x83),  // base00
+                gray_light: Color::Rgb(0xEE, 0xE8, 0xD5), // base2
+            },
+            ThemePreset::Nord => Theme {
+                // Nord palette (Arctic Ice Studio).
+                dark: Color::Rgb(0x2E, 0x34, 0x40),       // nord0
+                primary: Color::Rgb(0x3B, 0x42, 0x52),    // nord1
+                light: Color::Rgb(0x43, 0x4C, 0x5E),      // nord2
+                accent: Color::Rgb(0xD0, 0x87, 0x70),     // nord12 (orange)
+                accent_light: Color::Rgb(0xEB, 0xCB, 0x8B), // nord13 (yellow)
+                cyan: Color::Rgb(0x88, 0xC0, 0xD0),       // nord8
+                cyan_light: Color::Rgb(0x8F, 0xBC, 0xBB), // nord7
+                gray_dark: Color::Rgb(0x4C, 0x56, 0x6A),  // nord3
+                gray_light: Color::Rgb(0xEC, 0xEF, 0xF4), // nord6
+            },
+        }
+    }
+}
+
 /// Vulthor color theme matching the bird logo
 pub struct VulthorTheme;
 
@@ -275,9 +372,11 @@ fn user_themes_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".config/vulthor/themes"))
 }
 
-/// Resolve a final [`Theme`] from a [`Config`]: built-in default →
-/// user theme file (if `config.theme.name` is set) →
-/// `config.theme.overrides`.
+/// Resolve a final [`Theme`] from a [`Config`]: preset (default
+/// `default-dark`) → user theme file (if `config.theme.name` is set) →
+/// `config.theme.overrides`. `[theme].preset` is the base palette;
+/// `[theme].name` (when set) replaces it; `[theme].overrides` win over
+/// both.
 pub fn build_theme(config: &Config) -> Result<Theme> {
     build_theme_with(config, load_user_theme)
 }
@@ -291,9 +390,23 @@ where
 {
     let base = match &config.theme.name {
         Some(name) => loader(name)?,
-        None => Theme::default(),
+        None => preset_from_config(&config.theme.preset)?.theme(),
     };
     apply_overrides(base, &config.theme.overrides)
+}
+
+/// Resolve `[theme].preset` to a [`ThemePreset`]. `None` → default-dark
+/// (the implicit base). Unknown names fail loud so typos don't silently
+/// fall back to the built-in palette.
+pub fn preset_from_config(name: &Option<String>) -> Result<ThemePreset> {
+    match name {
+        None => Ok(ThemePreset::DefaultDark),
+        Some(n) => ThemePreset::from_name(n).ok_or_else(|| VulthorError::Config {
+            message: format!(
+                "unknown [theme].preset {n:?} (valid: default-dark, default-light, solarized-dark, nord)"
+            ),
+        }),
+    }
 }
 
 #[cfg(test)]

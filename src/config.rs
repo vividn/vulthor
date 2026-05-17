@@ -132,15 +132,21 @@ impl Default for AiConfig {
     }
 }
 
-/// `[theme]` block. Selects a user-loadable theme by name (resolved
-/// against `~/.config/vulthor/themes/<name>.toml`) and/or specifies a
-/// per-role color override map. Resolution order:
-/// built-in default → user theme file (if `name` set) →
-/// `overrides` → final [`crate::theme::Theme`].
+/// `[theme]` block. Selects a built-in preset, a user-loadable theme
+/// by name (resolved against `~/.config/vulthor/themes/<name>.toml`),
+/// and/or a per-role color override map. Resolution order:
+/// preset (default `default-dark`) → user theme file (if `name` set,
+/// replaces the preset base) → `overrides` → final
+/// [`crate::theme::Theme`].
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ThemeConfig {
+    /// Built-in preset name (kebab-case): `default-dark`,
+    /// `default-light`, `solarized-dark`, `nord`. `None` resolves to
+    /// `default-dark` so existing configs keep the same palette.
+    #[serde(default)]
+    pub preset: Option<String>,
     /// Selects a theme file at `~/.config/vulthor/themes/<name>.toml`.
-    /// `None` means use the built-in default.
+    /// `None` means use the preset base.
     #[serde(default)]
     pub name: Option<String>,
     /// Role-name → color string (hex `#RRGGBB`/`#RGB` or a named
@@ -344,6 +350,9 @@ impl Config {
         // than at first keypress. The resolved table is rebuilt by
         // AppRoot; this is purely a structural-validity check.
         crate::keymap::resolve_keymap(&self.keybindings.inner)?;
+        // Reject unknown [theme].preset names at load time so typos
+        // don't silently fall back to default-dark.
+        crate::theme::preset_from_config(&self.theme.preset)?;
         Ok(())
     }
 }
