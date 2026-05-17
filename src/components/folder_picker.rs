@@ -34,7 +34,7 @@ use ratatui::{
 };
 
 use crate::email::Folder;
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{Component, Ctx, Msg};
 
@@ -118,7 +118,7 @@ impl FolderPickerComponent {
     }
 
     /// Draw the centered modal overlay. No-op when `!self.visible`.
-    pub fn render_modal(&self, f: &mut Frame, screen: Rect) {
+    pub fn render_modal(&self, f: &mut Frame, screen: Rect, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -127,7 +127,7 @@ impl FolderPickerComponent {
 
         let outer = Block::default()
             .borders(Borders::ALL)
-            .style(Style::default().fg(VulthorTheme::CYAN))
+            .style(Style::default().fg(theme.cyan))
             .title("Move to folder (Esc to cancel)");
         let inner = outer.inner(modal);
         f.render_widget(outer, modal);
@@ -151,7 +151,7 @@ impl FolderPickerComponent {
             .block(Block::default().borders(Borders::ALL))
             .highlight_style(
                 Style::default()
-                    .bg(VulthorTheme::SELECTION_BG)
+                    .bg(theme.primary)
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             );
@@ -298,7 +298,7 @@ mod tests {
         store
     }
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn open_populates_flat_folder_list() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         assert!(!p.visible);
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn close_clears_state() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn filter_narrows_visible_folders() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn typing_keys_appends_to_filter() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn backspace_pops_filter() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn enter_emits_move_to_with_selected_path() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn esc_cancels_without_emitting_message() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn arrow_keys_navigate_filtered_list() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn down_at_tail_clamps() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         p.handle_msg(&Msg::OpenFolderPicker, &ctx);
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn on_key_returns_none_when_invisible() {
         let store = store_with_folders();
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut p = FolderPickerComponent::new();
         // Not visible: every key falls through.

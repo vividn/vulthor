@@ -366,6 +366,98 @@ accent = "#0000FF"
     assert_eq!(root.theme(), &resolved);
 }
 
+// ---- 3b. [theme] overrides adopt at draw time (vu-8ub) --------------
+//
+// vu-tpv proved resolution lands in `AppRoot.theme()`. vu-8ub plumbs that
+// theme through `ui::draw → Ctx → component::render` so the override
+// actually reaches the rendered cell. These tests render
+// `FoldersComponent` against a `Ctx` built from a configured `Theme` and
+// assert the selection-row background matches `theme.primary`.
+
+/// Build a single-folder `EmailStore` with the cursor on row 0 so a
+/// rendered `FoldersComponent` highlights exactly one row whose
+/// background carries `theme.primary`.
+fn store_with_one_folder() -> EmailStore {
+    let mut store = EmailStore::new(PathBuf::from("/tmp"));
+    let folder = Folder::new("INBOX".into(), PathBuf::from("/tmp/INBOX"));
+    store.root_folder.add_subfolder(folder);
+    store
+}
+
+/// Render the folder pane against `theme` and return the bg color of
+/// the first interior cell on the selected row (row 1, col 1 — inside
+/// the border). The shared body of the three adoption tests below.
+fn folders_selection_bg(theme: &crate::theme::Theme) -> Color {
+    use crate::components::{Component, Ctx, FoldersComponent};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let store = store_with_one_folder();
+    let config = Config::default();
+    let ctx = Ctx {
+        theme,
+        config: &config,
+        store: &store,
+    };
+
+    let comp = FoldersComponent::with_index(0);
+    let backend = TestBackend::new(20, 4);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal
+        .draw(|f| comp.render(f, f.area(), true, &ctx))
+        .expect("draw folders");
+    let buf = terminal.backend().buffer();
+    // Row 1, col 1 is the first cell of the selected list entry —
+    // inside the top border (row 0) and the left border (col 0).
+    buf[(1, 1)].bg
+}
+
+#[test]
+fn theme_primary_override_reaches_rendered_folder_selection_bg() {
+    // [theme] overrides primary to red; the folder pane's selection
+    // background must come through as Rgb(255, 0, 0) at draw time.
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert("primary".into(), "#FF0000".into());
+    let cfg = Config {
+        theme: crate::config::ThemeConfig {
+            name: None,
+            overrides,
+        },
+        ..Config::default()
+    };
+    let theme = crate::theme::build_theme(&cfg).expect("theme builds");
+
+    assert_eq!(
+        folders_selection_bg(&theme),
+        Color::Rgb(0xFF, 0x00, 0x00),
+        "[theme] primary override must reach the rendered selection cell",
+    );
+}
+
+#[test]
+fn removing_theme_override_returns_selection_bg_to_built_in() {
+    // Same render path with empty overrides: the selection bg must be
+    // the built-in `VulthorTheme::PRIMARY`. Proves the previous test's
+    // red is a real override effect, not a coincidence.
+    let cfg = Config::default();
+    let theme = crate::theme::build_theme(&cfg).expect("theme builds");
+
+    assert_eq!(
+        folders_selection_bg(&theme),
+        VulthorTheme::PRIMARY,
+        "empty overrides must leave the built-in palette intact",
+    );
+}
+
+#[test]
+fn config_defaults_render_built_in_palette_when_theme_block_absent() {
+    // A bare `Theme::default()` (no Config involvement at all) must
+    // also render the built-in palette — the render path doesn't need
+    // a `[theme]` block to behave sensibly.
+    let theme = crate::theme::Theme::default();
+    assert_eq!(folders_selection_bg(&theme), VulthorTheme::PRIMARY);
+}
+
 // ---- 4. inotify MailDir watch ----------------------------------------
 
 #[test]

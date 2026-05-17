@@ -31,7 +31,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::classifier::{Classifier, NoopClassifier, suggestion_glyph};
 use crate::config::AiConfig;
 use crate::email::{DraftInfo, Email, Folder};
-use crate::theme::VulthorTheme;
+use crate::theme::{Theme, VulthorTheme};
 
 use super::{Component, Ctx, Dir, Msg, ReplyKind};
 
@@ -121,6 +121,7 @@ impl MessagesComponent {
     /// see `MessagesRenderContext`. We render against the resolved
     /// `&Folder` rather than re-deriving it from `Ctx::store` so the
     /// caller stays in charge of the view-vs-store decision.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_with_folder(
         &self,
         f: &mut Frame,
@@ -129,6 +130,7 @@ impl MessagesComponent {
         folder_to_display: &Folder,
         folder_path: &str,
         drafts: &HashMap<String, DraftInfo>,
+        theme: &Theme,
     ) {
         // Track the actual visible row count so `handle_msg(MessageMove)`
         // can emit `StoreLoadMore` ahead of the user reaching the tail.
@@ -148,7 +150,7 @@ impl MessagesComponent {
         );
 
         let style = if focused {
-            Style::default().fg(VulthorTheme::CYAN)
+            Style::default().fg(theme.cyan)
         } else {
             Style::default()
         };
@@ -179,7 +181,7 @@ impl MessagesComponent {
             .style(style)
             .highlight_style(
                 Style::default()
-                    .bg(VulthorTheme::SELECTION_BG)
+                    .bg(theme.primary)
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             );
@@ -569,7 +571,7 @@ mod tests {
         store
     }
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,
@@ -580,7 +582,7 @@ mod tests {
     #[test]
     fn message_move_down_advances_and_clamps() {
         let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -596,7 +598,7 @@ mod tests {
     #[test]
     fn message_move_up_clamps_at_zero() {
         let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -611,7 +613,7 @@ mod tests {
     #[test]
     fn message_move_emits_store_load_more_near_tail() {
         let store = store_with_one_folder(6);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -629,7 +631,7 @@ mod tests {
     #[test]
     fn message_move_does_not_emit_store_load_more_mid_list() {
         let store = store_with_one_folder(100);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -640,7 +642,7 @@ mod tests {
     #[test]
     fn folder_move_resets_email_cursor_and_clears_remembered() {
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -654,7 +656,7 @@ mod tests {
     #[test]
     fn folder_enter_resets_email_cursor_and_clears_remembered() {
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -668,7 +670,7 @@ mod tests {
     #[test]
     fn folder_exit_parent_resets_email_cursor() {
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -684,7 +686,7 @@ mod tests {
         // remembering on `store.selected_email.is_some()`. Always
         // remember; `FoldersBlur` does the clamp on restore.
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -696,7 +698,7 @@ mod tests {
     #[test]
     fn folders_blur_restores_remembered_email_index() {
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -709,7 +711,7 @@ mod tests {
     #[test]
     fn folders_blur_picks_first_email_when_nothing_remembered() {
         let store = store_with_one_folder(5);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -723,7 +725,7 @@ mod tests {
         // Remembered index points past end of (shorter) folder — must
         // fall back to 0, not panic on the OOB select.
         let store = store_with_one_folder(2);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut m = MessagesComponent::new();
@@ -743,7 +745,7 @@ mod tests {
     #[test]
     fn message_open_returns_mark_read_follow_up() {
         let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 
@@ -773,7 +775,7 @@ mod tests {
         // keystroke (no message emitted) and arm the prefix; the next
         // 'r' must yield the sender-only reply variant.
         let store = store_with_one_folder(1);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 
@@ -798,7 +800,7 @@ mod tests {
         // resolves `j` → MessageMove). This test only asserts the
         // component-local side: prefix cleared, nothing emitted.
         let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 
@@ -834,7 +836,7 @@ mod tests {
         // later `r` in this pane would unintentionally trigger
         // reply-sender on a stale prefix typed before the blur.
         let store = store_with_one_folder(1);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 
@@ -846,7 +848,7 @@ mod tests {
     #[test]
     fn on_key_ignores_modified_keys() {
         let store = store_with_one_folder(3);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut m = MessagesComponent::new();
 

@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use crate::email::EmailLoadState;
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{Component, Ctx, Dir, Msg};
 
@@ -84,7 +84,7 @@ impl Component for ContentComponent {
 
     fn render(&self, f: &mut Frame, area: Rect, focused: bool, ctx: &Ctx) {
         let border_style = if focused {
-            Style::default().fg(VulthorTheme::CYAN_LIGHT)
+            Style::default().fg(ctx.theme.cyan_light)
         } else {
             Style::default()
         };
@@ -170,7 +170,7 @@ impl Component for ContentComponent {
 
             let paragraph = Paragraph::new(text)
                 .block(block)
-                .style(Style::default().fg(VulthorTheme::GRAY_DARK));
+                .style(Style::default().fg(ctx.theme.gray_dark));
             f.render_widget(paragraph, area);
         }
     }
@@ -193,7 +193,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use std::path::PathBuf;
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,
@@ -201,9 +201,9 @@ mod tests {
         }
     }
 
-    fn fixtures() -> (VulthorTheme, Config, EmailStore) {
+    fn fixtures() -> (Theme, Config, EmailStore) {
         (
-            VulthorTheme,
+            Theme::default(),
             Config::default(),
             EmailStore::new(PathBuf::from("/tmp")),
         )

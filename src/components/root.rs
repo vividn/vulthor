@@ -34,7 +34,7 @@ use crate::error::Result;
 use crate::keymap::{Action, Keymap, resolve_keymap};
 use crate::layout::{self, ActivePane, Layout, PaneSwitchDirection, View};
 use crate::maildir::MaildirScanner;
-use crate::theme::{Theme, VulthorTheme};
+use crate::theme::Theme;
 use crate::ui::UI;
 use crate::undo::{Mutation, Reversed};
 
@@ -120,10 +120,9 @@ pub struct AppRoot {
     /// Resolved runtime color theme. Built in `main.rs` by
     /// `theme::build_theme(&config)` and installed via
     /// [`Self::set_theme`]; defaults to the built-in palette so tests
-    /// that skip the wiring still produce a valid theme. Adoption by
-    /// the render path is tracked separately — today render code still
-    /// reads `VulthorTheme::*` constants.
-    #[allow(dead_code)]
+    /// that skip the wiring still produce a valid theme. Threaded into
+    /// every per-frame `Ctx` so render sites pick up
+    /// `[theme].overrides` at draw time.
     theme: Theme,
     /// Phase 4.d MailDir watcher. `Some` once a watcher has been
     /// successfully spawned against the active account's maildir root;
@@ -367,6 +366,8 @@ impl AppRoot {
         let layout = &self.layout;
         let status = &self.status_message;
         let help = self.help_visible;
+        let config = &self.config;
+        let theme = &self.theme;
         terminal.draw(|f| {
             ui.draw(
                 f,
@@ -381,6 +382,8 @@ impl AppRoot {
                 draft,
                 folder_picker,
                 search,
+                config,
+                theme,
             )
         })?;
         self.message_pane_visible_rows = self.messages.visible_rows.get();
@@ -436,7 +439,7 @@ impl AppRoot {
             if self.folder_picker.visible {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.folder_picker.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -452,7 +455,7 @@ impl AppRoot {
             if self.search.visible {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.search.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -490,7 +493,7 @@ impl AppRoot {
             {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.messages.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -534,7 +537,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Folders) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.folders.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -547,7 +550,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Messages) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.messages.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -560,7 +563,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Content) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.content.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -573,7 +576,7 @@ impl AppRoot {
             if matches!(self.layout.active_pane, ActivePane::Accounts) {
                 let ctx_msg = {
                     let store = self.email_store.lock().unwrap();
-                    let ctx = Self::make_ctx(&self.config, &store);
+                    let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                     self.accounts.on_key(key, &ctx)
                 };
                 if let Some(msg) = ctx_msg {
@@ -981,7 +984,7 @@ impl AppRoot {
             }
             let follow_ups = {
                 let store = self.email_store.lock().unwrap();
-                let ctx = Self::make_ctx(&self.config, &store);
+                let ctx = Self::make_ctx(&self.config, &self.theme, &store);
                 let mut fu = self.folders.handle_msg(&msg, &ctx);
                 fu.extend(self.messages.handle_msg(&msg, &ctx));
                 fu.extend(self.content.handle_msg(&msg, &ctx));
@@ -2103,16 +2106,14 @@ impl AppRoot {
         self.drain_maildir_watcher();
     }
 
-    fn make_ctx<'a>(config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn make_ctx<'a>(config: &'a Config, theme: &'a Theme, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
-            theme: &THEME,
+            theme,
             config,
             store,
         }
     }
 }
-
-static THEME: VulthorTheme = VulthorTheme;
 
 /// Build a unique MailDir filename for a new Drafts/ entry. Matches the
 /// `<secs>.M<usec>P<pid>Q<counter>` shape `compose::send` uses for the

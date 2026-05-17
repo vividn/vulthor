@@ -26,7 +26,7 @@ use ratatui::{
 };
 
 use crate::compose::Compose;
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{Component, Ctx, MessageId, Msg, ReplyKind};
 
@@ -175,9 +175,9 @@ impl Component for DraftComponent {
         }
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, focused: bool, _ctx: &Ctx) {
+    fn render(&self, f: &mut Frame, area: Rect, focused: bool, ctx: &Ctx) {
         let border_style = if focused {
-            Style::default().fg(VulthorTheme::CYAN_LIGHT)
+            Style::default().fg(ctx.theme.cyan_light)
         } else {
             Style::default()
         };
@@ -192,7 +192,7 @@ impl Component for DraftComponent {
             // so the pane geometry matches the populated case.
             let body = Paragraph::new(DRAFT_PLACEHOLDER)
                 .block(block)
-                .style(Style::default().fg(VulthorTheme::GRAY_DARK))
+                .style(Style::default().fg(ctx.theme.gray_dark))
                 .wrap(Wrap { trim: true });
             f.render_widget(body, area);
             return;
@@ -211,12 +211,12 @@ impl Component for DraftComponent {
             ])
             .split(inner);
 
-        f.render_widget(header_paragraph(&state.compose), chunks[0]);
+        f.render_widget(header_paragraph(&state.compose, ctx.theme), chunks[0]);
         f.render_widget(
             Paragraph::new(state.compose.body.clone()).wrap(Wrap { trim: false }),
             chunks[1],
         );
-        f.render_widget(status_paragraph(&state.status), chunks[2]);
+        f.render_widget(status_paragraph(&state.status, ctx.theme), chunks[2]);
     }
 }
 
@@ -234,9 +234,9 @@ fn header_lines(c: &Compose) -> usize {
     n
 }
 
-fn header_paragraph(c: &Compose) -> Paragraph<'_> {
+fn header_paragraph<'a>(c: &'a Compose, theme: &Theme) -> Paragraph<'a> {
     let label_style = Style::default()
-        .fg(VulthorTheme::CYAN_LIGHT)
+        .fg(theme.cyan_light)
         .add_modifier(Modifier::BOLD);
 
     let mut lines = Vec::with_capacity(4);
@@ -263,26 +263,26 @@ fn header_paragraph(c: &Compose) -> Paragraph<'_> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
 }
 
-fn status_paragraph(status: &DraftStatus) -> Paragraph<'_> {
+fn status_paragraph<'a>(status: &'a DraftStatus, theme: &Theme) -> Paragraph<'a> {
     let (label, style) = match status {
         DraftStatus::Editing => (
             "● editing".to_string(),
-            Style::default().fg(VulthorTheme::GRAY_DARK),
+            Style::default().fg(theme.gray_dark),
         ),
         DraftStatus::ReadyToSend => (
             "● ready  (S to send · e to edit · q to discard)".to_string(),
-            Style::default().fg(VulthorTheme::CYAN_LIGHT),
+            Style::default().fg(theme.cyan_light),
         ),
         DraftStatus::Sending => (
             "● sending…".to_string(),
             Style::default()
-                .fg(VulthorTheme::CYAN_LIGHT)
+                .fg(theme.cyan_light)
                 .add_modifier(Modifier::BOLD),
         ),
         DraftStatus::Failed(reason) => (
             format!("● send failed: {}", reason),
             Style::default()
-                .fg(VulthorTheme::CYAN_LIGHT)
+                .fg(theme.cyan_light)
                 .add_modifier(Modifier::REVERSED),
         ),
     };
@@ -299,15 +299,15 @@ mod tests {
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
-    fn fixtures() -> (VulthorTheme, Config, EmailStore) {
+    fn fixtures() -> (Theme, Config, EmailStore) {
         (
-            VulthorTheme,
+            Theme::default(),
             Config::default(),
             EmailStore::new(PathBuf::from("/tmp")),
         )
     }
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,

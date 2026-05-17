@@ -83,7 +83,6 @@ impl VulthorTheme {
 /// below verbatim — e.g. `primary = "#2C4F5D"` or
 /// `accent = "#FF8C42"`. Unknown keys are rejected (typo guard).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // wired in main.rs; render-site adoption tracked separately
 pub struct Theme {
     pub dark: Color,
     pub primary: Color,

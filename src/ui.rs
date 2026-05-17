@@ -5,7 +5,7 @@ use crate::components::{
 use crate::config::Config;
 use crate::email::{EmailLoadState, EmailStore};
 use crate::layout::{self, ActivePane, Layout, View};
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout as RLayout, Rect},
@@ -46,22 +46,24 @@ impl UI {
         draft: &DraftComponent,
         folder_picker: &FolderPickerComponent,
         search: &SearchComponent,
+        config: &Config,
+        theme: &Theme,
     ) {
         let size = f.area();
         if help_visible {
-            self.draw_help_screen(f, size);
+            self.draw_help_screen(f, size, theme);
             return;
         }
         self.draw_main_layout(
-            f, store, layout, folders, messages, content, accounts, draft, size,
+            f, store, layout, folders, messages, content, accounts, draft, config, theme, size,
         );
-        self.draw_status_bar(f, layout, status_message, size);
+        self.draw_status_bar(f, layout, status_message, theme, size);
         // Modal overlays drawn last so they sit on top of every pane;
         // each `render_modal` is a no-op when its modal is hidden. The
         // folder picker is centered; the search modal is bottom-of-
         // screen, so they never collide.
-        folder_picker.render_modal(f, size);
-        search.render_modal(f, size);
+        folder_picker.render_modal(f, size, theme);
+        search.render_modal(f, size, theme);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -75,6 +77,8 @@ impl UI {
         content: &ContentComponent,
         accounts: &AccountsComponent,
         draft: &DraftComponent,
+        config: &Config,
+        theme: &Theme,
         area: Rect,
     ) {
         match lay.current_view {
@@ -87,11 +91,9 @@ impl UI {
                 let is_folders_active = matches!(lay.active_pane, ActivePane::Folders);
                 let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
 
-                let theme = VulthorTheme;
-                let config = Config::default();
                 let ctx = Ctx {
-                    theme: &theme,
-                    config: &config,
+                    theme,
+                    config,
                     store,
                 };
                 folders.render(f, chunks[0], is_folders_active, &ctx);
@@ -103,6 +105,7 @@ impl UI {
                     messages,
                     chunks[1],
                     is_messages_active,
+                    theme,
                 );
             }
             View::MessagesContent => {
@@ -122,12 +125,29 @@ impl UI {
                     messages,
                     chunks[0],
                     is_messages_active,
+                    theme,
                 );
-                Self::render_content_pane(f, store, content, chunks[1], is_content_active);
+                Self::render_content_pane(
+                    f,
+                    store,
+                    content,
+                    chunks[1],
+                    is_content_active,
+                    config,
+                    theme,
+                );
             }
             View::Content => {
                 let is_content_active = matches!(lay.active_pane, ActivePane::Content);
-                Self::render_content_pane(f, store, content, area, is_content_active);
+                Self::render_content_pane(
+                    f,
+                    store,
+                    content,
+                    area,
+                    is_content_active,
+                    config,
+                    theme,
+                );
             }
             View::Messages => {
                 let is_messages_active = matches!(lay.active_pane, ActivePane::Messages);
@@ -139,6 +159,7 @@ impl UI {
                     messages,
                     area,
                     is_messages_active,
+                    theme,
                 );
             }
             View::MessagesAttachments => {
@@ -158,8 +179,9 @@ impl UI {
                     messages,
                     chunks[0],
                     is_messages_active,
+                    theme,
                 );
-                self.draw_attachments_pane(f, store, lay, chunks[1], is_attachments_active);
+                self.draw_attachments_pane(f, store, lay, chunks[1], is_attachments_active, theme);
             }
             View::AccountsFolders => {
                 let chunks = RLayout::default()
@@ -170,11 +192,9 @@ impl UI {
                 let is_accounts_active = matches!(lay.active_pane, ActivePane::Accounts);
                 let is_folders_active = matches!(lay.active_pane, ActivePane::Folders);
 
-                let theme = VulthorTheme;
-                let config = Config::default();
                 let ctx = Ctx {
-                    theme: &theme,
-                    config: &config,
+                    theme,
+                    config,
                     store,
                 };
                 accounts.render(f, chunks[0], is_accounts_active, &ctx);
@@ -189,12 +209,18 @@ impl UI {
                 let is_content_active = matches!(lay.active_pane, ActivePane::Content);
                 let is_draft_active = matches!(lay.active_pane, ActivePane::Draft);
 
-                Self::render_content_pane(f, store, content, chunks[0], is_content_active);
-                let theme = VulthorTheme;
-                let config = Config::default();
+                Self::render_content_pane(
+                    f,
+                    store,
+                    content,
+                    chunks[0],
+                    is_content_active,
+                    config,
+                    theme,
+                );
                 let ctx = Ctx {
-                    theme: &theme,
-                    config: &config,
+                    theme,
+                    config,
                     store,
                 };
                 draft.render(f, chunks[1], is_draft_active, &ctx);
@@ -211,6 +237,7 @@ impl UI {
         messages: &MessagesComponent,
         area: Rect,
         is_active: bool,
+        theme: &Theme,
     ) {
         // Search-results virtual folder wins over every per-view
         // selection: when a notmuch search is live, the Messages pane
@@ -219,7 +246,15 @@ impl UI {
         // was browsing.
         if let Some(results) = store.search_results.as_ref() {
             let breadcrumb = format!("Mail > {}", results.name);
-            messages.render_with_folder(f, area, is_active, results, &breadcrumb, &store.drafts);
+            messages.render_with_folder(
+                f,
+                area,
+                is_active,
+                results,
+                &breadcrumb,
+                &store.drafts,
+                theme,
+            );
             return;
         }
         let selected_folder = match lay.current_view {
@@ -254,6 +289,7 @@ impl UI {
             folder_to_display,
             &folder_path_str,
             &store.drafts,
+            theme,
         );
     }
 
@@ -263,12 +299,12 @@ impl UI {
         content: &ContentComponent,
         area: Rect,
         is_active: bool,
+        config: &Config,
+        theme: &Theme,
     ) {
-        let theme = VulthorTheme;
-        let config = Config::default();
         let ctx = Ctx {
-            theme: &theme,
-            config: &config,
+            theme,
+            config,
             store,
         };
         content.render(f, area, is_active, &ctx);
@@ -281,9 +317,10 @@ impl UI {
         lay: &Layout,
         area: Rect,
         is_active: bool,
+        theme: &Theme,
     ) {
         let border_style = if is_active {
-            Style::default().fg(VulthorTheme::ACCENT_LIGHT)
+            Style::default().fg(theme.accent_light)
         } else {
             Style::default()
         };
@@ -322,7 +359,7 @@ impl UI {
 
                 let list = List::new(attachment_items).block(block).highlight_style(
                     Style::default()
-                        .bg(VulthorTheme::SELECTION_BG)
+                        .bg(theme.primary)
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 );
@@ -343,7 +380,7 @@ impl UI {
                 };
                 let paragraph = Paragraph::new(text)
                     .block(block)
-                    .style(Style::default().fg(VulthorTheme::GRAY_DARK));
+                    .style(Style::default().fg(theme.gray_dark));
 
                 f.render_widget(paragraph, area);
             }
@@ -355,7 +392,7 @@ impl UI {
 
             let paragraph = Paragraph::new("Select an email to view attachments")
                 .block(block)
-                .style(Style::default().fg(VulthorTheme::GRAY_DARK));
+                .style(Style::default().fg(theme.gray_dark));
 
             f.render_widget(paragraph, area);
         }
@@ -366,6 +403,7 @@ impl UI {
         f: &mut Frame,
         lay: &Layout,
         status_message: &Option<String>,
+        theme: &Theme,
         area: Rect,
     ) {
         let status_area = Rect {
@@ -381,33 +419,30 @@ impl UI {
 
         status_text.push(Span::styled(
             help_text,
-            Style::default().fg(VulthorTheme::GRAY_DARK),
+            Style::default().fg(theme.gray_dark),
         ));
 
         if let Some(message) = status_message {
             status_text.push(Span::raw(" | "));
             status_text.push(Span::styled(
                 message.clone(),
-                Style::default().fg(VulthorTheme::WARNING),
+                Style::default().fg(theme.accent),
             ));
         }
 
         let status_line = Line::from(status_text);
-        let status_paragraph = Paragraph::new(status_line).style(
-            Style::default()
-                .bg(VulthorTheme::STATUS_BG)
-                .fg(Color::White),
-        );
+        let status_paragraph =
+            Paragraph::new(status_line).style(Style::default().bg(theme.dark).fg(Color::White));
 
         f.render_widget(status_paragraph, status_area);
     }
 
-    fn draw_help_screen(&mut self, f: &mut Frame, area: Rect) {
+    fn draw_help_screen(&mut self, f: &mut Frame, area: Rect, theme: &Theme) {
         let help_text: Vec<Line> = help_screen_lines().into_iter().map(Line::from).collect();
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .style(Style::default().fg(VulthorTheme::CYAN))
+            .style(Style::default().fg(theme.cyan))
             .title("Help");
 
         let paragraph = Paragraph::new(help_text)

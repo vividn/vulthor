@@ -22,7 +22,7 @@ use ratatui::{
 };
 
 use crate::email::Folder;
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{Component, Ctx, Dir, Msg};
 
@@ -112,7 +112,7 @@ impl Component for FoldersComponent {
 
     fn render(&self, f: &mut Frame, area: Rect, focused: bool, ctx: &Ctx) {
         let style = if focused {
-            Style::default().fg(VulthorTheme::ACCENT)
+            Style::default().fg(ctx.theme.accent)
         } else {
             Style::default()
         };
@@ -144,7 +144,7 @@ impl Component for FoldersComponent {
             .style(style)
             .highlight_style(
                 Style::default()
-                    .bg(VulthorTheme::SELECTION_BG)
+                    .bg(ctx.theme.primary)
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             );
@@ -198,7 +198,7 @@ mod tests {
         store
     }
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn folder_move_down_advances_and_clamps_at_end() {
         let store = store_with_folders(&["A", "B", "C"]);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut comp = FoldersComponent::with_index(0);
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn folder_move_up_clamps_at_zero() {
         let store = store_with_folders(&["A", "B"]);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
 
         let mut comp = FoldersComponent::with_index(0);
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn on_key_l_enters_folder_when_not_already_inside() {
         let store = store_with_folders(&["A", "B"]);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         // current_folder is empty (root) — 'l' must request entering.
         let mut comp = FoldersComponent::with_index(1);
@@ -273,7 +273,7 @@ mod tests {
         let mut store = store_with_folders(&["A", "B"]);
         // Pretend we're already inside the second folder.
         store.current_folder = vec![1];
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut comp = FoldersComponent::with_index(1);
         let l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn on_key_ignores_modified_keys() {
         let store = store_with_folders(&["A"]);
-        let (theme, config) = (VulthorTheme, Config::default());
+        let (theme, config) = (Theme::default(), Config::default());
         let ctx = ctx(&theme, &config, &store);
         let mut comp = FoldersComponent::with_index(0);
         let alt_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::ALT);

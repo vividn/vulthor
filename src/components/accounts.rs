@@ -31,7 +31,7 @@ use ratatui::{
 use std::cell::RefCell;
 
 use crate::config::{AccountConfig, Config};
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{AccountId, Component, Ctx, Dir, Msg};
 
@@ -170,9 +170,9 @@ impl Component for AccountsComponent {
         Vec::new()
     }
 
-    fn render(&self, f: &mut Frame, area: Rect, focused: bool, _ctx: &Ctx) {
+    fn render(&self, f: &mut Frame, area: Rect, focused: bool, ctx: &Ctx) {
         let border_style = if focused {
-            Style::default().fg(VulthorTheme::CYAN_LIGHT)
+            Style::default().fg(ctx.theme.cyan_light)
         } else {
             Style::default()
         };
@@ -184,7 +184,7 @@ impl Component for AccountsComponent {
         if self.accounts.is_empty() {
             let body = Paragraph::new(Text::from(ACCOUNTS_EMPTY_BODY))
                 .block(block)
-                .style(Style::default().fg(VulthorTheme::GRAY_DARK))
+                .style(Style::default().fg(ctx.theme.gray_dark))
                 .wrap(Wrap { trim: true });
             f.render_widget(body, area);
             return;
@@ -197,7 +197,7 @@ impl Component for AccountsComponent {
             .collect();
         let list = List::new(items).block(block).highlight_style(
             Style::default()
-                .bg(VulthorTheme::SELECTION_BG)
+                .bg(ctx.theme.primary)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
@@ -245,11 +245,11 @@ mod tests {
         cfg
     }
 
-    fn fixtures() -> (VulthorTheme, EmailStore) {
-        (VulthorTheme, EmailStore::new(PathBuf::from("/tmp")))
+    fn fixtures() -> (Theme, EmailStore) {
+        (Theme::default(), EmailStore::new(PathBuf::from("/tmp")))
     }
 
-    fn ctx<'a>(theme: &'a VulthorTheme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
+    fn ctx<'a>(theme: &'a Theme, config: &'a Config, store: &'a EmailStore) -> Ctx<'a> {
         Ctx {
             theme,
             config,

@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::email::EmailStore;
-    use crate::theme::VulthorTheme;
+    use crate::theme::Theme;
     use std::path::PathBuf;
 
     /// Minimal `Component` impl — verifies the trait can be satisfied with
@@ -137,11 +137,11 @@ mod tests {
         fn render(&self, _f: &mut Frame, _area: Rect, _focused: bool, _ctx: &Ctx) {}
     }
 
-    fn make_ctx_fixture() -> (Config, EmailStore, VulthorTheme) {
+    fn make_ctx_fixture() -> (Config, EmailStore, Theme) {
         (
             Config::default(),
             EmailStore::new(PathBuf::from("/tmp")),
-            VulthorTheme,
+            Theme::default(),
         )
     }
 

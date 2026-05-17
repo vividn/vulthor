@@ -21,7 +21,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::theme::VulthorTheme;
+use crate::theme::Theme;
 
 use super::{Component, Ctx, Msg};
 
@@ -58,7 +58,7 @@ impl SearchComponent {
 
     /// Draw the bottom-of-screen modal overlay. No-op when
     /// `!self.visible`.
-    pub fn render_modal(&self, f: &mut Frame, screen: Rect) {
+    pub fn render_modal(&self, f: &mut Frame, screen: Rect, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -76,7 +76,7 @@ impl SearchComponent {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Search (notmuch) — Enter to run, Esc to cancel")
-            .style(Style::default().fg(VulthorTheme::CYAN));
+            .style(Style::default().fg(theme.cyan));
         let para = Paragraph::new(format!("/{}", self.query)).block(block);
         f.render_widget(para, area);
     }
@@ -168,14 +168,14 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::email::EmailStore;
-    use crate::theme::VulthorTheme;
+    use crate::theme::Theme;
     use std::path::PathBuf;
 
-    fn ctx_fixture() -> (Config, EmailStore, VulthorTheme) {
+    fn ctx_fixture() -> (Config, EmailStore, Theme) {
         (
             Config::default(),
             EmailStore::new(PathBuf::from("/tmp")),
-            VulthorTheme,
+            Theme::default(),
         )
     }
 
