@@ -1,0 +1,20 @@
+Return-Path: <support@account-security.example>
+From: "Account Security" <support@account-security.example>
+To: You <user@example.com>
+Subject: URGENT: verify your account
+Date: Sat, 18 Nov 2023 13:00:00 +0000
+Message-ID: <phish-005@fixture.local>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<body>
+  <p>Your account will be locked in 24 hours.</p>
+  <p data-testid="phish-cta">
+    Click here to verify:
+    <a id="fixture-phish-link" href="http://malicious.example.test/login?u=victim">https://accounts.example.com/verify</a>
+  </p>
+  <p>Display text and href intentionally mismatch so renderers/classifiers can flag it.</p>
+</body>
+</html>

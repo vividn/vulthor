@@ -1,0 +1,15 @@
+Return-Path: <user@example.com>
+From: You <user@example.com>
+To: Alice <alice@example.com>
+Subject: Re: Plain text greeting
+Date: Tue, 21 Nov 2023 16:00:00 +0000
+Message-ID: <sent-008@fixture.local>
+In-Reply-To: <plain-001@fixture.local>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Alice,
+
+Thanks — receipt confirmed.
+
+-- You

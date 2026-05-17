@@ -1,0 +1,37 @@
+Return-Path: <devops@example.com>
+From: DevOps <devops@example.com>
+To: You <user@example.com>
+Subject: Multi-part build report
+Date: Sun, 19 Nov 2023 14:00:00 +0000
+Message-ID: <multipart-006@fixture.local>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-006"
+
+--outer-006
+Content-Type: multipart/alternative; boundary="inner-006"
+
+--inner-006
+Content-Type: text/plain; charset=UTF-8
+
+Build #1234 succeeded. Logs attached.
+
+--inner-006
+Content-Type: text/html; charset=UTF-8
+
+<html><body>
+  <h2 data-testid="build-status">Build #1234: <span style="color:green">SUCCESS</span></h2>
+  <p>Logs attached as build.log.</p>
+</body></html>
+
+--inner-006--
+
+--outer-006
+Content-Type: text/plain; charset=UTF-8; name="build.log"
+Content-Disposition: attachment; filename="build.log"
+
+[00:00:01] starting build
+[00:00:02] compiling crate vulthor
+[00:00:42] tests passed: 312
+[00:00:43] artifact produced: target/release/vulthor
+
+--outer-006--
