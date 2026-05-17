@@ -1,4 +1,5 @@
 use crate::error::{Result, VulthorError};
+use crate::log::LogConfig;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -205,6 +206,9 @@ pub struct Config {
     /// keeps its VISION.md default until the user opts in.
     #[serde(default)]
     pub keybindings: KeybindingsConfig,
+    /// `[log]` block — routine-log size/age caps. See [`LogConfig`].
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 /// Wrapper around the raw `[keybindings]` table. The inner
@@ -231,6 +235,7 @@ impl Default for Config {
             ai: AiConfig::default(),
             theme: ThemeConfig::default(),
             keybindings: KeybindingsConfig::default(),
+            log: LogConfig::default(),
         }
     }
 }
