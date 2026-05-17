@@ -931,6 +931,233 @@ fn escape_html(text: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Result of rewriting `<img>` tags in an HTML body for privacy. See
+/// [`sanitize_html_images`] for the contract.
+pub(crate) struct SanitizedHtml {
+    /// HTML with remote `<img>` tags replaced (or untouched, when
+    /// `show_images` is true) and the count of blocked tags.
+    pub html: String,
+    pub blocked_count: usize,
+}
+
+/// Rewrite `<img>` tags whose `src` is a remote `http(s)://` URL into
+/// `<span class="vulthor-blocked-image" data-original-src="…">[image
+/// blocked]</span>` placeholders. Same-origin (`localhost`, `127.0.0.1`,
+/// `[::1]`) and non-`http(s)` URIs (`data:`, `cid:`, relative paths)
+/// pass through untouched.
+///
+/// `show_images = true` short-circuits the rewrite — the HTML is
+/// returned verbatim and `blocked_count` is 0. The viewer flips this
+/// when the user opts in per-message via the `ToggleImages` action.
+///
+/// Implemented with a tiny tag-aware scanner rather than a real HTML
+/// parser: the goal is to keep `http(s)` image fetches off the wire,
+/// not to be a content-security gateway. The mail body is already
+/// trusted enough to render as innerHTML in the embedded viewer.
+pub(crate) fn sanitize_html_images(html: &str, show_images: bool) -> SanitizedHtml {
+    if show_images {
+        return SanitizedHtml {
+            html: html.to_string(),
+            blocked_count: 0,
+        };
+    }
+
+    let mut out = String::with_capacity(html.len());
+    let mut blocked: usize = 0;
+    let mut cursor = 0usize;
+
+    while cursor < html.len() {
+        let Some(tag_start) = find_img_start(html, cursor) else {
+            out.push_str(&html[cursor..]);
+            break;
+        };
+        out.push_str(&html[cursor..tag_start]);
+
+        let Some(rel_end) = find_tag_end(&html[tag_start..]) else {
+            // Malformed (`<img …` with no `>`): emit the rest verbatim.
+            out.push_str(&html[tag_start..]);
+            break;
+        };
+        let tag_end = tag_start + rel_end; // index of '>'
+        let tag = &html[tag_start..=tag_end];
+
+        let src = extract_attr_value(tag, "src");
+        let is_blocked = src
+            .as_deref()
+            .map(is_remote_image_url)
+            .unwrap_or(false);
+        if is_blocked {
+            let src_str = src.unwrap_or_default();
+            let alt = extract_attr_value(tag, "alt").unwrap_or_default();
+            let label = if alt.trim().is_empty() {
+                "image blocked".to_string()
+            } else {
+                format!("image blocked: {}", alt)
+            };
+            out.push_str(&format!(
+                r#"<span class="vulthor-blocked-image" data-original-src="{}">[{}]</span>"#,
+                escape_html(&src_str),
+                escape_html(&label),
+            ));
+            blocked += 1;
+        } else {
+            out.push_str(tag);
+        }
+        cursor = tag_end + 1;
+    }
+
+    SanitizedHtml {
+        html: out,
+        blocked_count: blocked,
+    }
+}
+
+/// Locate the next `<img` tag opening at or after `from`, requiring the
+/// next byte to be a tag-name boundary so a tag like `<image>` (the
+/// SVG element) is not misread as `<img>`.
+fn find_img_start(s: &str, from: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = from;
+    while i + 4 <= bytes.len() {
+        if bytes[i] == b'<'
+            && bytes[i + 1].eq_ignore_ascii_case(&b'i')
+            && bytes[i + 2].eq_ignore_ascii_case(&b'm')
+            && bytes[i + 3].eq_ignore_ascii_case(&b'g')
+        {
+            let after = bytes.get(i + 4).copied().unwrap_or(b' ');
+            if matches!(after, b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>') {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the byte offset of the first `>` that closes the tag starting
+/// at `tag[0] == '<'`, ignoring `>` characters inside double or single
+/// quoted attribute values. Returns `None` for malformed input.
+fn find_tag_end(tag: &str) -> Option<usize> {
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) if c == q => quote = None,
+            None => match c {
+                b'"' | b'\'' => quote = Some(c),
+                b'>' => return Some(i),
+                _ => {}
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Return the value of `name` inside `tag` (e.g. `src="…"`), or `None`
+/// when the attribute is absent. Case-insensitive on the attribute
+/// name; accepts double-quoted, single-quoted, and unquoted values.
+fn extract_attr_value(tag: &str, name: &str) -> Option<String> {
+    let lower_tag = tag.to_ascii_lowercase();
+    let lower_name = name.to_ascii_lowercase();
+    let bytes = tag.as_bytes();
+
+    // Search from after the `<imgX` so we don't catch a literal `src=` in
+    // the tag name. Start at index 1 to skip the `<`.
+    let mut search_from = 1usize;
+    loop {
+        let rest = &lower_tag[search_from..];
+        let needle_pos = rest.find(&lower_name)?;
+        let abs = search_from + needle_pos;
+
+        // Confirm this is an attribute name boundary: previous char must
+        // be whitespace or `<` + tag-name (i.e. start of attribute). The
+        // simple check is: preceding byte is whitespace, '"', '\'' (after a
+        // quoted value), or '/'. We require ASCII whitespace immediately
+        // before the match to keep false positives out of attribute values.
+        let prev_ok = abs == 0
+            || matches!(
+                bytes[abs - 1],
+                b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'/'
+            );
+
+        let after_idx = abs + lower_name.len();
+        let after_ok = bytes
+            .get(after_idx)
+            .map(|c| matches!(*c, b'=' | b' ' | b'\t' | b'\n' | b'\r'))
+            .unwrap_or(false);
+
+        if !prev_ok || !after_ok {
+            search_from = abs + lower_name.len();
+            if search_from >= bytes.len() {
+                return None;
+            }
+            continue;
+        }
+
+        // Skip whitespace, expect '='.
+        let mut i = after_idx;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if bytes.get(i).copied() != Some(b'=') {
+            search_from = abs + lower_name.len();
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+
+        let q = bytes[i];
+        if q == b'"' || q == b'\'' {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != q {
+                i += 1;
+            }
+            return Some(tag[start..i].to_string());
+        }
+        // Unquoted value.
+        let start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'>'
+            && bytes[i] != b'/'
+        {
+            i += 1;
+        }
+        return Some(tag[start..i].to_string());
+    }
+}
+
+/// True when `url` is a remote `http(s)://` reference. Same-origin
+/// hosts (`localhost`, `127.0.0.1`, `[::1]`) are not considered remote
+/// — they hit the embedded server, not the public internet. Returns
+/// false for `data:`, `cid:`, and relative paths.
+pub(crate) fn is_remote_image_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = if let Some(r) = lower.strip_prefix("http://") {
+        r
+    } else if let Some(r) = lower.strip_prefix("https://") {
+        r
+    } else {
+        return false;
+    };
+    let host_end = rest
+        .find(|c: char| matches!(c, '/' | ':' | '?' | '#'))
+        .unwrap_or(rest.len());
+    let host = &rest[..host_end];
+    !matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
 fn format_file_size(bytes: usize) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
     let mut size = bytes as f64;
@@ -964,6 +1191,120 @@ mod tests {
         assert_eq!(format_file_size(1024), "1.0 KB");
         assert_eq!(format_file_size(1536), "1.5 KB");
         assert_eq!(format_file_size(1048576), "1.0 MB");
+    }
+
+    // --- Image sanitizer (vu-aoy) ---
+    //
+    // Security 5.x.a: remote <img> tags must be replaced with inert
+    // placeholders by default. The user opts in per-message via the
+    // ToggleImages action; until they do, the rendered HTML must not
+    // emit a single http(s) image request.
+
+    #[test]
+    fn sanitize_blocks_three_remote_images_by_default() {
+        let html = r#"<p>Hi</p>
+<img src="https://tracker.example/pixel.gif" alt="tracking pixel">
+<img src='http://cdn.example/banner.png'>
+<img src="HTTPS://other.example/logo.svg" alt="logo">"#;
+        let result = sanitize_html_images(html, false);
+        assert_eq!(
+            result.blocked_count, 3,
+            "expected 3 remote images blocked, got {} in:\n{}",
+            result.blocked_count, result.html,
+        );
+        assert!(
+            !result.html.contains("<img "),
+            "no <img> tags should remain when blocked:\n{}",
+            result.html,
+        );
+        assert_eq!(
+            result.html.matches("vulthor-blocked-image").count(),
+            3,
+            "should emit one placeholder per blocked image:\n{}",
+            result.html,
+        );
+        // Original src preserved on the placeholder so the toggle can
+        // restore it client-side without a round-trip.
+        assert!(result.html.contains(r#"data-original-src="https://tracker.example/pixel.gif""#));
+        assert!(result.html.contains(r#"data-original-src="http://cdn.example/banner.png""#));
+        // Alt text surfaces in the placeholder label.
+        assert!(result.html.contains("tracking pixel"));
+        assert!(result.html.contains("logo"));
+    }
+
+    #[test]
+    fn sanitize_shows_three_remote_images_when_opted_in() {
+        let html = r#"<img src="https://tracker.example/pixel.gif" alt="pixel">
+<img src="http://cdn.example/banner.png">
+<img src="https://other.example/logo.svg">"#;
+        let result = sanitize_html_images(html, true);
+        assert_eq!(result.blocked_count, 0);
+        assert_eq!(
+            result.html.matches("<img ").count(),
+            3,
+            "show_images=true should leave every <img> intact:\n{}",
+            result.html,
+        );
+        assert!(!result.html.contains("vulthor-blocked-image"));
+    }
+
+    #[test]
+    fn sanitize_does_not_block_same_origin_or_data_uris() {
+        let html = r#"<img src="data:image/png;base64,AAA" alt="inline">
+<img src="http://localhost:8080/cid/abc" alt="local">
+<img src="http://127.0.0.1/foo.png">
+<img src="cid:embedded@msg" alt="cid">
+<img src="/relative/path.png">"#;
+        let result = sanitize_html_images(html, false);
+        assert_eq!(
+            result.blocked_count, 0,
+            "same-origin and non-http(s) URIs must NOT be blocked:\n{}",
+            result.html,
+        );
+        assert_eq!(result.html.matches("<img ").count(), 5);
+    }
+
+    #[test]
+    fn sanitize_preserves_non_img_html_unchanged() {
+        let html = r#"<p>Read the <a href="https://example.com/x">link</a>.</p>
+<style>img { width: 100% }</style>"#;
+        let result = sanitize_html_images(html, false);
+        assert_eq!(result.blocked_count, 0);
+        // Anchor href is NOT rewritten — we only intercept <img>.
+        assert!(result.html.contains(r#"href="https://example.com/x""#));
+        // The literal `img` token inside a <style> block must not be
+        // mistaken for a tag.
+        assert!(result.html.contains("img { width: 100% }"));
+    }
+
+    #[test]
+    fn sanitize_handles_mixed_quote_styles_and_attribute_order() {
+        let html = r#"<img alt='banner' src="https://example.com/a.png" />
+<IMG SRC='https://example.com/b.png' ALT="caps">"#;
+        let result = sanitize_html_images(html, false);
+        assert_eq!(result.blocked_count, 2);
+        assert!(result.html.contains(r#"data-original-src="https://example.com/a.png""#));
+        assert!(result.html.contains(r#"data-original-src="https://example.com/b.png""#));
+        assert!(result.html.contains("banner"));
+        assert!(result.html.contains("caps"));
+    }
+
+    #[test]
+    fn is_remote_image_url_classifies_origins_correctly() {
+        // Public origins are remote.
+        assert!(is_remote_image_url("https://example.com/x.png"));
+        assert!(is_remote_image_url("http://tracker.example/pixel"));
+        assert!(is_remote_image_url("HTTPS://EXAMPLE.com/x"));
+        // Same-origin hosts are not remote.
+        assert!(!is_remote_image_url("http://localhost/x"));
+        assert!(!is_remote_image_url("http://localhost:8080/x"));
+        assert!(!is_remote_image_url("http://127.0.0.1/x"));
+        assert!(!is_remote_image_url("http://[::1]/x"));
+        // Non-http(s) URIs are not remote.
+        assert!(!is_remote_image_url("data:image/png;base64,AAA"));
+        assert!(!is_remote_image_url("cid:abc@msg"));
+        assert!(!is_remote_image_url("/relative.png"));
+        assert!(!is_remote_image_url(""));
     }
 
     // --- PWA install surface (vu-cyj) ---
