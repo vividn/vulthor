@@ -15,6 +15,7 @@ mod folder_picker;
 mod folder_scanner;
 mod folders;
 mod headers_loader;
+pub(crate) mod help;
 mod html_viewer;
 mod maildir_watcher;
 mod messages;

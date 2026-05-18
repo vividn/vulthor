@@ -68,16 +68,16 @@ pub fn help_lines(keymap: &Keymap, theme: &Theme) -> Vec<Line<'static>> {
             .iter()
             .filter(|(a, _)| a.scope() == *scope)
             .collect();
-        if rows.is_empty() {
-            continue;
-        }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             scope.title().to_string(),
             Style::default()
-                .fg(theme.yellow)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )));
+        if rows.is_empty() {
+            lines.push(Line::from(Span::raw("  (no scope-specific bindings)")));
+        }
         for (action, key) in rows {
             let padded_key = format!("{:<width$}", key, width = key_width);
             lines.push(Line::from(vec![
@@ -85,7 +85,7 @@ pub fn help_lines(keymap: &Keymap, theme: &Theme) -> Vec<Line<'static>> {
                 Span::styled(
                     padded_key,
                     Style::default()
-                        .fg(theme.green)
+                        .fg(theme.cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),

@@ -414,6 +414,7 @@ impl AppRoot {
             .images_visible
             .load(std::sync::atomic::Ordering::Relaxed);
         let config = &self.config;
+        let keymap = &self.keymap;
         let theme = &self.theme;
         terminal.draw(|f| {
             ui.draw(
@@ -431,6 +432,7 @@ impl AppRoot {
                 folder_picker,
                 search,
                 config,
+                keymap,
                 theme,
             )
         })?;
@@ -2291,7 +2293,6 @@ impl AppRoot {
     /// Resolved [`Keymap`] (defaults + `[keybindings]` overrides).
     /// Integration tests inspect this to confirm config-time overrides
     /// reach the dispatch table; runtime code reads the field directly.
-    #[cfg(test)]
     pub(crate) fn keymap(&self) -> &Keymap {
         &self.keymap
     }

@@ -774,11 +774,6 @@ impl EmailStore {
     /// while the email is still `HeadersOnly`. The UI checks
     /// `load_state` to show a "Loading body…" placeholder in that
     /// window.
-    pub fn get_selected_email_markdown(&self) -> Option<String> {
-        self.get_selected_email()
-            .map(|e| e.display_body().into_owned())
-    }
-
     /// `prefer_plaintext`-aware variant: when the toggle is on the
     /// returned body refuses to fall back to an HTML→text conversion.
     /// (vu-c1s) See [`Email::display_body_with_pref`].
@@ -1789,9 +1784,9 @@ Hello 世界! This email contains unicode: 🎉 αβγ 中文"#;
         store.enter_folder_by_path(&[0]);
         store.select_email(0);
 
-        // Render-path: get_selected_email_markdown. Must return Some("") and
+        // Render-path: get_selected_email_markdown_with_pref. Must return Some("") and
         // must NOT transition the email to FullyLoaded.
-        let markdown = store.get_selected_email_markdown();
+        let markdown = store.get_selected_email_markdown_with_pref(false);
         assert_eq!(markdown.as_deref(), Some(""));
         let email = store.get_selected_email().expect("email is selected");
         assert!(

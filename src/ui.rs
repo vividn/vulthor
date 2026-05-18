@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout as RLayout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
 pub struct UI {
@@ -48,11 +48,16 @@ impl UI {
         folder_picker: &FolderPickerComponent,
         search: &SearchComponent,
         config: &Config,
+        keymap: &crate::keymap::Keymap,
         theme: &Theme,
     ) {
         let size = f.area();
         if help_visible {
-            self.draw_help_screen(f, size, theme);
+            self.draw_main_layout(
+                f, store, layout, folders, messages, content, accounts, draft, config, theme,
+                size,
+            );
+            crate::components::help::render_help_overlay(f, size, keymap, theme);
             return;
         }
         self.draw_main_layout(
@@ -474,25 +479,14 @@ impl UI {
         f.render_widget(status_paragraph, status_area);
     }
 
-    fn draw_help_screen(&mut self, f: &mut Frame, area: Rect, theme: &Theme) {
-        let help_text: Vec<Line> = help_screen_lines().into_iter().map(Line::from).collect();
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default().fg(theme.cyan))
-            .title("Help");
-
-        let paragraph = Paragraph::new(help_text)
-            .block(block)
-            .wrap(Wrap { trim: true });
-
-        f.render_widget(paragraph, area);
-    }
 }
 
-/// Lines shown in the `?` help overlay. Kept in sync with the wired
-/// key handlers in `components/root.rs` and the per-pane components;
-/// see the `help_screen_lists_*` tests below.
+/// Legacy static help cheatsheet — retained only for the `help_screen_lists_*`
+/// regression tests that pin the action verbs we expect every user to be
+/// able to discover. Runtime help rendering now goes through
+/// `components::help::render_help_overlay`, which builds its content
+/// from the resolved [`Keymap`] (and thus honours user keybinding overrides).
+#[cfg(test)]
 pub(crate) fn help_screen_lines() -> Vec<&'static str> {
     vec![
         "Vulthor - TUI Email Client",
