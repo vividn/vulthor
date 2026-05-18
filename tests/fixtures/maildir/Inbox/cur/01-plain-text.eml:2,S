@@ -1,0 +1,15 @@
+From: alice@example.com
+To: user@vulthor.test
+Subject: Plain-text fixture
+Date: Sat, 17 May 2026 09:00:00 +0000
+Message-ID: <plain-text-01@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi there,
+
+This is a plain-text fixture email. No HTML, no attachments, no inline
+images. The body is short enough to fit on a single screen and contains
+only ASCII characters so it round-trips cleanly through the parser.
+
+— Alice

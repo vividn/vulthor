@@ -1,0 +1,26 @@
+From: dave@example.com
+To: user@vulthor.test
+Subject: attachment fixture (single PDF stub)
+Date: Sat, 17 May 2026 09:45:00 +0000
+Message-ID: <attachment-04@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=MIX_BOUNDARY
+
+--MIX_BOUNDARY
+Content-Type: text/plain; charset=UTF-8
+
+Hi user,
+
+Please find the quarterly report attached. It is a tiny synthetic PDF
+stub (not a real document) used by the fixture harness to exercise the
+attachment-rendering path without committing real binary blobs.
+
+— Dave
+--MIX_BOUNDARY
+Content-Type: application/pdf; name="report.pdf"
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRv
+Ympbmd2hzZXM=
+--MIX_BOUNDARY--

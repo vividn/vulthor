@@ -1,0 +1,28 @@
+From: eve@example.com
+To: user@vulthor.test
+Subject: multipart/related fixture (HTML + inline cid: image)
+Date: Sat, 17 May 2026 10:15:00 +0000
+Message-ID: <multipart-related-06@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary=REL_BOUNDARY; type="text/html"
+
+--REL_BOUNDARY
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<p>Here is an inline pixel referenced by <code>cid:</code>:
+<img src="cid:pixel@v.test" alt="1x1 pixel"></p>
+<p>The renderer must keep this image in the <code>inline_images</code>
+list and out of the regular attachment strip.</p>
+</body>
+</html>
+--REL_BOUNDARY
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-ID: <pixel@v.test>
+Content-Disposition: inline
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8A
+AAAASUVORK5CYII=
+--REL_BOUNDARY--

@@ -1,0 +1,18 @@
+From: bob@example.com
+To: user@vulthor.test
+Subject: HTML-only fixture
+Date: Sat, 17 May 2026 09:15:00 +0000
+Message-ID: <html-only-02@example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<h1>HTML-only message</h1>
+<p>This email carries <strong>only</strong> a <code>text/html</code>
+part — no <code>text/plain</code> alternative. The viewer must either
+convert the HTML to text (TUI pane) or render the sanitized HTML
+(web pane), depending on the current mode.</p>
+<p>Visit <a href="https://example.com/">example.com</a> for more.</p>
+</body>
+</html>

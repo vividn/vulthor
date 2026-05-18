@@ -1,0 +1,16 @@
+From: "PayPal Security" <security@paypal-update.example>
+To: user@vulthor.test
+Subject: [URGENT] verify your account at paypal.com
+Date: Sat, 17 May 2026 10:00:00 +0000
+Message-ID: <phishing-05@example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<p>Your <strong>paypal.com</strong> account has unusual activity. Click below
+to verify immediately or your account will be limited within 24 hours.</p>
+<p><a href="https://attacker.evil.test/verify?id=42">Verify at paypal.com</a></p>
+<p>Thank you,<br>PayPal Security Team</p>
+</body>
+</html>

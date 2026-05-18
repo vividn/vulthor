@@ -1,0 +1,32 @@
+From: carol@example.com
+To: user@vulthor.test
+Subject: multipart/alternative fixture
+Date: Sat, 17 May 2026 09:30:00 +0000
+Message-ID: <multipart-alt-03@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary=ALT_BOUNDARY
+
+--ALT_BOUNDARY
+Content-Type: text/plain; charset=UTF-8
+
+Hi user,
+
+This email comes in two flavors. Vulthor should preserve both:
+body_plain (what you're reading now) and body_html (the styled version).
+
+Shift+P toggles between them at view time (vu-c1s).
+
+— Carol
+--ALT_BOUNDARY
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<p>Hi user,</p>
+<p>This email comes in <strong>two flavors</strong>. Vulthor should
+preserve both: <code>body_plain</code> and <code>body_html</code>.</p>
+<p><em>Shift+P</em> toggles between them at view time (vu-c1s).</p>
+<p>— Carol</p>
+</body>
+</html>
+--ALT_BOUNDARY--
