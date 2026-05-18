@@ -2495,6 +2495,51 @@ mod tests {
         assert!(!root.help_visible);
     }
 
+    /// vu-c1s: `Msg::TogglePlaintext` flips
+    /// `ContentComponent.prefer_plaintext` and toggles back on the
+    /// second fire.
+    #[test]
+    fn approot_toggles_prefer_plaintext() {
+        let mut root = make_root();
+        assert!(!root.content.prefer_plaintext);
+        root.enqueue(Msg::TogglePlaintext);
+        root.drain();
+        assert!(root.content.prefer_plaintext, "first fire should turn on");
+        root.enqueue(Msg::TogglePlaintext);
+        root.drain();
+        assert!(!root.content.prefer_plaintext, "second fire should turn off");
+    }
+
+    /// vu-aoy: `Msg::ToggleImages` flips the shared `images_visible`
+    /// atomic the web server reads; `Msg::MessageMove` resets it back
+    /// to false so reveals don't bleed across message selections.
+    #[test]
+    fn approot_toggles_images_and_resets_on_message_change() {
+        use std::sync::atomic::Ordering;
+        let mut root = make_root_with_folders(&["Inbox"]);
+        root.enqueue(Msg::FolderEnter);
+        root.drain();
+
+        assert!(
+            !root.images_visible.load(Ordering::Relaxed),
+            "images must start hidden",
+        );
+        root.enqueue(Msg::ToggleImages);
+        root.drain();
+        assert!(
+            root.images_visible.load(Ordering::Relaxed),
+            "Shift+I should reveal images",
+        );
+        // Moving to the next message resets the reveal — per-message
+        // semantics are the security invariant.
+        root.enqueue(Msg::MessageMove(Dir::Down));
+        root.drain();
+        assert!(
+            !root.images_visible.load(Ordering::Relaxed),
+            "navigating to another message must reset the reveal",
+        );
+    }
+
     /// The `q` key resolves to `Action::Quit` via the keymap; in any
     /// non-Draft pane that translates to `Msg::Quit`. In the Draft
     /// pane it discards the in-flight reply instead (VISION.md

@@ -1217,6 +1217,38 @@ mod tests {
         );
     }
 
+    /// vu-aoy: `generate_email_html` with `images_visible=false` strips
+    /// every `<img>` from the served body so the browser never even
+    /// considers fetching them (tracking pixels). With `true`, the
+    /// already-sanitized image (which replaces remote `src` with the
+    /// inline placeholder) survives so the user sees the reveal toggle
+    /// actually do something.
+    #[test]
+    fn email_html_strips_img_when_images_hidden() {
+        let mut email = Email::new(PathBuf::from("/tmp/img.eml"));
+        // Mimic what `sanitize_email_html` would produce: a data: URI
+        // image (legitimate inline) plus tag structure.
+        email.body_html = Some(
+            "<p>before</p><img src=\"data:image/png;base64,abc\" alt=\"x\"><p>after</p>"
+                .to_string(),
+        );
+        let hidden = generate_email_html(&email, "tok", false);
+        // The body lives inside `srcdoc="…"`, which `escape_html_attr`
+        // turns the angle brackets into themselves (only `&` and `"`
+        // are escaped). So a literal `<img` substring would indicate
+        // strip_images didn't fire. The whole document includes one
+        // unrelated `<img` reference in static markup — count occurrences.
+        let hidden_img_hits = hidden.matches("<img").count();
+        let shown_img_hits = generate_email_html(&email, "tok", true)
+            .matches("<img")
+            .count();
+        assert!(
+            shown_img_hits > hidden_img_hits,
+            "revealing images must add at least one <img>; hidden={hidden_img_hits} shown={shown_img_hits}",
+        );
+        assert!(hidden.contains("before") && hidden.contains("after"));
+    }
+
     #[test]
     fn apply_security_headers_sets_all_required_headers() {
         let response = Response::new(Body::from("hello"));
